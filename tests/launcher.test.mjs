@@ -69,6 +69,7 @@ for (const platform of ['darwin', 'linux', 'win32']) {
           assert.deepEqual(plain(shells.map((step) => step.params.message)), map[name], name);
           for (const step of shells) assert.equal(step.params.shell, platform === 'win32' ? 'powershell.exe' : 'bash');
           if (['install-local', 'add-local', 'uninstall', 'reset', 'stop'].includes(name)) assert.equal(script.run[0].method, app.stopOwnedStart);
+          if (name === 'add-local') assert.equal(script.run[4].method, app.stopOwnedStart);
           if (name === 'start') {
             assert.equal(script.daemon, true);
             assert.deepEqual(plain(script.on.stop), plain(app.stopHook()));
@@ -98,6 +99,15 @@ for (const platform of ['darwin', 'linux', 'win32']) {
             assert.equal(app.writes.length, count + 1);
             assert.equal(JSON.parse(app.writes.at(-1).content).mode, 'local');
           }
+          if (name === 'add-local') {
+            assert.equal(script.run[0].method, app.stopOwnedStart);
+            assert.equal(script.run[1].method, app.ensureDoorPortFree);
+            assert.equal(script.run[2].method, 'shell.run');
+            assert.equal(script.run[3].method, 'shell.run');
+            assert.equal(script.run[4].method, app.stopOwnedStart);
+            assert.equal(script.run[5].method, 'shell.run');
+            assert.equal(typeof script.run[6].method, 'function');
+          }
         }
         // Clone path, including a slash ref and shell metacharacters in app paths.
         assert.equal(app.shellStep(app.cloneEditorMessage()).params.message, expected.clone);
@@ -105,6 +115,36 @@ for (const platform of ['darwin', 'linux', 'win32']) {
     }
   }
 }
+
+test('add-local stops the retained installer session before build and saves mode only after that stop', async () => {
+  for (const failAt of [null, 2]) {
+    const calls = [];
+    const base = fakeApp('linux', '', 'backend');
+    const app = {
+      ...base,
+      stopOwnedStart: async () => {
+        const count = calls.filter((call) => call === 'stop').length + 1;
+        calls.push('stop');
+        if (count === failAt) throw new Error('Retained session stop refused.');
+      },
+      gitShellStep: () => ({ method: async () => calls.push('checkout') }),
+      shellStep: () => ({ method: async () => calls.push('shared installer') }),
+      sessionStep: (action, mode) => ({ method: async () => {
+        assert.equal(action, 'build'); assert.equal(mode, 'local'); calls.push('build');
+      } }),
+      saveModeStep: (mode) => ({ method: async () => {
+        assert.equal(mode, 'local'); calls.push('save mode');
+      } }),
+    };
+    const script = await load('pinokio/add-local.js', app)({}, {});
+    const run = async () => { for (const step of script.run) await step.method(); };
+    if (failAt === 2) await assert.rejects(run(), /Retained session stop refused/);
+    else await run();
+    assert.deepEqual(calls, failAt === 2
+      ? ['stop', 'checkout', 'shared installer', 'stop']
+      : ['stop', 'checkout', 'shared installer', 'stop', 'build', 'save mode']);
+  }
+});
 
 test('Bash launcher pull reports a convenient restart only when HEAD changes and preserves failures', { skip: process.platform === 'win32' }, () => {
   const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'pinokio-launcher-pull-'));
@@ -1343,6 +1383,46 @@ test('app updater supervisor remains controllable outside the native Start scrip
   const { menu } = load('pinokio.js', { ...app, readInstallMode: () => 'backend', probeDoor: async () => ({ kind: 'astrid' }) });
   const items = await menu({}, { exists: () => true, running: () => false });
   assert.deepEqual(plain(items.map((item) => item.text)), ['Open Astrid', 'Update and restart', 'Stop']);
+});
+
+test('Switch stops on a post-update busy refusal and retries without writing mode', async () => {
+  const base = fakeApp('linux');
+  const events = [];
+  let busy = true;
+  const details = { blockers: [{ task_id: 'work', state: 'running' }] };
+  const app = library.createApp({ platform: 'linux', appDirectory: base.APP_DIR, environment: {},
+    processAlive: () => true, probe: async () => ({ kind: 'free' }),
+    filesystem: {
+      existsSync: () => true,
+      readFileSync: (file) => file.endsWith('install-mode.json')
+        ? JSON.stringify({ schema_version: 1, mode: 'backend' })
+        : JSON.stringify({ schema: 1, pid: 123, port: 9876, token: 'a'.repeat(64) }),
+      mkdirSync() {}, writeFileSync: () => events.push('mode'),
+    },
+    lifecycle: {
+      requestGracefulStop: async () => {
+        events.push('stop');
+        if (busy && events.includes('update')) throw Object.assign(new Error('Astrid is busy.'), { details });
+      },
+      waitForInstallerLock: async () => events.push('lock'),
+    },
+  });
+  app.validateExistingEditorCheckout = () => true;
+  const script = await load('pinokio/add-local.js', app)();
+  const kernel = { api: { running: {}, stop: () => assert.fail('no native Start owner') } };
+  const execute = async () => {
+    for (const [index, step] of script.run.entries()) {
+      if (typeof step.method === 'function') await step.method({}, undefined, kernel);
+      else if (index === 3) events.push('update');
+      else if (index === 5) events.push('build');
+    }
+  };
+  await assert.rejects(execute(), (error) => error.message.startsWith('Astrid is busy.') && error.details === details);
+  assert.deepEqual(events, ['stop', 'lock', 'update', 'stop']);
+  busy = false;
+  events.length = 0;
+  await execute();
+  assert.deepEqual(events, ['stop', 'lock', 'update', 'stop', 'lock', 'build', 'mode']);
 });
 
 test('exited Runtime refusal retains editor and controller until the same down succeeds', async () => {
