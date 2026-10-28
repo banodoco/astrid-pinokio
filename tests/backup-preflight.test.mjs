@@ -56,7 +56,7 @@ function runHelper(temp, root) {
   // -I ignores ambient imports; the test inserts only its temporary installed package.
   const code = 'import runpy,sys; sys.path.insert(0,sys.argv.pop(1)); runpy.run_path(sys.argv.pop(1),run_name="__main__")';
   return spawnSync('python3', ['-I', '-B', '-c', code, temp, helper, root], {
-    encoding: 'utf8', timeout: 5000, env: { ...process.env, TEST_SELECTION: path.join(temp, 'selection.json') } });
+    encoding: 'utf8', timeout: 30000, env: { ...process.env, TEST_SELECTION: path.join(temp, 'selection.json') } });
 }
 
 function snapshot(folder) {

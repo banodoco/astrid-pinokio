@@ -393,9 +393,7 @@ test('the fully-local Pinokio caller launches the installed npm update script in
     [p.join(versionRoot, 'version.json'), JSON.stringify({ root: versionRoot, python, profile, env: { ASTRID_NODE_EXECUTABLE: node } })],
     [p.join(root, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: '/Astrid Data' })],
   ]);
-  const npmCli = platform === 'win32'
-    ? p.join(p.dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js')
-    : p.resolve(p.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const npmCli = p.resolve(p.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
   const npxCli = p.join(p.dirname(npmCli), 'npx-cli.js');
   const installedFiles = new Set([node, python, profile, npmCli, npxCli]);
   let invoked;
@@ -424,7 +422,9 @@ function localUpdateFixture(appDirectory, { transaction, dataRoot = '/Astrid Dat
   const node = p.join(versionRoot, 'node', 'bin', 'node');
   const python = p.join(versionRoot, 'py', 'bin', 'python');
   const profile = p.join(versionRoot, 'profile.json');
-  const npmCli = p.resolve(p.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const npmCli = platform === 'win32'
+    ? p.join(p.dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    : p.resolve(p.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
   const npxCli = p.join(p.dirname(npmCli), 'npx-cli.js');
   const records = new Map([
     [p.join(appDirectory, 'app', 'install-mode.json'), JSON.stringify({ schema_version: 1, mode: 'local' })],
