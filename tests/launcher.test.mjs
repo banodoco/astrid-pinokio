@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import library from '../pinokio/lib.js';
-import { createController, CONTROL_FILE, requestLocalUpdate } from '../pinokio/lifecycle.mjs';
+import { bounded, createController, CONTROL_FILE, requestLocalUpdate } from '../pinokio/lifecycle.mjs';
 import { commands, installation, localSessionReady, parseSessionOptions, runSession, signalGroup } from '../pinokio/session.mjs';
 
 const require = createRequire(import.meta.url);
@@ -1453,4 +1453,93 @@ test('failed Runtime spawn still requires down before releasing its controller',
     assert.equal(controllerClosed, true);
     assert.equal(h.active.size, 0);
   }
+});
+
+test('C1 manager drainage does not wait for an automatic down blocked on C1', async () => {
+  const h = sessionHarness({ platform: 'linux' });
+  let managerStop; let releaseDown; let downStarted; let managerDone; let downs = 0;
+  const downEntered = new Promise((resolve) => { downStarted = resolve; });
+  const downBlocked = new Promise((resolve) => { releaseDown = resolve; });
+  let closed = false;
+  const session = runSession({ ...h.options, action: 'serve', mode: 'local',
+    openController: async (_root, _stop, options) => { managerStop = options.managerStop; return { close: async () => { closed = true; } }; },
+    gracefulDown: async () => { downs++; downStarted(); await downBlocked; throw new Error('legacy ownerless refusal'); },
+    request: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok', protocol: 'workspace.v1',
+      schemaVersion: 1, runtimeInstanceId: 'instance', realmId: 'realm' }) }),
+    output: (line) => {
+      if (line !== 'ASTRID_PINOKIO_READY') return;
+      const runtime = h.log.find((call) => call.command?.endsWith('/run'));
+      const child = h.active.get(runtime.pid);
+      h.active.delete(runtime.pid); child.emit('close', 0, null);
+      managerDone = (async () => {
+        await downEntered;
+        assert.equal((await managerStop()).ok, true);
+        assert.equal(downs, 1);
+        assert.equal(closed, false);
+        assert.equal(h.active.size, 0);
+        releaseDown();
+      })();
+    },
+  });
+  await session;
+  await managerDone;
+  assert.equal(closed, true);
+});
+
+test('failed manager drainage remains retryable while automatic down is pending', async () => {
+  const h = sessionHarness({ platform: 'linux' });
+  let managerStop; let releaseDown; let downStarted; let work;
+  const entered = new Promise((resolve) => { downStarted = resolve; });
+  const blocked = new Promise((resolve) => { releaseDown = resolve; });
+  let failDrain = true; let controllerClosed = false;
+  const session = runSession({ ...h.options, action: 'serve', mode: 'local',
+    openController: async (_root, _stop, options) => { managerStop = options.managerStop; return { close: async () => { controllerClosed = true; } }; },
+    gracefulDown: async () => { downStarted(); await blocked; throw new Error('legacy ownerless refusal'); },
+    limit: async (promise, ms, label) => {
+      if (label === 'Editor/command stop' && failDrain) { failDrain = false; await promise; throw new Error('injected drain failure'); }
+      return bounded(promise, ms, label);
+    },
+    request: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok', protocol: 'workspace.v1',
+      schemaVersion: 1, runtimeInstanceId: 'instance', realmId: 'realm' }) }),
+    output: (line) => {
+      if (line !== 'ASTRID_PINOKIO_READY') return;
+      const runtime = h.log.find((call) => call.command?.endsWith('/run'));
+      const child = h.active.get(runtime.pid);
+      h.active.delete(runtime.pid); child.emit('close', 0, null);
+      work = (async () => {
+        await entered;
+        assert.equal((await managerStop()).ok, false);
+        assert.equal(controllerClosed, false);
+        assert.equal((await managerStop()).ok, true);
+        releaseDown();
+      })();
+    },
+  });
+  await session; await work;
+  assert.equal(controllerClosed, true);
+  assert.equal(h.active.size, 0);
+});
+
+test('manager stop refuses a live Runtime child without draining its editor', async () => {
+  const h = sessionHarness({ platform: 'linux' });
+  let managerStop; let stop; let work; let closed = false;
+  const session = runSession({ ...h.options, action: 'serve', mode: 'local',
+    openController: async (_root, callback, options) => { stop = callback; managerStop = options.managerStop; return { close: async () => { closed = true; } }; },
+    limit: (promise, ms, label) => label === 'Runtime exit after C1 stop'
+      ? Promise.reject(new Error('Runtime exit after C1 stop timed out.')) : bounded(promise, ms, label),
+    request: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok', protocol: 'workspace.v1',
+      schemaVersion: 1, runtimeInstanceId: 'instance', realmId: 'realm' }) }),
+    output: (line) => {
+      if (line !== 'ASTRID_PINOKIO_READY') return;
+      work = (async () => {
+        await assert.rejects(managerStop(), /timed out/);
+        assert.equal(h.active.size, 2);
+        assert.equal(closed, false);
+        assert.equal((await stop()).ok, true);
+      })();
+    },
+  });
+  await session; await work;
+  assert.equal(h.active.size, 0);
+  assert.equal(closed, true);
 });

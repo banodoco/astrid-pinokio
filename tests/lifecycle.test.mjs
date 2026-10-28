@@ -181,3 +181,26 @@ test('controllerless stop uses the selected pinned Runtime down and preserves st
     await stopRuntime(root, { platform, filesystem: { existsSync: () => false }, run: () => assert.fail('no program files') });
   }
 });
+
+test('manager capability is read-only and manager stop requires the bound token and host', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-manager-control-'));
+  let controller; let drains = 0;
+  try {
+    controller = await createController(root, async () => ({ ok: true }), { managerStop: async () => { drains++; return { ok: true }; } });
+    const record = JSON.parse(fs.readFileSync(path.join(root, CONTROL_FILE)));
+    const url = `http://127.0.0.1:${record.port}/manager-stop`;
+    const headers = { Authorization: `Bearer ${record.token}`, Host: `127.0.0.1:${record.port}` };
+    assert.equal((await fetch(url, { method: 'OPTIONS', headers })).status, 200);
+    assert.equal(drains, 0);
+    assert.equal((await fetch(url, { method: 'POST' })).status, 403);
+    const wrongHost = await new Promise((resolve, reject) => {
+      const req = http.request(url, { method: 'POST', headers: { ...headers, Host: `localhost:${record.port}` } }, resolve);
+      req.on('error', reject); req.end();
+    });
+    wrongHost.resume(); assert.equal(wrongHost.statusCode, 403);
+    assert.equal((await fetch(url, { method: 'GET', headers })).status, 403);
+    assert.equal(drains, 0);
+    assert.equal((await fetch(url, { method: 'POST', headers })).status, 200);
+    assert.equal(drains, 1);
+  } finally { await controller?.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -59,7 +59,7 @@ export async function stopRuntime(root, { filesystem = fs, platform = process.pl
     { env: installed.env, cwd: root, timeoutMs });
 }
 export async function createController(root, stop, { filesystem = fs, pid = process.pid,
-  killProcess = process.kill.bind(process), localUpdate = {} } = {}) {
+  killProcess = process.kill.bind(process), localUpdate = {}, managerStop } = {}) {
   const file = path.join(root, CONTROL_FILE);
   try {
     const prior = JSON.parse(filesystem.readFileSync(file, 'utf8'));
@@ -74,12 +74,20 @@ export async function createController(root, stop, { filesystem = fs, pid = proc
       res.writeHead(status, { 'Content-Type': 'application/json', Connection: 'close' });
       res.end(JSON.stringify(body));
     };
-    if (req.method !== 'POST' || req.headers.authorization !== `Bearer ${token}`
+    if (!(['POST', 'OPTIONS'].includes(req.method)) || req.headers.authorization !== `Bearer ${token}`
       || req.socket.remoteAddress !== '127.0.0.1' || req.headers.host !== `127.0.0.1:${server.address()?.port}`) {
       req.resume();
       res.writeHead(403); res.end(); return;
     }
     const route = req.url;
+    if (route === '/manager-stop' && typeof managerStop === 'function') {
+      req.resume();
+      if (req.method === 'OPTIONS') return send(200, { ok: true });
+      try { const result = await managerStop(); send(result.ok ? 200 : 500, result); }
+      catch (error) { send(500, { ok: false, errors: [error.message] }); }
+      return;
+    }
+    if (req.method !== 'POST') { req.resume(); return send(405); }
     if (route === '/stop') {
       req.resume();
       if (localUpdate.isUpdating?.()) return send(409, { ok: false, errors: ['Astrid is updating. Try again when it finishes.'] });

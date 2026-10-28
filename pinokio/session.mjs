@@ -172,6 +172,7 @@ export async function runSession({ action, root, editor, mode, platform = proces
   let controller;
   let stopComplete = false;
   let shutdownPromise;
+  let drainPromise;
   let stopRequestPromise;
   let stopRequested = false;
   let serveInterruptedByStop = false;
@@ -258,13 +259,35 @@ export async function runSession({ action, root, editor, mode, platform = proces
     await item.done;
     item.released = true;
   }
-  async function shutdown() {
+  async function drainManager() {
     if (stopComplete) return { ok: true, errors: [] };
-    if (shutdownPromise) return shutdownPromise;
-    shutdownPromise = (async () => {
+    if (drainPromise) return drainPromise;
+    drainPromise = (async () => {
       const errors = [];
-      // Even an exited child can leave durable busy work or a replacement
-      // publication. Only Runtime down can admit editor/controller cleanup.
+      stopping = true;
+      for (const item of [...children].reverse().filter((owned) => owned !== runtimeItem && !owned.released)) {
+        try { await limit(terminate(item), 8000, 'Editor/command stop'); }
+        catch (error) { errors.push(error.message); }
+      }
+      if (!errors.length) { stopComplete = true; finishStop(); }
+      return { ok: errors.length === 0, errors };
+    })();
+    try { return await drainPromise; }
+    finally { if (!stopComplete) drainPromise = undefined; }
+  }
+  async function managerStop() {
+    // C1 has stopped the selected Runtime before invoking this callback.
+    // Do not join shutdownPromise: its down may be waiting for C1's mutex.
+    if (runtimeItem && !runtimeItem.closed) await limit(runtimeItem.done, 5000, 'Runtime exit after C1 stop');
+    if (runtimeItem && !runtimeItem.closed) throw new Error('The Pinokio Runtime child is still running.');
+    const result = await drainManager();
+    if (result.ok) fail(new Error('Astrid session stopped.'));
+    return result;
+  }
+  async function shutdown() {
+    if (shutdownPromise) return shutdownPromise;
+    if (stopComplete) return { ok: true, errors: [] };
+    shutdownPromise = (async () => {
       if (runtimeItem && !runtimeDown) {
         try {
           downInProgress = true;
@@ -273,25 +296,13 @@ export async function runSession({ action, root, editor, mode, platform = proces
           runtimeDown = true;
         } catch (error) {
           downInProgress = false;
-          return { ok: false, errors: [error.message], ...(error.details !== undefined ? { details: error.details } : {}) };
+          if (!stopComplete) return { ok: false, errors: [error.message], ...(error.details !== undefined ? { details: error.details } : {}) };
         }
       }
-
-      // No process, controller or lock cleanup begins until the final Runtime
-      // down has succeeded. A refusal leaves this function callable for retry.
-      stopping = true;
-      for (const item of [...children].reverse().filter((owned) => owned !== runtimeItem && !owned.released)) {
-        try { await limit(terminate(item), 8000, 'Editor/command stop'); }
-        catch (error) { errors.push(error.message); }
-      }
-      if (errors.length === 0) {
-        stopComplete = true;
-        finishStop();
-      }
-      return { ok: errors.length === 0, errors };
+      return drainManager();
     })();
     try { return await shutdownPromise; }
-    finally { if (!stopComplete) shutdownPromise = undefined; }
+    finally { shutdownPromise = undefined; }
   }
   const requestStop = () => {
     if (stopRequestPromise) return stopRequestPromise;
@@ -397,7 +408,7 @@ export async function runSession({ action, root, editor, mode, platform = proces
         return { updating: false, ready: true };
       },
     };
-    controller = await openController(root, requestStop, { localUpdate });
+    controller = await openController(root, requestStop, { localUpdate, managerStop });
     if (action === 'build') await checked(specs.dependencies, { cwd: editor });
     if (!recoverLocalUpdate) {
       discovery = undefined;
