@@ -198,10 +198,10 @@ test('controller /stop passes only the exact C1 stop report through, as data', a
     wrongHost.resume(); assert.equal(wrongHost.statusCode, 403);
     assert.deepEqual(seen, []);
     for (const body of [undefined, '', '{}', '{"c1":"refused"}', '{"c1":true}', '{"c1":"stopped"', 'null',
-      '"stopped"', '{"command":"down"}', JSON.stringify({ c1: 'stopped', pad: 'x'.repeat(5000) })]) {
+      '"stopped"', '{"command":"down"}', '{"c1":"stopped","extra":1}', '[{"c1":"stopped"}]', '["c1","stopped"]', JSON.stringify({ c1: 'stopped', pad: 'x'.repeat(5000) })]) {
       assert.equal((await fetch(url, { method: 'POST', headers, body })).status, 200);
     }
     assert.equal((await fetch(url, { method: 'POST', headers, body: '{"c1":"stopped"}' })).status, 200);
-    assert.deepEqual(seen.map((report) => report.c1Stopped), [false, false, false, false, false, false, false, false, false, false, true]);
+    assert.deepEqual(seen.map((report) => report.c1Stopped), [...Array(13).fill(false), true]);
   } finally { await controller?.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });

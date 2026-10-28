@@ -264,9 +264,12 @@ export async function runSession({ action, root, editor, mode, platform = proces
   // succeeds. The session observes, but never signals, the Runtime child.
   async function shutdown({ c1Stopped = false } = {}) {
     if (stopComplete) return { ok: true, errors: [] };
-    if (shutdownPromise) {
+    // Join any pending attempt; if it refused and this caller carries the
+    // report, loop to a fresh attempt (independent of microtask order).
+    while (shutdownPromise) {
       const prior = await shutdownPromise;
-      return prior.ok || !c1Stopped ? prior : shutdown({ c1Stopped });
+      if (prior.ok || !c1Stopped) return prior;
+      if (stopComplete) return { ok: true, errors: [] };
     }
     shutdownPromise = (async () => {
       const errors = [];

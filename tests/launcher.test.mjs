@@ -1541,7 +1541,13 @@ test('C1 stop report drains without a second down after an automatic down refuse
     let stop; let retry; let downs = 0; let controllerClosed = false;
     await runSession({ ...h.options, action: 'serve', mode,
       openController: async (_root, callback) => { stop = callback; return { close: async () => { controllerClosed = true; } }; },
-      gracefulDown: async () => { downs++; throw new Error('No selected runtime owner to restart.'); },
+      gracefulDown: async () => {
+        downs++;
+        // The retained revision's two preflight refusals after the Runtime child exited.
+        throw new Error(downs % 2
+          ? 'Runtime Pinokio interruption refused: no owner or completed-stop evidence.'
+          : 'Runtime interruption refused: owner lock has no matching discovery.');
+      },
       request: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok', protocol: 'workspace.v1',
         schemaVersion: 1, runtimeInstanceId: 'instance', realmId: 'realm' }) }),
       output: (line) => {
@@ -1551,7 +1557,7 @@ test('C1 stop report drains without a second down after an automatic down refuse
           h.active.delete(runtime.pid); child.emit('close', 0, null);
         } else {
           // The exit finalizer's own down refused (an older Runtime CLI).
-          assert.match(line, /No selected runtime owner/);
+          assert.match(line, /no owner or completed-stop evidence/);
           retry = (async () => {
             // No report, or any other report, keeps today's down-gated stop.
             assert.equal((await stop()).ok, false);
@@ -1582,7 +1588,7 @@ test('C1 stop report joins a pending automatic down instead of racing it', async
       openController: async (_root, callback) => { stop = callback; return { close: async () => { controllerClosed = true; } }; },
       gracefulDown: async () => {
         downs++; entered(); await downBlocked;
-        if (outcome === 'refused') throw new Error('No selected runtime owner to restart.');
+        if (outcome === 'refused') throw new Error('Runtime interruption refused: owner lock has no matching discovery.');
       },
       request: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok', protocol: 'workspace.v1',
         schemaVersion: 1, runtimeInstanceId: 'instance', realmId: 'realm' }) }),
