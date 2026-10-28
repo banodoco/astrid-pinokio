@@ -17,7 +17,7 @@ To go back, choose Reset, then Install. Your projects stay.
 
 - **Start** starts Astrid. When it's ready, **Open Astrid** appears.
 - **Stop** stops it.
-- **Update** prepares the hosted-editor application while Astrid runs, then restarts it. If the new version cannot start, the previous version starts again. Updates that require workspace migration use the full installer update. Fully local updates still stop first; choose Start afterwards.
+- **Update** updates the hosted install through Pinokio or runs the fully local App updater from its existing session. Open Astrid appears after Runtime is ready. If the new version cannot start, the previous version starts again.
 - **Reset** removes Astrid's program files so you can install again.
 - **Uninstall** removes Astrid.
 - **Uninstall and delete all Astrid data…** also deletes your projects, for good. You type `DELETE` to confirm.
