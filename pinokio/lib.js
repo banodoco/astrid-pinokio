@@ -452,12 +452,16 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     ondata?.({ raw: message });
     throw new Error(message);
   }
+  async function preflightBackup() {
+    const { preflightBackup: run } = await import('./backup-preflight.mjs');
+    return run(BACKEND_ROOT, { platform, filesystem, environment });
+  }
   return { APP_DIR, PROGRAMS_DIR, BACKEND_ROOT, EDITOR_DIR, MODE_FILE, isWindows, shellName, paths,
     getPaths: () => ({ root: BACKEND_ROOT, editor: EDITOR_DIR }), setting, appRef, bootstrapScript,
     shellStep, gitShellStep, launcherPullMessage, customStep, ensureProgramDirectory, readInstallMode, saveModeStep, removeProgramFiles,
     validateExistingEditorCheckout, cloneEditorMessage, pullEditorMessage, sessionMessage, sessionStep,
     pendingUpdateTransaction, hasPendingUpdate, hasPendingLocalUpdate, recoverPendingUpdate,
-    stopHook, stopOwnedStart, hasOwnedSupervisor, localSessionReady, ensureLocalSessionForUpdate, runLocalUpdate, localUpdateControl, ensureDoorPortFree, probeDoor: probe, modeOpenTarget, localSetOpenTarget,
+    stopHook, stopOwnedStart, preflightBackup, hasOwnedSupervisor, localSessionReady, ensureLocalSessionForUpdate, runLocalUpdate, localUpdateControl, ensureDoorPortFree, probeDoor: probe, modeOpenTarget, localSetOpenTarget,
     runScript: (root, args) => (isWindows ? windows : posix).run(root, args),
     ...CONSTANTS };
 }

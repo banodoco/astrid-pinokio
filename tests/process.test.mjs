@@ -86,7 +86,7 @@ for (const platform of ['darwin', 'linux', 'win32']) {
         const app = {
           readInstallMode: () => caller === 'add-local' ? 'backend' : null,
           hasOwnedSupervisor: () => false, customStep: (method) => ({ method }),
-          stopOwnedStart: async () => {}, ensureDoorPortFree: async () => {}, ensureProgramDirectory() {},
+          preflightBackup: async () => {}, stopOwnedStart: async () => {}, ensureDoorPortFree: async () => {}, ensureProgramDirectory() {},
           validateExistingEditorCheckout: () => false, cloneEditorMessage: () => '',
           gitShellStep: () => ({ method: async () => {} }), shellStep: () => ({ method: async () => {} }),
           bootstrapScript: () => '', paths: { join: (...parts) => parts.join('/') }, EDITOR_DIR: '/fixture/editor',

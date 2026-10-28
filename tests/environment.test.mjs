@@ -187,6 +187,8 @@ for (const platform of ['darwin', 'linux', 'win32']) for (const mode of ['backen
         await waitForInstallerLock(root, { ...options, installed: f.installed, run: async (_spec, options) => { checkEnvironment(options.env, f, true); lockChecks++; } });
       },
     } });
+    // Preflight's isolated child environment is exercised in backup-preflight.test.mjs.
+    app.preflightBackup = async () => {};
     for (const name of scripts) {
       if (name === 'add-local' && mode === 'local') continue;
       const factory = load(name, app);

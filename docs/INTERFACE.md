@@ -170,7 +170,9 @@ The Stop menu, Reset, Uninstall, typed data deletion and Switch to fully local (
 
 1. Request the controller's Runtime `down` and retain its result. Without a live controller, resolve and validate the selected installed version and run that Runtime's actual `down` before lock admission. Missing or incomplete installed records fail closed when program files exist.
 2. Call `kernel.api.stop` only after successful Runtime shutdown. Busy, unknown, and timeout errors return before native tree cleanup or lock checks.
-3. Wait for the actual installer lock after successful stop, even when Start was already idle. These maintenance steps do not pull, bootstrap, build, remove files, or save a mode after refusal. Update delegates preflight and staging to the shared installer transaction, which stages before the final Runtime fence; pending-journal recovery runs before new launcher/editor pulls or manifest work.
+3. Wait for the actual installer lock after successful stop, even when Start was already idle. These maintenance steps do not pull, bootstrap, build, remove files, or save a mode after refusal. Update delegates staging to the shared installer transaction, which stages before the final Runtime fence; pending-journal recovery runs before new launcher/editor pulls or manifest work.
+
+Before a new Update or Switch to fully local, the installed Python checks the selected support tree against the installer's backup policy. A mismatched selection or unsafe support entry refuses before the launcher pull or first stop. Pending update recovery takes precedence over this check so an interrupted transaction remains recoverable. The transaction's own backup and final Runtime fence remain authoritative.
 
 If the controller is unresponsive, its request fails closed. Astrid leaves the session intact and permits another Stop request. Lock verification has a 10-second poll budget and 12-second subprocess deadline after a successful shutdown. These are production operation bounds; no test has a harness timeout.
 

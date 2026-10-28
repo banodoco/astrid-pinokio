@@ -14,7 +14,7 @@ module.exports = async () => {
   if (!mode) throw new Error("Astrid isn't fully installed. Choose Reset, then install again.");
   // The shared installer transaction preflights before staging, then uses
   // Runtime down as the final stop authority after candidate validation.
-  const steps = [app.gitShellStep(app.launcherPullMessage())];
+  const steps = [app.customStep(app.preflightBackup), app.gitShellStep(app.launcherPullMessage())];
   if (mode === 'local') {
     if (!app.validateExistingEditorCheckout()) throw new Error("Astrid's editor files are missing. Choose Reset, then install again.");
     steps.push(
