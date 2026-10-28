@@ -552,6 +552,8 @@ async function runFullyLocal() {
     execFileSync('git', ['-C', fixtureWork, '-c', 'user.name=CI fixture', '-c', 'user.email=ci@example.invalid',
       'commit', '--allow-empty', '-m', 'Smoke update candidate'], { stdio: 'inherit' });
     execFileSync('git', ['-C', fixtureWork, 'push', 'origin', 'main'], { stdio: 'inherit' });
+    // Install clones only the candidate branch, so explicitly track fixture main.
+    execFileSync('git', ['-C', app.EDITOR_DIR, 'config', '--add', 'remote.origin.fetch', '+refs/heads/main:refs/remotes/origin/main']);
     const target = execFileSync('git', ['-C', fixtureWork, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     const manifest = JSON.parse(fs.readFileSync(path.join(fixtureWork, 'public', 'install-manifest.json'), 'utf8'));
     const build = JSON.stringify({ app: target, release: manifest.release ?? 0 });
