@@ -297,9 +297,17 @@ test('real POSIX busy refusal keeps Runtime, editor descendants, controller and 
     assert.equal(fs.existsSync(path.join(root, 'pinokio-control.json')), false);
     assert.equal(children.size, 0);
     assert.equal(probeLock().status, 0, 'successful retry must release the fixture lifetime lock');
+    // kill(pid, 0) also succeeds on an exited, not-yet-reaped zombie. A killed
+    // descendant is reaped by its reaper (init here, on a ~2s cadence), so give
+    // the kernel a bounded moment; every PID must still end up gone (ESRCH).
     for (const pid of [runtimePid, editorPid, grandchildPid]) {
-      try { process.kill(pid, 0); assert.fail(`PID ${pid} survived successful retry`); }
-      catch (error) { assert.equal(error.code, 'ESRCH'); }
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        try { process.kill(pid, 0); }
+        catch (error) { assert.equal(error.code, 'ESRCH'); break; }
+        if (Date.now() >= deadline) assert.fail(`PID ${pid} survived successful retry`);
+        await pause(10);
+      }
     }
   } finally {
     if (controller) await controller.close().catch(() => {});
