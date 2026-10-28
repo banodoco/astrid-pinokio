@@ -379,21 +379,22 @@ test('Update preserves hosted bootstrap and routes fully local Update through th
 });
 
 test('the fully-local Pinokio caller launches the installed npm update script in the editor checkout', async () => {
+  const p = path.posix;
   const base = fakeApp('linux', '', 'local');
   const root = base.BACKEND_ROOT;
   const version = 'v2';
-  const versionRoot = path.join(root, 'versions', version);
-  const node = path.join(versionRoot, 'node', 'bin', 'node');
-  const python = path.join(versionRoot, 'py', 'bin', 'python');
-  const profile = path.join(versionRoot, 'profile.json');
+  const versionRoot = p.join(root, 'versions', version);
+  const node = p.join(versionRoot, 'node', 'bin', 'node');
+  const python = p.join(versionRoot, 'py', 'bin', 'python');
+  const profile = p.join(versionRoot, 'profile.json');
   const records = new Map([
-    [path.join(base.APP_DIR, 'app', 'install-mode.json'), JSON.stringify({ schema_version: 1, mode: 'local' })],
-    [path.join(root, 'current'), version],
-    [path.join(versionRoot, 'version.json'), JSON.stringify({ root: versionRoot, python, profile, env: { ASTRID_NODE_EXECUTABLE: node } })],
-    [path.join(root, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: '/Astrid Data' })],
+    [p.join(base.APP_DIR, 'app', 'install-mode.json'), JSON.stringify({ schema_version: 1, mode: 'local' })],
+    [p.join(root, 'current'), version],
+    [p.join(versionRoot, 'version.json'), JSON.stringify({ root: versionRoot, python, profile, env: { ASTRID_NODE_EXECUTABLE: node } })],
+    [p.join(root, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: '/Astrid Data' })],
   ]);
-  const npmCli = path.resolve(path.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  const npxCli = path.join(path.dirname(npmCli), 'npx-cli.js');
+  const npmCli = p.resolve(p.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const npxCli = p.join(p.dirname(npmCli), 'npx-cli.js');
   const installedFiles = new Set([node, python, profile, npmCli, npxCli]);
   let invoked;
   const app = library.createApp({ platform: 'linux', appDirectory: base.APP_DIR, environment: {},
@@ -415,20 +416,21 @@ test('the fully-local Pinokio caller launches the installed npm update script in
 });
 
 function localUpdateFixture(appDirectory, { transaction, dataRoot = '/Astrid Data' } = {}) {
-  const root = path.join(appDirectory, 'app', 'astrid');
-  const versionRoot = path.join(root, 'versions', 'v2');
-  const node = path.join(versionRoot, 'node', 'bin', 'node');
-  const python = path.join(versionRoot, 'py', 'bin', 'python');
-  const profile = path.join(versionRoot, 'profile.json');
-  const npmCli = path.resolve(path.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  const npxCli = path.join(path.dirname(npmCli), 'npx-cli.js');
+  const p = path.posix;
+  const root = p.join(appDirectory, 'app', 'astrid');
+  const versionRoot = p.join(root, 'versions', 'v2');
+  const node = p.join(versionRoot, 'node', 'bin', 'node');
+  const python = p.join(versionRoot, 'py', 'bin', 'python');
+  const profile = p.join(versionRoot, 'profile.json');
+  const npmCli = p.resolve(p.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const npxCli = p.join(p.dirname(npmCli), 'npx-cli.js');
   const records = new Map([
-    [path.join(appDirectory, 'app', 'install-mode.json'), JSON.stringify({ schema_version: 1, mode: 'local' })],
-    [path.join(root, 'current'), 'v2'],
-    [path.join(versionRoot, 'version.json'), JSON.stringify({ root: versionRoot, python, profile, env: { ASTRID_NODE_EXECUTABLE: node } })],
-    [path.join(root, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: dataRoot })],
+    [p.join(appDirectory, 'app', 'install-mode.json'), JSON.stringify({ schema_version: 1, mode: 'local' })],
+    [p.join(root, 'current'), 'v2'],
+    [p.join(versionRoot, 'version.json'), JSON.stringify({ root: versionRoot, python, profile, env: { ASTRID_NODE_EXECUTABLE: node } })],
+    [p.join(root, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: dataRoot })],
   ]);
-  if (transaction) records.set(path.join(root, 'update-transaction.json'), JSON.stringify(transaction));
+  if (transaction) records.set(p.join(root, 'update-transaction.json'), JSON.stringify(transaction));
   const installedFiles = new Set([node, python, profile, npmCli, npxCli]);
   const filesystem = {
     readFileSync: (file) => {
@@ -646,12 +648,14 @@ for (const step of ['complete', 'rolled_back']) {
 }
 
 test('pending local Update authenticates the retained controller before bypassing stopped editor readiness', async (t) => {
+  const hostPlatform = process.platform;
+  const p = hostPlatform === 'win32' ? path.win32 : path.posix;
   const originalNow = Date.now;
   let clock = originalNow();
   Date.now = () => clock;
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-pinokio-pending-retry-'));
-  const appDirectory = path.join(temporary, 'pinokio', 'api', 'astrid');
-  const root = path.join(appDirectory, 'app', 'astrid');
+  const appDirectory = p.join(temporary, 'pinokio', 'api', 'astrid');
+  const root = p.join(appDirectory, 'app', 'astrid');
   fs.mkdirSync(path.dirname(root), { recursive: true });
   fs.mkdirSync(root, { recursive: true });
   fs.writeFileSync(path.join(path.dirname(root), 'install-mode.json'), JSON.stringify({ schema_version: 1, mode: 'local' }));
@@ -659,12 +663,14 @@ test('pending local Update authenticates the retained controller before bypassin
     step: 'recovering', transaction_context: { owner: 'local-update' },
   }));
   const version = 'v2';
-  const versionRoot = path.join(root, 'versions', version);
-  const node = path.join(versionRoot, 'node', 'bin', 'node');
-  const python = path.join(versionRoot, 'py', 'bin', 'python');
-  const profile = path.join(versionRoot, 'profile.json');
-  const npmCli = path.resolve(path.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  const npxCli = path.join(path.dirname(npmCli), 'npx-cli.js');
+  const versionRoot = p.join(root, 'versions', version);
+  const node = p.join(versionRoot, 'node', 'bin', 'node');
+  const python = p.join(versionRoot, 'py', 'bin', 'python');
+  const profile = p.join(versionRoot, 'profile.json');
+  const npmCli = hostPlatform === 'win32'
+    ? p.join(p.dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    : p.resolve(p.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const npxCli = p.join(p.dirname(npmCli), 'npx-cli.js');
   fs.mkdirSync(versionRoot, { recursive: true });
   fs.writeFileSync(path.join(root, 'current'), `${version}\n`);
   fs.writeFileSync(path.join(versionRoot, 'version.json'), JSON.stringify({ root: versionRoot, python, profile,
@@ -700,7 +706,7 @@ test('pending local Update authenticates the retained controller before bypassin
   const record = JSON.parse(fs.readFileSync(path.join(root, CONTROL_FILE), 'utf8'));
   let recoveryPromise;
   let invoked;
-  const app = library.createApp({ platform: 'linux', appDirectory, environment: {},
+  const app = library.createApp({ platform: hostPlatform, appDirectory, environment: {},
     filesystem,
     execute: (command, args, options) => {
       invoked = { command, args, options };
@@ -826,17 +832,21 @@ test('hosted Update leaves stop admission to the shared installer transaction', 
 });
 
 test('Update performs only installed-CLI recovery before any new launcher or manifest fetch', async (t) => {
+  const hostPlatform = process.platform;
+  const p = hostPlatform === 'win32' ? path.win32 : path.posix;
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-pinokio-recovery-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
-  const appDirectory = path.join(temporary, 'pinokio', 'api', 'Astrid');
-  const root = path.join(appDirectory, 'app', 'astrid');
+  const appDirectory = p.join(temporary, 'pinokio', 'api', 'Astrid');
+  const root = p.join(appDirectory, 'app', 'astrid');
   const makeVersion = (version, release) => {
-    const versionRoot = path.join(root, 'versions', version);
-    const node = path.join(versionRoot, 'node', 'bin', 'node');
-    const python = path.join(versionRoot, 'py', 'bin', 'python');
-    const profile = path.join(versionRoot, 'profile.json');
-    const npm = path.resolve(path.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
-    const npx = path.join(path.dirname(npm), 'npx-cli.js');
+    const versionRoot = p.join(root, 'versions', version);
+    const node = p.join(versionRoot, 'node', 'bin', 'node');
+    const python = p.join(versionRoot, 'py', 'bin', 'python');
+    const profile = p.join(versionRoot, 'profile.json');
+    const npm = hostPlatform === 'win32'
+      ? p.join(p.dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+      : p.resolve(p.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    const npx = p.join(p.dirname(npm), 'npx-cli.js');
     for (const file of [node, python, profile, npm, npx]) fs.mkdirSync(path.dirname(file), { recursive: true });
     for (const file of [node, python, profile, npm, npx]) fs.writeFileSync(file, '');
     const env = { ASTRID_NODE_EXECUTABLE: node, ASTRID_INSTALL_RELEASE: String(release), ASTRID_INSTALL_MANAGED_BY: 'pinokio' };
@@ -851,7 +861,7 @@ test('Update performs only installed-CLI recovery before any new launcher or man
   fs.writeFileSync(path.join(root, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: path.join(temporary, 'data') }));
   fs.writeFileSync(path.join(root, 'update-transaction.json'), JSON.stringify({ format: 'astrid-install-update/v1', step: 'switched', operation_id: 'a'.repeat(32), candidate }));
   let invoked;
-  const app = library.createApp({ platform: 'linux', appDirectory, environment: {}, execute: (command, args, options) => {
+  const app = library.createApp({ platform: hostPlatform, appDirectory, environment: {}, execute: (command, args, options) => {
     invoked = { command, args, options }; return { status: 0, stdout: 'recovered\n', stderr: '' };
   } });
   const script = await load('pinokio/update.js', app)({}, {});
