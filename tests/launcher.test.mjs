@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import library from '../pinokio/lib.js';
-import { createController, CONTROL_FILE, requestLocalUpdate } from '../pinokio/lifecycle.mjs';
+import { bounded, createController, CONTROL_FILE, requestLocalUpdate } from '../pinokio/lifecycle.mjs';
 import { commands, installation, localSessionReady, parseSessionOptions, runSession, signalGroup } from '../pinokio/session.mjs';
 
 const require = createRequire(import.meta.url);
@@ -1533,4 +1533,114 @@ test('failed Runtime spawn still requires down before releasing its controller',
     assert.equal(controllerClosed, true);
     assert.equal(h.active.size, 0);
   }
+});
+
+test('C1 stop report drains without a second down after an automatic down refused', async () => {
+  for (const platform of ['darwin', 'linux', 'win32']) for (const mode of ['backend', 'local']) {
+    const h = sessionHarness({ platform });
+    let stop; let retry; let downs = 0; let controllerClosed = false;
+    await runSession({ ...h.options, action: 'serve', mode,
+      openController: async (_root, callback) => { stop = callback; return { close: async () => { controllerClosed = true; } }; },
+      gracefulDown: async () => {
+        downs++;
+        // The retained revision's two preflight refusals after the Runtime child exited.
+        throw new Error(downs % 2
+          ? 'Runtime Pinokio interruption refused: no owner or completed-stop evidence.'
+          : 'Runtime interruption refused: owner lock has no matching discovery.');
+      },
+      request: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok', protocol: 'workspace.v1',
+        schemaVersion: 1, runtimeInstanceId: 'instance', realmId: 'realm' }) }),
+      output: (line) => {
+        if (line === 'ASTRID_PINOKIO_READY') {
+          const runtime = h.log.find((call) => call.command?.endsWith('/run') || call.command?.endsWith('cmd.exe'));
+          const child = h.active.get(runtime.pid);
+          h.active.delete(runtime.pid); child.emit('close', 0, null);
+        } else {
+          // The exit finalizer's own down refused (an older Runtime CLI).
+          assert.match(line, /no owner or completed-stop evidence/);
+          retry = (async () => {
+            // No report, or any other report, keeps today's down-gated stop.
+            assert.equal((await stop()).ok, false);
+            assert.equal((await stop({ c1Stopped: false })).ok, false);
+            assert.equal(controllerClosed, false);
+            assert.equal(h.active.size, mode === 'local' ? 1 : 0);
+            assert.equal(downs, 3);
+            assert.equal((await stop({ c1Stopped: true })).ok, true);
+            assert.equal(downs, 3);
+          })();
+        }
+      },
+    });
+    await retry;
+    assert.equal(controllerClosed, true);
+    assert.equal(h.active.size, 0);
+  }
+});
+
+test('C1 stop report joins a pending automatic down instead of racing it', async () => {
+  for (const outcome of ['refused', 'admitted']) {
+    const h = sessionHarness({ platform: 'linux' });
+    let stop; let work; let downs = 0; let releaseDown; let entered;
+    const downEntered = new Promise((resolve) => { entered = resolve; });
+    const downBlocked = new Promise((resolve) => { releaseDown = resolve; });
+    let controllerClosed = false;
+    await runSession({ ...h.options, action: 'serve', mode: 'local',
+      openController: async (_root, callback) => { stop = callback; return { close: async () => { controllerClosed = true; } }; },
+      gracefulDown: async () => {
+        downs++; entered(); await downBlocked;
+        if (outcome === 'refused') throw new Error('Runtime interruption refused: owner lock has no matching discovery.');
+      },
+      request: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok', protocol: 'workspace.v1',
+        schemaVersion: 1, runtimeInstanceId: 'instance', realmId: 'realm' }) }),
+      output: (line) => {
+        if (line !== 'ASTRID_PINOKIO_READY') return;
+        const runtime = h.log.find((call) => call.command?.endsWith('/run'));
+        const child = h.active.get(runtime.pid);
+        h.active.delete(runtime.pid); child.emit('close', 0, null);
+        work = (async () => {
+          await downEntered;
+          const reported = stop({ c1Stopped: true });
+          await new Promise((resolve) => setImmediate(resolve));
+          assert.equal(h.active.size, 1);
+          assert.equal(controllerClosed, false);
+          releaseDown();
+          assert.equal((await reported).ok, true);
+          assert.equal(downs, 1);
+        })();
+      },
+    });
+    await work;
+    assert.equal(controllerClosed, true);
+    assert.equal(h.active.size, 0);
+  }
+});
+
+test('C1 stop report never signals a still-live Runtime child and stays retryable', async () => {
+  const h = sessionHarness({ platform: 'linux' });
+  let stop; let work; let closed = false; let downs = 0;
+  await runSession({ ...h.options, action: 'serve', mode: 'local',
+    openController: async (_root, callback) => { stop = callback; return { close: async () => { closed = true; } }; },
+    gracefulDown: async (spec) => { downs++; await h.options.gracefulDown(spec); },
+    limit: (promise, ms, label) => label === 'Runtime exit after C1 stop'
+      ? Promise.reject(new Error('Runtime exit after C1 stop timed out.')) : bounded(promise, ms, label),
+    request: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok', protocol: 'workspace.v1',
+      schemaVersion: 1, runtimeInstanceId: 'instance', realmId: 'realm' }) }),
+    output: (line) => {
+      if (line !== 'ASTRID_PINOKIO_READY') return;
+      work = (async () => {
+        const signalsBefore = h.log.filter((call) => call.signal).length;
+        assert.deepEqual(await stop({ c1Stopped: true }), { ok: false, errors: ['Runtime exit after C1 stop timed out.'] });
+        assert.equal(h.log.filter((call) => call.signal).length, signalsBefore);
+        assert.equal(h.active.size, 2);
+        assert.equal(closed, false);
+        assert.equal(downs, 0);
+        // Ordinary Stop still goes through the session's own Runtime down.
+        assert.equal((await stop()).ok, true);
+        assert.equal(downs, 1);
+      })();
+    },
+  });
+  await work;
+  assert.equal(h.active.size, 0);
+  assert.equal(closed, true);
 });

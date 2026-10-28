@@ -12,6 +12,11 @@ export const CONTROL_FILE = 'pinokio-control.json';
 export const GRACE_MS = 45_000;
 export const DOWN_MS = 25_000;
 export const LOCK_MS = 10_000;
+// The only report: a plain object whose sole key is c1, with value 'stopped'.
+function isC1Report(report) {
+  return report !== null && typeof report === 'object' && !Array.isArray(report)
+    && Object.keys(report).length === 1 && report.c1 === 'stopped';
+}
 export function bounded(promise, ms, label, { schedule = setTimeout, cancel = clearTimeout } = {}) {
   let timer;
   const expired = new Promise((_, reject) => { timer = schedule(() => reject(new Error(`${label} timed out.`)), ms); });
@@ -81,10 +86,22 @@ export async function createController(root, stop, { filesystem = fs, pid = proc
     }
     const route = req.url;
     if (route === '/stop') {
-      req.resume();
+      // The body is data, never a command: the updater may report that
+      // Backend C1 completed the Runtime stop as exactly { c1: 'stopped' }.
+      // Any other, malformed or oversized body is no report: today's stop.
+      let report;
+      try {
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size <= 4096) chunks.push(chunk);
+        }
+        if (size && size <= 4096) report = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      } catch { report = undefined; }
       if (localUpdate.isUpdating?.()) return send(409, { ok: false, errors: ['Astrid is updating. Try again when it finishes.'] });
       try {
-        const result = await stop();
+        const result = await stop({ c1Stopped: isC1Report(report) });
         send(result.ok ? 200 : 500, result);
       } catch (error) {
         send(500, { ok: false, errors: [error.message], ...(error.details !== undefined ? { details: error.details } : {}) });

@@ -181,3 +181,27 @@ test('controllerless stop uses the selected pinned Runtime down and preserves st
     await stopRuntime(root, { platform, filesystem: { existsSync: () => false }, run: () => assert.fail('no program files') });
   }
 });
+
+test('controller /stop passes only the exact C1 stop report through, as data', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-c1-report-'));
+  let controller; const seen = [];
+  try {
+    controller = await createController(root, async (report) => { seen.push(report); return { ok: true }; });
+    const record = JSON.parse(fs.readFileSync(path.join(root, CONTROL_FILE)));
+    const url = `http://127.0.0.1:${record.port}/stop`;
+    const headers = { Authorization: `Bearer ${record.token}`, Host: `127.0.0.1:${record.port}` };
+    assert.equal((await fetch(url, { method: 'POST', body: '{"c1":"stopped"}' })).status, 403);
+    const wrongHost = await new Promise((resolve, reject) => {
+      const req = http.request(url, { method: 'POST', headers: { ...headers, Host: `localhost:${record.port}` } }, resolve);
+      req.on('error', reject); req.end('{"c1":"stopped"}');
+    });
+    wrongHost.resume(); assert.equal(wrongHost.statusCode, 403);
+    assert.deepEqual(seen, []);
+    for (const body of [undefined, '', '{}', '{"c1":"refused"}', '{"c1":true}', '{"c1":"stopped"', 'null',
+      '"stopped"', '{"command":"down"}', '{"c1":"stopped","extra":1}', '[{"c1":"stopped"}]', '["c1","stopped"]', JSON.stringify({ c1: 'stopped', pad: 'x'.repeat(5000) })]) {
+      assert.equal((await fetch(url, { method: 'POST', headers, body })).status, 200);
+    }
+    assert.equal((await fetch(url, { method: 'POST', headers, body: '{"c1":"stopped"}' })).status, 200);
+    assert.deepEqual(seen.map((report) => report.c1Stopped), [...Array(13).fill(false), true]);
+  } finally { await controller?.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});

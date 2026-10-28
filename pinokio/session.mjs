@@ -258,13 +258,34 @@ export async function runSession({ action, root, editor, mode, platform = proces
     await item.done;
     item.released = true;
   }
-  async function shutdown() {
+  // c1Stopped is the updater's report (data, not a command) that Backend C1
+  // completed this Runtime's stop. Only that exact report replaces this
+  // session's own Runtime down; without it, nothing is cleaned up until down
+  // succeeds. The session observes, but never signals, the Runtime child.
+  async function shutdown({ c1Stopped = false } = {}) {
     if (stopComplete) return { ok: true, errors: [] };
-    if (shutdownPromise) return shutdownPromise;
+    // Join any pending attempt; if it refused and this caller carries the
+    // report, loop to a fresh attempt (independent of microtask order).
+    while (shutdownPromise) {
+      const prior = await shutdownPromise;
+      if (prior.ok || !c1Stopped) return prior;
+      if (stopComplete) return { ok: true, errors: [] };
+    }
     shutdownPromise = (async () => {
       const errors = [];
       // Even an exited child can leave durable busy work or a replacement
-      // publication. Only Runtime down can admit editor/controller cleanup.
+      // publication. Only C1's reported stop or a successful Runtime down
+      // can admit editor/controller cleanup.
+      if (runtimeItem && !runtimeDown && c1Stopped) {
+        try {
+          downInProgress = true;
+          if (!runtimeItem.closed) await limit(runtimeItem.done, 5000, 'Runtime exit after C1 stop');
+          runtimeDown = true;
+        } catch (error) {
+          downInProgress = false;
+          return { ok: false, errors: [error.message] };
+        }
+      }
       if (runtimeItem && !runtimeDown) {
         try {
           downInProgress = true;
@@ -293,15 +314,16 @@ export async function runSession({ action, root, editor, mode, platform = proces
     try { return await shutdownPromise; }
     finally { if (!stopComplete) shutdownPromise = undefined; }
   }
-  const requestStop = () => {
-    if (stopRequestPromise) return stopRequestPromise;
+  const requestStop = ({ c1Stopped = false } = {}) => {
+    if (stopRequestPromise && !c1Stopped) return stopRequestPromise;
     stopRequested = true;
-    stopRequestPromise = shutdown().then((result) => {
+    const attempt = shutdown({ c1Stopped: c1Stopped === true }).then((result) => {
       if (result.ok) fail(new Error('Astrid session stopped.'));
-      else { stopRequested = false; stopRequestPromise = undefined; }
+      else if (stopRequestPromise === attempt) { stopRequested = false; stopRequestPromise = undefined; }
       return result;
     });
-    return stopRequestPromise;
+    stopRequestPromise = attempt;
+    return attempt;
   };
   const onSignal = () => {
     if (updateInProgress) { output('Astrid is updating. Wait for the update to finish before stopping it.'); return; }
