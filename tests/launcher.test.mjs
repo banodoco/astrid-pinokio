@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import library from '../pinokio/lib.js';
 import { bounded, createController, CONTROL_FILE, requestLocalUpdate } from '../pinokio/lifecycle.mjs';
 import { commands, installation, localSessionReady, parseSessionOptions, runSession, signalGroup } from '../pinokio/session.mjs';
@@ -407,6 +408,154 @@ test('the fully-local Pinokio caller launches the installed npm update script in
   assert.equal(invoked.options.cwd, app.EDITOR_DIR);
   assert.equal(invoked.options.timeout, 600_000);
   assert.match(output, /up to date/);
+});
+
+function localUpdateFixture(appDirectory, { transaction, dataRoot = '/Astrid Data' } = {}) {
+  const root = path.join(appDirectory, 'app', 'astrid');
+  const versionRoot = path.join(root, 'versions', 'v2');
+  const node = path.join(versionRoot, 'node', 'bin', 'node');
+  const python = path.join(versionRoot, 'py', 'bin', 'python');
+  const profile = path.join(versionRoot, 'profile.json');
+  const npmCli = path.resolve(path.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const npxCli = path.join(path.dirname(npmCli), 'npx-cli.js');
+  const records = new Map([
+    [path.join(appDirectory, 'app', 'install-mode.json'), JSON.stringify({ schema_version: 1, mode: 'local' })],
+    [path.join(root, 'current'), 'v2'],
+    [path.join(versionRoot, 'version.json'), JSON.stringify({ root: versionRoot, python, profile, env: { ASTRID_NODE_EXECUTABLE: node } })],
+    [path.join(root, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: dataRoot })],
+  ]);
+  if (transaction) records.set(path.join(root, 'update-transaction.json'), JSON.stringify(transaction));
+  const installedFiles = new Set([node, python, profile, npmCli, npxCli]);
+  const filesystem = {
+    readFileSync: (file) => {
+      if (records.has(file)) return records.get(file);
+      throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+    },
+    existsSync: (file) => installedFiles.has(file),
+  };
+  return { appDirectory, root, node, python, npmCli, filesystem };
+}
+function fakeUpdateChild() {
+  const child = new EventEmitter();
+  child.pid = 4242;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = () => true;
+  return child;
+}
+function within(promise, ms, message) {
+  let timer;
+  return Promise.race([promise, new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); })])
+    .finally(() => clearTimeout(timer));
+}
+async function until(condition, description) {
+  for (let i = 0; i < 1000; i += 1) {
+    if (condition()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.fail(`timed out waiting for ${description}`);
+}
+function spawnRecorder() {
+  let resolveSpawn;
+  const spawned = new Promise((resolve) => { resolveSpawn = resolve; });
+  const spawnProcess = (command, args, options) => {
+    const child = fakeUpdateChild();
+    resolveSpawn({ child, command, args, options });
+    return child;
+  };
+  return { spawned, spawnProcess };
+}
+
+test('Pinokio Update runs npm as an async child: output reaches the caller before exit and timers fire meanwhile', async () => {
+  const fixture = localUpdateFixture('/pinokio/api/Astrid');
+  const { spawned, spawnProcess } = spawnRecorder();
+  const app = library.createApp({ platform: 'linux', appDirectory: fixture.appDirectory, environment: {},
+    filesystem: fixture.filesystem, spawnProcess });
+  const events = [];
+  const update = app.runLocalUpdate({}, (event) => events.push(event.raw));
+  update.catch(() => {});
+  const { child, command, args, options } = await within(spawned, 2000, 'npm was not started as an async child');
+  assert.equal(command, fixture.node);
+  assert.deepEqual(args, [fixture.npmCli, 'run', 'update']);
+  assert.equal(options.cwd, app.EDITOR_DIR);
+  child.stdout.write('npm WARN first chunk\n');
+  await until(() => events.length === 1, 'the first npm chunk');
+  assert.deepEqual(events, ['npm WARN first chunk\n'], 'the first chunk is delivered while npm is still running');
+  let timerFired = false;
+  await new Promise((resolve) => setTimeout(() => { timerFired = true; resolve(); }, 5));
+  assert.equal(timerFired, true, 'a timer must fire while npm is still running');
+  child.stderr.write('npm WARN second chunk\n');
+  await until(() => events.length === 2, 'the second npm chunk');
+  child.emit('close', 0, null);
+  assert.deepEqual(await update, { updated: true });
+  assert.deepEqual(events, ['npm WARN first chunk\n', 'npm WARN second chunk\n'], 'each chunk is delivered exactly once');
+});
+
+test('Pinokio Update reports a failed npm child with its output and no duplicate lines', async () => {
+  const fixture = localUpdateFixture('/pinokio/api/Astrid');
+  const { spawned, spawnProcess } = spawnRecorder();
+  const app = library.createApp({ platform: 'linux', appDirectory: fixture.appDirectory, environment: {},
+    filesystem: fixture.filesystem, spawnProcess });
+  const events = [];
+  const update = app.runLocalUpdate({}, (event) => events.push(event.raw));
+  update.catch(() => {});
+  const { child } = await within(spawned, 2000, 'npm was not started as an async child');
+  child.stderr.write('npm ERR! code E404\n');
+  await until(() => events.length === 1, 'the npm error chunk');
+  child.emit('close', 1, null);
+  await assert.rejects(update, (error) => {
+    assert.equal(error.message, 'npm ERR! code E404');
+    return true;
+  });
+  assert.deepEqual(events, ['npm ERR! code E404\n']);
+});
+
+test('Pinokio recovery streams the installed CLI output as it arrives', async () => {
+  const fixture = localUpdateFixture('/pinokio/api/Astrid', { transaction: {
+    format: 'astrid-install-update/v1', step: 'switched', operation_id: 'a'.repeat(32) } });
+  const { spawned, spawnProcess } = spawnRecorder();
+  const app = library.createApp({ platform: 'linux', appDirectory: fixture.appDirectory, environment: {},
+    filesystem: fixture.filesystem, spawnProcess });
+  const events = [];
+  const recovery = app.recoverPendingUpdate({}, (event) => events.push(event.raw));
+  recovery.catch(() => {});
+  const { child, command, args } = await within(spawned, 2000, 'recovery was not started as an async child');
+  assert.equal(command, fixture.python);
+  assert.deepEqual(args, ['-I', '-m', 'astrid', 'install', '--root', fixture.root, '--managed-by', 'pinokio']);
+  child.stdout.write('installing recovered version\n');
+  await until(() => events.length === 1, 'the recovery chunk');
+  assert.deepEqual(events, ['installing recovered version\n'], 'recovery output is delivered before exit');
+  child.emit('close', 0, null);
+  assert.deepEqual(await recovery, { recovered: true });
+});
+
+test('a local session started for Update logs to a file and stops forwarding output after READY', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'astrid-pinokio-session-log-'));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const appDirectory = path.join(temporary, 'pinokio', 'api', 'Astrid');
+  fs.mkdirSync(path.join(appDirectory, 'app'), { recursive: true });
+  const fixture = localUpdateFixture(appDirectory, { dataRoot: path.join(temporary, 'Astrid Data') });
+  const logFile = path.join(appDirectory, 'app', 'local-update-session.log');
+  const { spawned, spawnProcess } = spawnRecorder();
+  const app = library.createApp({ platform: 'linux', appDirectory, environment: {},
+    filesystem: { ...fixture.filesystem, createWriteStream: fs.createWriteStream },
+    spawnProcess, sessionReadyCheck: async () => true });
+  const events = [];
+  const started = app.ensureLocalSessionForUpdate({}, (event) => events.push(event.raw));
+  started.catch(() => {});
+  const { child, command, args, options } = await within(spawned, 2000, 'the local session was not started');
+  assert.equal(command, fixture.node);
+  assert.equal(args[1], 'serve');
+  assert.deepEqual(options.stdio, ['ignore', 'pipe', 'pipe']);
+  child.stdout.write('starting\n');
+  await until(() => events.includes('starting\n'), 'the session start output');
+  child.stdout.write('ASTRID_PINOKIO_READY\n');
+  assert.deepEqual(await started, { started: true, ready: true, recovering: false });
+  child.stdout.write('written during the update\n');
+  await until(() => fs.existsSync(logFile) && fs.readFileSync(logFile, 'utf8').includes('written during the update'), 'the session log file');
+  child.emit('close', 0, null);
+  assert.deepEqual(events, ['starting\n', 'ASTRID_PINOKIO_READY\n'], 'output after READY goes to the log, not to the finished Update step');
+  assert.match(fs.readFileSync(logFile, 'utf8'), /starting\n[\s\S]*ASTRID_PINOKIO_READY\n[\s\S]*written during the update\n/);
 });
 
 test('stopped fully-local Update starts the existing Pinokio Start session and waits for readiness', async () => {

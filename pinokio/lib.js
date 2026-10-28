@@ -8,10 +8,45 @@ const posix = require('./platforms/posix');
 const windows = require('./platforms/windows');
 const environmentPolicy = require('./environment');
 
+// Runs an Update child without blocking Pinokio's own event loop. Each chunk is
+// passed to onOutput as it arrives. The result has spawnSync's shape (status,
+// signal, error, stdout, stderr), so the exit-code and error handling is unchanged.
+function runStreamed(spawnChild, command, args, { onOutput, timeout, maxBuffer, ...options }) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let error;
+    let settled = false;
+    let timer;
+    const child = spawnChild(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
+    const settle = (status, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ status, signal, error, stdout, stderr });
+    };
+    const abort = (code, message) => {
+      if (error) return;
+      error = Object.assign(new Error(message), { code });
+      child.kill();
+    };
+    const checkBuffer = () => {
+      if (maxBuffer && stdout.length + stderr.length > maxBuffer) abort('ENOBUFS', `${command} wrote more output than Astrid keeps.`);
+    };
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (text) => { stdout += text; onOutput?.(text); checkBuffer(); });
+    child.stderr.on('data', (text) => { stderr += text; onOutput?.(text); checkBuffer(); });
+    if (timeout) timer = setTimeout(() => abort('ETIMEDOUT', `${command} timed out.`), timeout);
+    child.once('error', (failure) => { error ??= failure; settle(null, null); });
+    child.once('close', (status, signal) => settle(status, signal));
+  });
+}
+
 // The factory keeps platform command generation testable without executing a
 // shell, querying the real ports, or writing into a real installation.
 function createApp({ platform = process.platform, appDirectory = path.resolve(__dirname, '..'),
-  environment = process.env, filesystem = fs, probe = probeDoor, lifecycle, execute = spawnSync, getTemp,
+  environment = process.env, filesystem = fs, probe = probeDoor, lifecycle, execute, getTemp,
   spawnProcess = spawn, startSessionForUpdate, processAlive = (pid) => { process.kill(pid, 0); return true; },
   sessionReadyCheck, pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   const isWindows = platform === 'win32';
@@ -23,6 +58,11 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
   const MODE_FILE = paths.join(PROGRAMS_DIR, 'install-mode.json');
   const shellName = isWindows ? 'powershell.exe' : 'bash';
   const q = isWindows ? windows.quotePowerShell : posix.quote;
+  // An injected `execute` stands in for both runners. The git check stays
+  // synchronous because its callers need the answer immediately; the Update
+  // children run asynchronously so Pinokio's event loop keeps moving.
+  const runSync = execute ?? spawnSync;
+  const runUpdateChild = execute ?? ((command, args, options) => runStreamed(spawnProcess, command, args, options));
 
   function setting(name, fallback = '') {
     if (environment[name] !== undefined) return environment[name];
@@ -164,12 +204,15 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
         throw new Error('The interrupted Astrid update candidate does not match its installed version record.');
       }
     }
-    const result = execute(installed.python, ['-I', '-m', 'astrid', 'install', '--root', BACKEND_ROOT, '--managed-by', 'pinokio'], {
+    let streamed = false;
+    const result = await runUpdateChild(installed.python, ['-I', '-m', 'astrid', 'install', '--root', BACKEND_ROOT, '--managed-by', 'pinokio'], {
       env: environmentPolicy.buildEnvironment({ appDirectory: APP_DIR, platform, environment }),
       cwd: APP_DIR, encoding: 'utf8', timeout: 600_000, maxBuffer: 1024 * 1024, windowsHide: true,
+      onOutput: (raw) => { streamed = true; ondata?.({ raw }); },
     });
+    // An injected runner returns its output whole; the default one has streamed it already.
     const output = `${result.stdout || ''}${result.stderr || ''}`;
-    if (output) ondata?.({ raw: output });
+    if (output && !streamed) ondata?.({ raw: output });
     if (result.error || result.status !== 0) {
       const message = output.trim() || result.error?.message || `Installer recovery failed (exit ${result.status}).`;
       const failure = new Error(message);
@@ -205,20 +248,33 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
       cwd: APP_DIR, env: installed.env, stdio: ['ignore', 'pipe', 'pipe'], detached: platform !== 'win32', windowsHide: true,
     });
     child.unref?.();
+    // The session outlives this Update step and keeps writing while Runtime restarts.
+    // Its output goes to a log file that Pinokio drains, so no Pinokio callback can
+    // leave the session blocked on a full pipe.
+    const log = filesystem.createWriteStream(paths.join(PROGRAMS_DIR, 'local-update-session.log'), { flags: 'w', mode: 0o600 });
+    // A log that cannot be written must not stop the pipe from being drained: the
+    // data listeners below keep the child's stdout and stderr flowing either way.
+    log.on('error', () => {});
+    child.stdout?.pipe(log, { end: false });
+    child.stderr?.pipe(log, { end: false });
     let pending = '';
     let output = '';
+    let announced = false;
     const ready = new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("Astrid's fully local session did not become ready in time.")), 180_000);
       const finish = (error, value) => { clearTimeout(timer); error ? reject(error) : resolve(value); };
-      child.once('error', (error) => finish(error));
-      child.once('close', (code, signal) => finish(new Error(`Astrid's fully local session exited before READY (${signal || code}): ${output.trim()}`)));
+      child.once('error', (error) => { log.end(); finish(error); });
+      child.once('close', (code, signal) => { log.end(); finish(new Error(`Astrid's fully local session exited before READY (${signal || code}): ${output.trim()}`)); });
       child.stdout?.on('data', (chunk) => {
         const text = chunk.toString('utf8'); output = (output + text).slice(-8000); pending += text;
-        if (pending.includes('ASTRID_PINOKIO_READY')) finish(null, true);
+        if (!announced) ondata?.({ raw: text });
+        if (pending.includes('ASTRID_PINOKIO_READY')) { announced = true; finish(null, true); }
         if (pending.length > 256) pending = pending.slice(-128);
-        ondata?.({ raw: text });
       });
-      child.stderr?.on('data', (chunk) => { const text = chunk.toString('utf8'); output = (output + text).slice(-8000); ondata?.({ raw: text }); });
+      child.stderr?.on('data', (chunk) => {
+        const text = chunk.toString('utf8'); output = (output + text).slice(-8000);
+        if (!announced) ondata?.({ raw: text });
+      });
     });
     await ready;
     return { started: true, ready: true, recovering: recoverLocalUpdate };
@@ -255,12 +311,15 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     const npmCli = platform === 'win32'
       ? paths.join(paths.dirname(installed.node), 'node_modules', 'npm', 'bin', 'npm-cli.js')
       : paths.resolve(paths.dirname(installed.node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
-    const result = execute(installed.node, [npmCli, 'run', 'update'], {
+    let streamed = false;
+    const result = await runUpdateChild(installed.node, [npmCli, 'run', 'update'], {
       env: installed.env, cwd: EDITOR_DIR, encoding: 'utf8', timeout: 600_000,
       maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+      onOutput: (raw) => { streamed = true; ondata?.({ raw }); },
     });
+    // An injected runner returns its output whole; the default one has streamed it already.
     const output = `${result.stdout || ''}${result.stderr || ''}`;
-    if (output) ondata?.({ raw: output });
+    if (output && !streamed) ondata?.({ raw: output });
     if (result.error || result.status !== 0) {
       const message = output.trim() || result.error?.message || `Astrid update failed (exit ${result.status}).`;
       throw new Error(message);
@@ -285,7 +344,7 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
   function validateExistingEditorCheckout() {
     if (!filesystem.existsSync(EDITOR_DIR)) return false;
     if (!filesystem.existsSync(paths.join(EDITOR_DIR, '.git'))) throw new Error("Astrid's editor files are damaged. Choose Reset, then install again.");
-    const result = execute('git', ['-C', EDITOR_DIR, 'remote', 'get-url', 'origin'], {
+    const result = runSync('git', ['-C', EDITOR_DIR, 'remote', 'get-url', 'origin'], {
       env: environment, encoding: 'utf8', windowsHide: true });
     if (result.status !== 0 || result.stdout.trim().replace(/\.git$/, '').replace(/\/$/, '').toLowerCase() !== EDITOR_REPOSITORY.toLowerCase()) {
       throw new Error(`Astrid's editor folder doesn't come from ${EDITOR_REPOSITORY}. Choose Reset, then install again.`);
