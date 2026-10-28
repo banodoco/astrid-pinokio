@@ -182,25 +182,26 @@ test('controllerless stop uses the selected pinned Runtime down and preserves st
   }
 });
 
-test('manager capability is read-only and manager stop requires the bound token and host', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-manager-control-'));
-  let controller; let drains = 0;
+test('controller /stop passes only the exact C1 stop report through, as data', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-c1-report-'));
+  let controller; const seen = [];
   try {
-    controller = await createController(root, async () => ({ ok: true }), { managerStop: async () => { drains++; return { ok: true }; } });
+    controller = await createController(root, async (report) => { seen.push(report); return { ok: true }; });
     const record = JSON.parse(fs.readFileSync(path.join(root, CONTROL_FILE)));
-    const url = `http://127.0.0.1:${record.port}/manager-stop`;
+    const url = `http://127.0.0.1:${record.port}/stop`;
     const headers = { Authorization: `Bearer ${record.token}`, Host: `127.0.0.1:${record.port}` };
-    assert.equal((await fetch(url, { method: 'OPTIONS', headers })).status, 200);
-    assert.equal(drains, 0);
-    assert.equal((await fetch(url, { method: 'POST' })).status, 403);
+    assert.equal((await fetch(url, { method: 'POST', body: '{"c1":"stopped"}' })).status, 403);
     const wrongHost = await new Promise((resolve, reject) => {
       const req = http.request(url, { method: 'POST', headers: { ...headers, Host: `localhost:${record.port}` } }, resolve);
-      req.on('error', reject); req.end();
+      req.on('error', reject); req.end('{"c1":"stopped"}');
     });
     wrongHost.resume(); assert.equal(wrongHost.statusCode, 403);
-    assert.equal((await fetch(url, { method: 'GET', headers })).status, 403);
-    assert.equal(drains, 0);
-    assert.equal((await fetch(url, { method: 'POST', headers })).status, 200);
-    assert.equal(drains, 1);
+    assert.deepEqual(seen, []);
+    for (const body of [undefined, '', '{}', '{"c1":"refused"}', '{"c1":true}', '{"c1":"stopped"', 'null',
+      '"stopped"', '{"command":"down"}', JSON.stringify({ c1: 'stopped', pad: 'x'.repeat(5000) })]) {
+      assert.equal((await fetch(url, { method: 'POST', headers, body })).status, 200);
+    }
+    assert.equal((await fetch(url, { method: 'POST', headers, body: '{"c1":"stopped"}' })).status, 200);
+    assert.deepEqual(seen.map((report) => report.c1Stopped), [false, false, false, false, false, false, false, false, false, false, true]);
   } finally { await controller?.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });

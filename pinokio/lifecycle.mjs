@@ -59,7 +59,7 @@ export async function stopRuntime(root, { filesystem = fs, platform = process.pl
     { env: installed.env, cwd: root, timeoutMs });
 }
 export async function createController(root, stop, { filesystem = fs, pid = process.pid,
-  killProcess = process.kill.bind(process), localUpdate = {}, managerStop } = {}) {
+  killProcess = process.kill.bind(process), localUpdate = {} } = {}) {
   const file = path.join(root, CONTROL_FILE);
   try {
     const prior = JSON.parse(filesystem.readFileSync(file, 'utf8'));
@@ -74,25 +74,29 @@ export async function createController(root, stop, { filesystem = fs, pid = proc
       res.writeHead(status, { 'Content-Type': 'application/json', Connection: 'close' });
       res.end(JSON.stringify(body));
     };
-    if (!(['POST', 'OPTIONS'].includes(req.method)) || req.headers.authorization !== `Bearer ${token}`
+    if (req.method !== 'POST' || req.headers.authorization !== `Bearer ${token}`
       || req.socket.remoteAddress !== '127.0.0.1' || req.headers.host !== `127.0.0.1:${server.address()?.port}`) {
       req.resume();
       res.writeHead(403); res.end(); return;
     }
     const route = req.url;
-    if (route === '/manager-stop' && typeof managerStop === 'function') {
-      req.resume();
-      if (req.method === 'OPTIONS') return send(200, { ok: true });
-      try { const result = await managerStop(); send(result.ok ? 200 : 500, result); }
-      catch (error) { send(500, { ok: false, errors: [error.message] }); }
-      return;
-    }
-    if (req.method !== 'POST') { req.resume(); return send(405); }
     if (route === '/stop') {
-      req.resume();
+      // The body is data, never a command: the updater may report that
+      // Backend C1 completed the Runtime stop as exactly { c1: 'stopped' }.
+      // Any other, malformed or oversized body is no report: today's stop.
+      let report;
+      try {
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size <= 4096) chunks.push(chunk);
+        }
+        if (size && size <= 4096) report = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      } catch { report = undefined; }
       if (localUpdate.isUpdating?.()) return send(409, { ok: false, errors: ['Astrid is updating. Try again when it finishes.'] });
       try {
-        const result = await stop();
+        const result = await stop({ c1Stopped: report?.c1 === 'stopped' });
         send(result.ok ? 200 : 500, result);
       } catch (error) {
         send(500, { ok: false, errors: [error.message], ...(error.details !== undefined ? { details: error.details } : {}) });
