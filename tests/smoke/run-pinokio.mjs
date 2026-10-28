@@ -439,10 +439,21 @@ async function setup() {
   assert.equal(environment.ASTRID_APP_REF, undefined, 'the ref must come from the launcher ENVIRONMENT file');
   environment.ASTRID_PINOKIO_APP_DIR = appDirectory;
   environment.ASTRID_RUNTIME_DOOR_PORT = '17340';
-  const app = library.createApp({ platform: process.platform, appDirectory, environment });
+  let updateFixture = null;
+  const spawnProcess = (command, args, options) => {
+    if (updateFixture && args.length === 3 && args[1] === 'run' && args[2] === 'update') {
+      const env = { ...options.env, NODE_OPTIONS: `--require=${JSON.stringify(updateFixture.preload)}`,
+        GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.${updateFixture.origin}.insteadOf`,
+        GIT_CONFIG_VALUE_0: 'https://github.com/banodoco/astrid-app' };
+      return spawn(command, args, { ...options, env });
+    }
+    return spawn(command, args, options);
+  };
+  const app = library.createApp({ platform: process.platform, appDirectory, environment, spawnProcess });
+  const setUpdateFixture = (fixture) => { updateFixture = fixture; };
   assert.equal(app.appRef(), smokeRef, 'Install must select the candidate manifest ref from ENVIRONMENT');
   const servicesBefore = await fakeServices(pinokioHome, userHome, environment);
-  return { pinokioHome, userHome, appDirectory, cacheDirectory, binDirectory, environment, app, servicesBefore };
+  return { pinokioHome, userHome, appDirectory, cacheDirectory, binDirectory, environment, app, servicesBefore, setUpdateFixture };
 }
 
 async function runHosted() {
@@ -531,7 +542,26 @@ async function runFullyLocal() {
     assert.equal(await freePort(5180), true, 'port 5180 remained open after fully local Stop');
     await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
 
+    // Keep the public origin identity check intact; only the updater child sees
+    // a disposable Git origin and a response for the exact served-build URL.
+    const fixtureOrigin = path.join(userHome, 'update-origin.git');
+    const fixtureWork = path.join(userHome, 'update-work');
+    execFileSync('git', ['clone', '--bare', app.EDITOR_DIR, fixtureOrigin], { stdio: 'inherit' });
+    execFileSync('git', ['clone', fixtureOrigin, fixtureWork], { stdio: 'inherit' });
+    execFileSync('git', ['-C', fixtureWork, 'checkout', '-B', 'main'], { stdio: 'inherit' });
+    execFileSync('git', ['-C', fixtureWork, '-c', 'user.name=CI fixture', '-c', 'user.email=ci@example.invalid',
+      'commit', '--allow-empty', '-m', 'Smoke update candidate'], { stdio: 'inherit' });
+    execFileSync('git', ['-C', fixtureWork, 'push', 'origin', 'main'], { stdio: 'inherit' });
+    const target = execFileSync('git', ['-C', fixtureWork, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const manifest = JSON.parse(fs.readFileSync(path.join(fixtureWork, 'public', 'install-manifest.json'), 'utf8'));
+    const build = JSON.stringify({ app: target, release: manifest.release ?? 0 });
+    const preload = path.join(userHome, 'update-build-preload.cjs');
+    fs.writeFileSync(preload, `const original = globalThis.fetch;\nglobalThis.fetch = (url, options) => String(url) === 'https://astrid.haus/build.json' ? Promise.resolve(new Response(${JSON.stringify(build)}, { status: 200, headers: { 'Content-Type': 'application/json' } })) : original(url, options);\n`);
+    context.setUpdateFixture({ preload, origin: fixtureOrigin });
     await invokeAction('update', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    assert.equal(execFileSync('git', ['-C', app.EDITOR_DIR, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), target,
+      'Update must install the verified served App candidate');
+    context.setUpdateFixture(null);
     const updatedPage = await step('Update READY: local editor immediately after Update', () => runTool('curl', ['--max-time', '30', '--silent', '--show-error', '--write-out', '\n%{http_code}',
       'http://127.0.0.1:5180/tools/video-editor'], environment));
     assert.equal(Number(updatedPage.trim().split(/\r?\n/).at(-1)), 200, 'local editor did not become ready after Update');
