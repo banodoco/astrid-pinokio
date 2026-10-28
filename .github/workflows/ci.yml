@@ -29,6 +29,8 @@ jobs:
         shell: bash
 
   pinokio-smoke:
+    env:
+      ASTRID_SMOKE_APP_REF: codex/astrid-updater-integration-20261028-app
     name: Pinokio smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 15 }}
@@ -44,6 +46,8 @@ jobs:
       - run: node tests/smoke/run-pinokio.mjs
 
   fully-local:
+    env:
+      ASTRID_SMOKE_APP_REF: codex/astrid-updater-integration-20261028-app
     name: Fully local (ubuntu-latest)
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'

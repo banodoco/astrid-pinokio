@@ -427,11 +427,13 @@ async function setup() {
   const beforePath = environment[key] || '';
   environment[key] = [binDirectory, guardDirectory, beforePath].filter(Boolean).join(paths.delimiter);
   assert.equal(environment[key].split(paths.delimiter)[0], binDirectory, 'fake Pinokio bin must lead PATH');
-  assert.equal(environment.ASTRID_APP_REF, undefined, 'the ref must come from the launcher _ENVIRONMENT file');
+  const smokeRef = process.env.ASTRID_SMOKE_APP_REF || 'main';
+  fs.writeFileSync(path.join(appDirectory, 'ENVIRONMENT'), `ASTRID_APP_REF=${smokeRef}\n`);
+  assert.equal(environment.ASTRID_APP_REF, undefined, 'the ref must come from the launcher ENVIRONMENT file');
   environment.ASTRID_PINOKIO_APP_DIR = appDirectory;
   environment.ASTRID_RUNTIME_DOOR_PORT = '17340';
   const app = library.createApp({ platform: process.platform, appDirectory, environment });
-  assert.equal(app.appRef(), 'feat/pinokio', 'Install must select the manifest ref from _ENVIRONMENT');
+  assert.equal(app.appRef(), smokeRef, 'Install must select the candidate manifest ref from ENVIRONMENT');
   const servicesBefore = await fakeServices(pinokioHome, userHome, environment);
   return { pinokioHome, userHome, appDirectory, cacheDirectory, binDirectory, environment, app, servicesBefore };
 }

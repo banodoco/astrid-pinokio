@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
@@ -150,7 +151,7 @@ test('add-local stops the retained installer session before build and saves mode
 });
 
 test('Bash launcher pull reports a convenient restart only when HEAD changes and preserves failures', { skip: process.platform === 'win32' }, () => {
-  const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'pinokio-launcher-pull-'));
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'pinokio-launcher-pull-'));
   const bin = path.join(temporary, 'bin');
   fs.mkdirSync(bin);
   const git = path.join(bin, 'git');
@@ -533,7 +534,7 @@ test('Pinokio recovery streams the installed CLI output as it arrives', async ()
 });
 
 test('a local session started for Update logs to a file and stops forwarding output after READY', async (t) => {
-  const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'astrid-pinokio-session-log-'));
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-pinokio-session-log-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const appDirectory = path.join(temporary, 'pinokio', 'api', 'Astrid');
   fs.mkdirSync(path.join(appDirectory, 'app'), { recursive: true });
@@ -648,7 +649,7 @@ test('pending local Update authenticates the retained controller before bypassin
   const originalNow = Date.now;
   let clock = originalNow();
   Date.now = () => clock;
-  const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'astrid-pinokio-pending-retry-'));
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-pinokio-pending-retry-'));
   const appDirectory = path.join(temporary, 'pinokio', 'api', 'astrid');
   const root = path.join(appDirectory, 'app', 'astrid');
   fs.mkdirSync(path.dirname(root), { recursive: true });
@@ -747,7 +748,7 @@ test('pending local Update rejects a bad retained-controller secret before updat
   const originalNow = Date.now;
   let clock = originalNow();
   Date.now = () => clock;
-  const appDirectory = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'astrid-pinokio-bad-token-'));
+  const appDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-pinokio-bad-token-'));
   const root = path.join(appDirectory, 'app', 'astrid');
   fs.mkdirSync(root, { recursive: true });
   fs.writeFileSync(path.join(path.dirname(root), 'install-mode.json'), JSON.stringify({ schema_version: 1, mode: 'local' }));
@@ -825,7 +826,7 @@ test('hosted Update leaves stop admission to the shared installer transaction', 
 });
 
 test('Update performs only installed-CLI recovery before any new launcher or manifest fetch', async (t) => {
-  const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'astrid-pinokio-recovery-'));
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-pinokio-recovery-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const appDirectory = path.join(temporary, 'pinokio', 'api', 'Astrid');
   const root = path.join(appDirectory, 'app', 'astrid');

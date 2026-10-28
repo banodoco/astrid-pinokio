@@ -163,19 +163,19 @@ test('invalid current or Python path and process failure refuse before mutation'
   const currentFile = path.posix.join(fixture.root, 'current');
   const linkedFilesystem = { ...fixture.filesystem,
     lstatSync: (file) => ({ isSymbolicLink: () => file === currentFile }) };
-  await assert.rejects(preflightBackup(fixture.root, { filesystem: linkedFilesystem, run }), /Installed path is linked/);
+  await assert.rejects(preflightBackup(fixture.root, { platform: 'darwin', filesystem: linkedFilesystem, run }), /Installed path is linked/);
   assert.equal(calls, 0);
   fixture.files.set(path.posix.join(fixture.root, 'current'), '../outside');
-  await assert.rejects(preflightBackup(fixture.root, { filesystem: fixture.filesystem, run }), /Invalid Astrid version pointer/);
+  await assert.rejects(preflightBackup(fixture.root, { platform: 'darwin', filesystem: fixture.filesystem, run }), /Invalid Astrid version pointer/);
   assert.equal(calls, 0);
   fixture.files.set(path.posix.join(fixture.root, 'current'), 'v1');
   const recordFile = path.posix.join(fixture.root, 'versions/v1/version.json');
   const record = JSON.parse(fixture.files.get(recordFile));
   record.python = '/elsewhere/python'; fixture.files.set(recordFile, JSON.stringify(record));
-  await assert.rejects(preflightBackup(fixture.root, { filesystem: fixture.filesystem, run }), /Pinned Python is outside/);
+  await assert.rejects(preflightBackup(fixture.root, { platform: 'darwin', filesystem: fixture.filesystem, run }), /Pinned Python is outside/);
   assert.equal(calls, 0);
   record.python = fixture.python; fixture.files.set(recordFile, JSON.stringify(record));
-  await assert.rejects(preflightBackup(fixture.root, { filesystem: fixture.filesystem,
+  await assert.rejects(preflightBackup(fixture.root, { platform: 'darwin', filesystem: fixture.filesystem,
     run: async (_spec, options) => { assert.equal(options.timeoutMs, PREFLIGHT_MS); throw new Error('Command timed out'); } }), /Command timed out/);
 });
 
