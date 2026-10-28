@@ -5,6 +5,14 @@ on:
     branches: [feat/pinokio, main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      app_ref:
+        description: App branch or tag to exercise
+        required: false
+        default: main
+      app_sha:
+        description: Exact App commit expected at that ref
+        required: false
   schedule:
     - cron: '17 4 * * *'
 
@@ -30,7 +38,8 @@ jobs:
 
   pinokio-smoke:
     env:
-      ASTRID_SMOKE_APP_REF: codex/astrid-updater-integration-20261028-app
+      ASTRID_SMOKE_APP_REF: ${{ inputs.app_ref || 'main' }}
+      ASTRID_SMOKE_APP_SHA: ${{ inputs.app_sha || '' }}
     name: Pinokio smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 15 }}
@@ -47,7 +56,8 @@ jobs:
 
   fully-local:
     env:
-      ASTRID_SMOKE_APP_REF: codex/astrid-updater-integration-20261028-app
+      ASTRID_SMOKE_APP_REF: ${{ inputs.app_ref || 'main' }}
+      ASTRID_SMOKE_APP_SHA: ${{ inputs.app_sha || '' }}
     name: Fully local (ubuntu-latest)
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'

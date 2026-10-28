@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -428,6 +428,13 @@ async function setup() {
   environment[key] = [binDirectory, guardDirectory, beforePath].filter(Boolean).join(paths.delimiter);
   assert.equal(environment[key].split(paths.delimiter)[0], binDirectory, 'fake Pinokio bin must lead PATH');
   const smokeRef = process.env.ASTRID_SMOKE_APP_REF || 'main';
+  const smokeSha = process.env.ASTRID_SMOKE_APP_SHA || '';
+  if (smokeSha) {
+    assert.match(smokeSha, /^[0-9a-f]{40}$/, 'App candidate SHA must be a full lowercase commit ID');
+    const remote = spawnSync('git', ['ls-remote', 'https://github.com/banodoco/astrid-app.git', `refs/heads/${smokeRef}`], { encoding: 'utf8', timeout: 30_000 });
+    assert.equal(remote.status, 0, `Cannot resolve App ref: ${remote.stderr}`);
+    assert.equal(remote.stdout.trim().split(/\s+/)[0], smokeSha, 'App ref must resolve to the exact requested candidate SHA');
+  }
   fs.writeFileSync(path.join(appDirectory, 'ENVIRONMENT'), `ASTRID_APP_REF=${smokeRef}\n`);
   assert.equal(environment.ASTRID_APP_REF, undefined, 'the ref must come from the launcher ENVIRONMENT file');
   environment.ASTRID_PINOKIO_APP_DIR = appDirectory;
