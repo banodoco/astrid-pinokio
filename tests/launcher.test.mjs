@@ -393,7 +393,9 @@ test('the fully-local Pinokio caller launches the installed npm update script in
     [p.join(versionRoot, 'version.json'), JSON.stringify({ root: versionRoot, python, profile, env: { ASTRID_NODE_EXECUTABLE: node } })],
     [p.join(root, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: '/Astrid Data' })],
   ]);
-  const npmCli = p.resolve(p.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const npmCli = platform === 'win32'
+    ? p.join(p.dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    : p.resolve(p.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
   const npxCli = p.join(p.dirname(npmCli), 'npx-cli.js');
   const installedFiles = new Set([node, python, profile, npmCli, npxCli]);
   let invoked;
@@ -415,8 +417,8 @@ test('the fully-local Pinokio caller launches the installed npm update script in
   assert.match(output, /up to date/);
 });
 
-function localUpdateFixture(appDirectory, { transaction, dataRoot = '/Astrid Data' } = {}) {
-  const p = path.posix;
+function localUpdateFixture(appDirectory, { transaction, dataRoot = '/Astrid Data', platform = 'linux' } = {}) {
+  const p = platform === 'win32' ? path.win32 : path.posix;
   const root = p.join(appDirectory, 'app', 'astrid');
   const versionRoot = p.join(root, 'versions', 'v2');
   const node = p.join(versionRoot, 'node', 'bin', 'node');
@@ -540,10 +542,10 @@ test('a local session started for Update logs to a file and stops forwarding out
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const appDirectory = path.join(temporary, 'pinokio', 'api', 'Astrid');
   fs.mkdirSync(path.join(appDirectory, 'app'), { recursive: true });
-  const fixture = localUpdateFixture(appDirectory, { dataRoot: path.join(temporary, 'Astrid Data') });
+  const fixture = localUpdateFixture(appDirectory, { dataRoot: path.join(temporary, 'Astrid Data'), platform: process.platform });
   const logFile = path.join(appDirectory, 'app', 'local-update-session.log');
   const { spawned, spawnProcess } = spawnRecorder();
-  const app = library.createApp({ platform: 'linux', appDirectory, environment: {},
+  const app = library.createApp({ platform: process.platform, appDirectory, environment: {},
     filesystem: { ...fixture.filesystem, createWriteStream: fs.createWriteStream },
     spawnProcess, sessionReadyCheck: async () => true });
   const events = [];
