@@ -99,6 +99,15 @@ for (const platform of ['darwin', 'linux', 'win32']) {
             assert.equal(app.writes.length, count + 1);
             assert.equal(JSON.parse(app.writes.at(-1).content).mode, 'local');
           }
+          if (name === 'add-local') {
+            assert.equal(script.run[0].method, app.stopOwnedStart);
+            assert.equal(script.run[1].method, app.ensureDoorPortFree);
+            assert.equal(script.run[2].method, 'shell.run');
+            assert.equal(script.run[3].method, 'shell.run');
+            assert.equal(script.run[4].method, app.stopOwnedStart);
+            assert.equal(script.run[5].method, 'shell.run');
+            assert.equal(typeof script.run[6].method, 'function');
+          }
         }
         // Clone path, including a slash ref and shell metacharacters in app paths.
         assert.equal(app.shellStep(app.cloneEditorMessage()).params.message, expected.clone);
@@ -106,6 +115,36 @@ for (const platform of ['darwin', 'linux', 'win32']) {
     }
   }
 }
+
+test('add-local stops the retained installer session before build and saves mode only after that stop', async () => {
+  for (const failAt of [null, 2]) {
+    const calls = [];
+    const base = fakeApp('linux', '', 'backend');
+    const app = {
+      ...base,
+      stopOwnedStart: async () => {
+        const count = calls.filter((call) => call === 'stop').length + 1;
+        calls.push('stop');
+        if (count === failAt) throw new Error('Retained session stop refused.');
+      },
+      gitShellStep: () => ({ method: async () => calls.push('checkout') }),
+      shellStep: () => ({ method: async () => calls.push('shared installer') }),
+      sessionStep: (action, mode) => ({ method: async () => {
+        assert.equal(action, 'build'); assert.equal(mode, 'local'); calls.push('build');
+      } }),
+      saveModeStep: (mode) => ({ method: async () => {
+        assert.equal(mode, 'local'); calls.push('save mode');
+      } }),
+    };
+    const script = await load('pinokio/add-local.js', app)({}, {});
+    const run = async () => { for (const step of script.run) await step.method(); };
+    if (failAt === 2) await assert.rejects(run(), /Retained session stop refused/);
+    else await run();
+    assert.deepEqual(calls, failAt === 2
+      ? ['stop', 'checkout', 'shared installer', 'stop']
+      : ['stop', 'checkout', 'shared installer', 'stop', 'build', 'save mode']);
+  }
+});
 
 test('Bash launcher pull reports a convenient restart only when HEAD changes and preserves failures', { skip: process.platform === 'win32' }, () => {
   const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'pinokio-launcher-pull-'));
