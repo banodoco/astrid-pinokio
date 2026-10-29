@@ -398,6 +398,9 @@ async function setup() {
   makeGitLauncher(pinokioGitDirectory);
   makeFfmpegGuard(guardDirectory);
   prepareCheckout(repository, appDirectory);
+  // Pinokio reads the selected ref from the app checkout's manifest. The
+  // repository template intentionally leaves this blank for normal installs.
+  fs.writeFileSync(path.join(appDirectory, '_ENVIRONMENT'), 'ASTRID_APP_REF=feat/pinokio\n');
 
   const environment = makeEnvironment(pinokioHome, process.platform);
   assert.ok(environment && typeof environment === 'object', 'Pinokio env fixture must return an environment object');

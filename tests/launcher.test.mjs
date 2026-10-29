@@ -546,8 +546,12 @@ test('a local session started for Update logs to a file and stops forwarding out
   const fixture = localUpdateFixture(appDirectory, { platform, dataRoot: path.join(temporary, 'Astrid Data') });
   const logFile = path.join(appDirectory, 'app', 'local-update-session.log');
   const { spawned, spawnProcess } = spawnRecorder();
+  let sessionLog;
   const app = library.createApp({ platform, appDirectory, environment: {},
-    filesystem: { ...fixture.filesystem, createWriteStream: fs.createWriteStream },
+    filesystem: { ...fixture.filesystem, createWriteStream: (...args) => {
+      sessionLog = fs.createWriteStream(...args);
+      return sessionLog;
+    } },
     spawnProcess, sessionReadyCheck: async () => true });
   const events = [];
   const started = app.ensureLocalSessionForUpdate({}, (event) => events.push(event.raw));
@@ -562,7 +566,9 @@ test('a local session started for Update logs to a file and stops forwarding out
   assert.deepEqual(await started, { started: true, ready: true, recovering: false });
   child.stdout.write('written during the update\n');
   await until(() => fs.existsSync(logFile) && fs.readFileSync(logFile, 'utf8').includes('written during the update'), 'the session log file');
+  const logClosed = new Promise((resolve) => sessionLog.once('close', resolve));
   child.emit('close', 0, null);
+  await logClosed;
   assert.deepEqual(events, ['starting\n', 'ASTRID_PINOKIO_READY\n'], 'output after READY goes to the log, not to the finished Update step');
   assert.match(fs.readFileSync(logFile, 'utf8'), /starting\n[\s\S]*ASTRID_PINOKIO_READY\n[\s\S]*written during the update\n/);
 });
