@@ -1,5 +1,41 @@
 # Task L validation and handoff
 
+## Local smoke setup
+
+The smoke can run locally on Linux only in an explicitly disposable Docker
+container. Use an unprivileged container with no host home, Docker socket,
+user data, or other persistent host mounts. Provide Node, Git, curl and the
+bootstrap prerequisites inside it; make a clean copy of this repository inside
+the container. Run `ASTRID_DISPOSABLE_CONTAINER=yes node tests/smoke/run-pinokio.mjs`
+from that copy. The run downloads and installs real packages, opens ports 17340
+and 5180, and removes its temporary homes on completion; discard the whole
+container after a failure. The guard is an operator assertion, not a proof that
+the container has no sensitive mounts. The harness clones HEAD through a
+disposable bare origin and does not change the source checkout branch or copy
+uncommitted edits. GitHub Actions remains supported without the local opt-in.
+
+The hosted smoke checks that a workspace sentinel survives uninstall and that
+reinstall selects the same data root. Additional flows are written, not yet
+qualified by a native runner:
+
+```sh
+ASTRID_DISPOSABLE_CONTAINER=yes node tests/smoke/run-pinokio.mjs version-change OLD_APP_SHA CANDIDATE_APP_SHA
+ASTRID_DISPOSABLE_CONTAINER=yes node tests/smoke/run-pinokio.mjs mode-switch
+ASTRID_DISPOSABLE_CONTAINER=yes node tests/smoke/run-pinokio.mjs interrupt-update OLD_APP_SHA CANDIDATE_APP_SHA update
+ASTRID_DISPOSABLE_CONTAINER=yes node tests/smoke/run-pinokio.mjs interrupt-update OLD_APP_SHA CANDIDATE_APP_SHA start
+```
+
+Supply full immutable App SHAs verified by the TST release resolver; these
+flows fetch each commit's public bootstrap and manifest from GitHub, so both
+commits and their pinned dependencies must be accessible. The version leg
+requires health identities to agree with the selected records and to change;
+an old release without that observation fails rather than being counted as
+verified. The Linux interruption leg polls a durable transaction phase and kills
+the launcher process group; if it cannot observe the phase it fails. It then
+requires the next requested action to clear the journal and preserve data.
+Discard the container after any failure. Native Pinokio Stop/Quit and its
+process-tree behavior remain separate native gaps below.
+
 ## GitHub CI
 
 - **Unit** runs the launcher tests on Ubuntu, macOS and Windows with Node 20.19.4. The spec reporter prints skipped tests with their names and reasons.

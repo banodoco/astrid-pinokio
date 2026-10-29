@@ -9,6 +9,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import library from '../../pinokio/lib.js';
 import { signalGroup } from '../../pinokio/session.mjs';
 import { runTool as executeTool, timedStep } from './process.mjs';
+import { prepareCheckout, assertRunEnvironment } from './checkout.mjs';
+import { releaseRefs, assertVersionChanged } from './journey-assertions.mjs';
+import { interruptAtJournal } from './interrupt.mjs';
 
 const require = createRequire(import.meta.url);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -104,12 +107,6 @@ function makeGitLauncher(gitDirectory) {
   fs.writeFileSync(path.join(gitDirectory, 'git.cmd'), `@echo off\r\n"${git}" %*\r\nexit /b %ERRORLEVEL%\r\n`);
 }
 
-function prepareCheckout(source, appDirectory) {
-  const branch = 'ci-smoke';
-  execFileSync('git', ['-C', source, 'checkout', '-B', branch, 'HEAD'], { stdio: 'inherit' });
-  execFileSync('git', ['clone', '--branch', branch, '--single-branch', source, appDirectory], { stdio: 'inherit' });
-}
-
 async function processTreeKill(child) {
   if (!child?.pid || child.closed) return;
   if (windows) {
@@ -128,7 +125,7 @@ async function processTreeKill(child) {
   }
 }
 
-function launchShell(step, environment, { background = false, onSpawn } = {}) {
+function launchShell(step, environment, { background = false, onSpawn, interruptJournal } = {}) {
   assert.equal(step.method, 'shell.run');
   assert.equal(step.params.shell, shell);
   assert.equal(path.resolve(step.params.path), path.resolve(environment.ASTRID_PINOKIO_APP_DIR),
@@ -166,6 +163,11 @@ function launchShell(step, environment, { background = false, onSpawn } = {}) {
   }));
   child.exit.catch(() => {});
   onSpawn?.(child);
+
+  if (interruptJournal) return (async () => {
+    await interruptAtJournal(child, interruptJournal, processTreeKill, { log });
+    return child;
+  })();
 
   if (!background) return child.exit.then(({ code, signal }) => {
     const installLogPath = windows
@@ -342,10 +344,11 @@ function kernelFor(app, getDaemon, onStop) {
   } };
 }
 
-async function invokeAction(name, app, appDirectory, environment, home, getDaemon, stopDaemon) {
+async function invokeAction(name, app, appDirectory, environment, home, getDaemon, stopDaemon, { interruptUpdate = false } = {}) {
   const loaded = load(`pinokio/${name}.js`, app, appDirectory);
   const script = typeof loaded === 'function' ? await loaded({}, {}) : loaded;
   const kernel = kernelFor(app, getDaemon, stopDaemon);
+  let interrupted = false;
   for (const [offset, step] of script.run.entries()) {
     await timedStep(`${name} ${offset + 1}/${script.run.length} ${typeof step.method === 'string' ? step.method : 'callback'}`, async () => {
       if (step.method === 'shell.run') {
@@ -354,7 +357,11 @@ async function invokeAction(name, app, appDirectory, environment, home, getDaemo
             background: true, onSpawn: getDaemon.set,
           });
         } else {
-          await launchShell(step, { ...environment, ASTRID_PINOKIO_APP_DIR: appDirectory });
+          await launchShell(step, { ...environment, ASTRID_PINOKIO_APP_DIR: appDirectory }, {
+            ...(interruptUpdate && name === 'update' && offset === 1
+              ? { interruptJournal: path.join(app.BACKEND_ROOT, 'update-transaction.json') } : {}),
+          });
+          if (interruptUpdate && name === 'update' && offset === 1) interrupted = true;
         }
       } else if (step.method === 'local.set') {
         log(`Pinokio published ${JSON.stringify(step.params)}`);
@@ -364,6 +371,7 @@ async function invokeAction(name, app, appDirectory, environment, home, getDaemo
       } else throw new Error(`Unhandled Pinokio step in ${name}: ${String(step.method)}`);
     }, log);
   }
+  if (interruptUpdate) assert.ok(interrupted, 'Update had no interruptible installer shell step');
   return script;
 }
 
@@ -376,7 +384,7 @@ async function stopDaemon(getDaemon) {
 }
 
 async function setup() {
-  assert.equal(process.env.GITHUB_ACTIONS, 'true', 'This harness runs only on GitHub Actions runners.');
+  assertRunEnvironment(process.env, process.platform, fs.existsSync('/.dockerenv'));
   assert.ok(['darwin', 'linux', 'win32'].includes(process.platform), `unsupported CI platform ${process.platform}`);
   const fixture = await import(pathToFileURL(fixturePath));
   const makeEnvironment = fixture.pinokioEnv || fixture.default;
@@ -431,7 +439,8 @@ async function setup() {
   environment.ASTRID_PINOKIO_APP_DIR = appDirectory;
   environment.ASTRID_RUNTIME_DOOR_PORT = '17340';
   const app = library.createApp({ platform: process.platform, appDirectory, environment });
-  assert.equal(app.appRef(), 'feat/pinokio', 'Install must select the manifest ref from _ENVIRONMENT');
+  // The committed _ENVIRONMENT deliberately leaves this empty for the served release.
+  assert.equal(app.appRef(), '', 'Smoke requires the committed default release selection');
   const servicesBefore = await fakeServices(pinokioHome, userHome, environment);
   return { pinokioHome, userHome, appDirectory, cacheDirectory, binDirectory, environment, app, servicesBefore };
 }
@@ -475,12 +484,26 @@ async function runHosted() {
     await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
     assert.equal(await freePort(17340), true, 'port 17340 remained open after the second Stop');
     assert.equal(await freePort(5180), true, 'port 5180 remained open after the second Stop');
+    const dataRoot = paths.resolve(installedRecord(app).install.data_root);
+    assertWithin(dataRoot, userHome, 'workspace data root');
+    const sentinel = path.join(dataRoot, 'tst-e1-workspace-sentinel');
+    fs.writeFileSync(sentinel, 'workspace survives uninstall and reinstall\n', { flag: 'wx' });
     await invokeAction('uninstall', app, appDirectory, environment, pinokioHome, getDaemon, stop);
     assert.equal(fs.existsSync(app.PROGRAMS_DIR), false, `Uninstall left the program root: ${app.PROGRAMS_DIR}`);
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), 'workspace survives uninstall and reinstall\n');
+    await invokeAction('install', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    assert.equal(paths.resolve(installedRecord(app).install.data_root), dataRoot, 'reinstall must attach the retained workspace');
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), 'workspace survives uninstall and reinstall\n');
+    await invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    health = await step('reinstalled hosted health', () => requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment }));
+    assert.equal(health.status, 200, JSON.stringify(health.body));
+    assert.equal(health.body.install?.managed_by, 'pinokio', JSON.stringify(health.body));
+    await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    await invokeAction('uninstall', app, appDirectory, environment, pinokioHome, getDaemon, stop);
     await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
     assert.deepEqual(cacheAstridPaths(cacheDirectory), [],
       `Astrid-owned files remain under Pinokio cache: ${cacheAstridPaths(cacheDirectory).join(', ')}`);
-    log('PASS: hosted install, Start, health, Stop, Update, restart, health, Stop, and Uninstall');
+    log('PASS: hosted install, Update, restart, retained workspace and reinstall');
   } finally {
     if (daemon) await step('cleanup Start process', stop);
     fs.rmSync(pinokioHome, { recursive: true, force: true });
@@ -548,7 +571,128 @@ async function runFullyLocal() {
   }
 }
 
+async function runVersionChange(oldRef, candidateRef) {
+  releaseRefs(oldRef, candidateRef);
+  const { pinokioHome, userHome, appDirectory, environment, app, servicesBefore } = await step('setup', setup);
+  let daemon = null;
+  const getDaemon = () => daemon;
+  getDaemon.set = (value) => { daemon = value; };
+  const stop = async () => stopDaemon(getDaemon);
+  const action = (name) => invokeAction(name, app, appDirectory, environment, pinokioHome, getDaemon, stop);
+  const observe = async () => {
+    const health = await requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment });
+    const installed = installedRecord(app);
+    return { current: path.basename(installed.versionRoot), recordIdentity: installed.record.identity,
+      status: health.status, health: health.body };
+  };
+  try {
+    environment.ASTRID_APP_REF = oldRef;
+    await action('install');
+    await action('start');
+    const before = await observe();
+    await action('stop');
+    environment.ASTRID_APP_REF = candidateRef;
+    await action('update');
+    const after = await observe();
+    assertVersionChanged(before, after);
+    await action('stop');
+    await action('uninstall');
+    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
+    log(`PASS: ${oldRef} to ${candidateRef} changed selected version and health identity`);
+  } finally {
+    if (daemon) await stop();
+    fs.rmSync(pinokioHome, { recursive: true, force: true });
+    fs.rmSync(userHome, { recursive: true, force: true });
+  }
+}
+
+async function runModeSwitch() {
+  const { pinokioHome, userHome, appDirectory, environment, app, servicesBefore } = await step('setup', setup);
+  let daemon = null;
+  const getDaemon = () => daemon;
+  getDaemon.set = (value) => { daemon = value; };
+  const stop = async () => stopDaemon(getDaemon);
+  const action = (name) => invokeAction(name, app, appDirectory, environment, pinokioHome, getDaemon, stop);
+  try {
+    await action('install');
+    assert.equal(app.readInstallMode(), 'backend');
+    const dataRoot = paths.resolve(installedRecord(app).install.data_root);
+    assertWithin(dataRoot, userHome, 'workspace data root');
+    const sentinel = path.join(dataRoot, 'tst-e1-mode-sentinel');
+    fs.writeFileSync(sentinel, 'workspace retained\n', { flag: 'wx' });
+    await action('add-local');
+    assert.equal(app.readInstallMode(), 'local');
+    await action('update');
+    const localHealth = await requestJson('http://127.0.0.1:5180/api/runtime/v1/health', { environment });
+    assert.equal(localHealth.status, 200, JSON.stringify(localHealth.body));
+    assert.equal(await freePort(17340), true, 'local mode opened the hosted door');
+    await action('reset');
+    assert.equal(app.readInstallMode(), null);
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), 'workspace retained\n');
+    await action('install');
+    assert.equal(app.readInstallMode(), 'backend');
+    assert.equal(paths.resolve(installedRecord(app).install.data_root), dataRoot);
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), 'workspace retained\n');
+    await action('start');
+    const health = await requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment });
+    assert.equal(health.status, 200, JSON.stringify(health.body));
+    assert.equal(health.body.install?.managed_by, 'pinokio');
+    await action('stop');
+    await action('uninstall');
+    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
+    log('PASS: backend → local → Update → Reset → backend retains workspace');
+  } finally {
+    if (daemon) await stop();
+    fs.rmSync(pinokioHome, { recursive: true, force: true });
+    fs.rmSync(userHome, { recursive: true, force: true });
+  }
+}
+
+async function runInterruptedUpdate(oldRef, candidateRef, retry) {
+  releaseRefs(oldRef, candidateRef);
+  assert.ok(['update', 'start'].includes(retry), 'retry must be update or start');
+  assert.equal(process.platform, 'linux', 'interrupted-update depth requires Linux');
+  const { pinokioHome, userHome, appDirectory, environment, app, servicesBefore } = await step('setup', setup);
+  let daemon = null;
+  const getDaemon = () => daemon;
+  getDaemon.set = (value) => { daemon = value; };
+  const stop = async () => stopDaemon(getDaemon);
+  const action = (name, options) => invokeAction(name, app, appDirectory, environment, pinokioHome, getDaemon, stop, options);
+  try {
+    environment.ASTRID_APP_REF = oldRef;
+    await action('install');
+    const dataRoot = paths.resolve(installedRecord(app).install.data_root);
+    assertWithin(dataRoot, userHome, 'workspace data root');
+    const sentinel = path.join(dataRoot, 'tst-e1-interrupt-sentinel');
+    fs.writeFileSync(sentinel, 'workspace retained\n', { flag: 'wx' });
+    await action('start');
+    await action('stop');
+    environment.ASTRID_APP_REF = candidateRef;
+    await action('update', { interruptUpdate: true });
+    assert.equal(app.hasPendingUpdate(), true, 'interruption did not retain a pending transaction');
+    await action(retry);
+    assert.equal(app.hasPendingUpdate(), false, `${retry} left the update transaction pending`);
+    if (retry === 'update') await action('start');
+    const health = await requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment });
+    assert.equal(health.status, 200, JSON.stringify(health.body));
+    assert.equal(health.body.install?.managed_by, 'pinokio');
+    assert.ok(installedRecord(app).versionRoot, 'no consistent selected version after recovery');
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), 'workspace retained\n');
+    await action('stop');
+    await action('uninstall');
+    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
+    log(`PASS: interrupted Update recovered on next ${retry}`);
+  } finally {
+    if (daemon) await stop();
+    fs.rmSync(pinokioHome, { recursive: true, force: true });
+    fs.rmSync(userHome, { recursive: true, force: true });
+  }
+}
+
 const flow = process.argv[2] || 'hosted';
 if (flow === 'hosted') await runHosted();
 else if (flow === 'fully-local') await runFullyLocal();
+else if (flow === 'version-change') await runVersionChange(process.argv[3], process.argv[4]);
+else if (flow === 'mode-switch') await runModeSwitch();
+else if (flow === 'interrupt-update') await runInterruptedUpdate(process.argv[3], process.argv[4], process.argv[5]);
 else throw new Error(`Unknown smoke flow: ${flow}`);
