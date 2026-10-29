@@ -134,7 +134,7 @@ function checkPinokioEnvironment(env, f) {
 }
 
 async function sessionProcesses(f, action, mode) {
-  let pid = 6000, statuses = 0, stop;
+  let pid = 6000, statuses = 0, stop, runtimeChild;
   const active = new Map();
   const close = (child) => { active.delete(child.pid); child.emit('close', 0); };
   await runSession({ action, mode, root: f.root, editor: f.editor, platform: f.platform, installed: f.installed,
@@ -142,10 +142,11 @@ async function sessionProcesses(f, action, mode) {
     spawnProcess(command, args, options) {
       checkEnvironment(options.env, f, true);
       const child = new EventEmitter(); child.pid = ++pid; child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); active.set(pid, child);
+      if (command.endsWith('/run') || command.endsWith('cmd.exe')) runtimeChild = child;
       queueMicrotask(() => {
         if (args.includes('status')) {
           const healthy = statuses++ > 0;
-          child.stdout.emit('data', JSON.stringify({ support: { healthy }, health: { status: 'ok' }, discovery: { runtime_instance_id: 'fixture', active_realm: 'fixture' } }));
+          child.stdout.emit('data', JSON.stringify({ support: { healthy }, health: { status: 'ok', runtime_instance_id: 'fixture' }, discovery: { runtime_instance_id: 'fixture', active_realm: 'fixture' } }));
           close(child);
         } else if (args.includes('ci') || args.includes('--build')) close(child);
         else if (command.endsWith('taskkill.exe')) { const target = active.get(Number(args[1])); if (target) close(target); close(child); }
@@ -153,7 +154,7 @@ async function sessionProcesses(f, action, mode) {
       return child;
     },
     killProcess: (group) => { const child = active.get(-group); if (child) close(child); },
-    gracefulDown: async (_spec, options) => { checkEnvironment(options.env, f, true); for (const child of [...active.values()]) close(child); },
+    gracefulDown: async (_spec, options) => { checkEnvironment(options.env, f, true); if (runtimeChild && active.has(runtimeChild.pid)) close(runtimeChild); },
     openController: async (_root, callback) => { stop = callback; return { close: async () => {} }; },
     request: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok', protocol: 'workspace.v1', schemaVersion: 1, runtimeInstanceId: 'fixture', realmId: 'fixture' }) }),
     output: () => { void stop(); },
@@ -166,7 +167,21 @@ for (const platform of ['darwin', 'linux', 'win32']) for (const mode of ['backen
     const f = fixture(platform, mode);
     let lockChecks = 0;
     const app = library.createApp({ ...f, probe: async () => ({ kind: 'free' }),
-      execute: (_command, _args, options) => { checkPinokioEnvironment(options.env, f); return { status: 0, stdout: library.EDITOR_REPOSITORY }; }, lifecycle: {
+      startSessionForUpdate: async () => {}, sessionReadyCheck: async () => true,
+      execute: (command, args, options) => {
+        if (command === f.installed.node) {
+          checkEnvironment(options.env, f, true);
+          assert.deepEqual(args, [f.installed.npm, 'run', 'update']);
+          assert.equal(options.cwd, f.editor);
+          return { status: 0, stdout: 'local update fixture' };
+        }
+        checkPinokioEnvironment(options.env, f);
+        return { status: 0, stdout: library.EDITOR_REPOSITORY };
+      }, lifecycle: {
+      stopRuntime: async (root, options) => {
+        const { stopRuntime } = await import('../pinokio/lifecycle.mjs');
+        await stopRuntime(root, { ...options, installed: f.installed, run: async (_spec, options) => checkEnvironment(options.env, f, true) });
+      },
       requestGracefulStop: async () => {},
       waitForInstallerLock: async (root, options) => {
         await waitForInstallerLock(root, { ...options, installed: f.installed, run: async (_spec, options) => { checkEnvironment(options.env, f, true); lockChecks++; } });
@@ -297,7 +312,7 @@ test('native shell wrapper strips a Pinokio environment at the real child bounda
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
-test('older Pinokio tool/cache records refuse Start while Reset still checks the lock with a clean environment', async () => {
+test('older Pinokio tool/cache records refuse Start and require actual down before Reset', async () => {
   for (const platform of ['darwin', 'linux', 'win32']) {
     const f = fixture(platform, 'backend');
     const filesystem = { ...f.filesystem, readFileSync(file) {
@@ -314,8 +329,21 @@ test('older Pinokio tool/cache records refuse Start while Reset still checks the
     } };
     assert.throws(() => installation(f.root, { ...f, filesystem }), /Choose Reset, then Install again/);
     const order = [];
+    let refuse = true;
     filesystem.rmSync = () => order.push('remove');
     const app = library.createApp({ ...f, filesystem, lifecycle: {
+      stopRuntime: async (root, options) => {
+        const { stopRuntime } = await import('../pinokio/lifecycle.mjs');
+        await stopRuntime(root, { ...options, run: async (spec, options) => {
+          order.push('down');
+          assert.equal(spec.command, f.installed.python);
+          assert.ok(spec.args.includes('down'));
+          assert.ok(spec.args.includes(f.p.join(f.home, 'cache', 'XDG_DATA_HOME', 'Astrid')));
+          assert.equal(options.env.ASTRID_RUNTIME_DATA_ROOT, undefined);
+          assert.equal(options.env.ASTRID_FFMPEG_EXECUTABLE, undefined);
+          if (refuse) throw new Error('Runtime down is unavailable for this installation.');
+        } });
+      },
       waitForInstallerLock: (root, options) => waitForInstallerLock(root, { ...options, run: async (spec, options) => {
         order.push('lock');
         assert.equal(spec.command, f.installed.python);
@@ -329,7 +357,10 @@ test('older Pinokio tool/cache records refuse Start while Reset still checks the
       } }),
     } });
     const script = await load('reset', app)({}, {});
-    for (const step of script.run) await step.method({}, () => {}, { api: { running: {} } });
-    assert.deepEqual(order, ['lock', 'remove']);
+    await assert.rejects(script.run[0].method({}, () => {}, { api: { running: {} } }), /Runtime down is unavailable/);
+    assert.deepEqual(order, ['down']);
+    refuse = false; order.length = 0;
+    await script.run[0].method({}, () => {}, { api: { running: {} } });
+    assert.deepEqual(order, ['down', 'lock']);
   }
 });
