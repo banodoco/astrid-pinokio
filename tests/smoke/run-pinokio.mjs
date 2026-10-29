@@ -16,6 +16,7 @@ const windows = process.platform === 'win32';
 const paths = windows ? path.win32 : path.posix;
 const shell = windows ? 'powershell.exe' : 'bash';
 const fixturePath = path.join(repository, 'tests', 'fixtures', 'pinokio-env.mjs');
+const smokeAppRef = 'main';
 
 function log(message) {
   process.stdout.write(`[pinokio-smoke] ${message}\n`);
@@ -400,7 +401,7 @@ async function setup() {
   prepareCheckout(repository, appDirectory);
   // Pinokio reads the selected ref from the app checkout's manifest. The
   // repository template intentionally leaves this blank for normal installs.
-  fs.writeFileSync(path.join(appDirectory, '_ENVIRONMENT'), 'ASTRID_APP_REF=feat/pinokio\n');
+  fs.writeFileSync(path.join(appDirectory, '_ENVIRONMENT'), `ASTRID_APP_REF=${smokeAppRef}\n`);
 
   const environment = makeEnvironment(pinokioHome, process.platform);
   assert.ok(environment && typeof environment === 'object', 'Pinokio env fixture must return an environment object');
@@ -434,7 +435,7 @@ async function setup() {
   environment.ASTRID_PINOKIO_APP_DIR = appDirectory;
   environment.ASTRID_RUNTIME_DOOR_PORT = '17340';
   const app = library.createApp({ platform: process.platform, appDirectory, environment });
-  assert.equal(app.appRef(), 'feat/pinokio', 'Install must select the manifest ref from _ENVIRONMENT');
+  assert.equal(app.appRef(), smokeAppRef, 'Install must select the manifest ref from _ENVIRONMENT');
   const servicesBefore = await fakeServices(pinokioHome, userHome, environment);
   return { pinokioHome, userHome, appDirectory, cacheDirectory, binDirectory, environment, app, servicesBefore };
 }
