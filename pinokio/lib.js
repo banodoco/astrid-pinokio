@@ -305,6 +305,13 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
       return await session.localSessionReady({ root: BACKEND_ROOT, editor: EDITOR_DIR, platform, installed });
     } catch { return false; }
   }
+  async function backendSessionReady(doorHealth) {
+    try {
+      const session = await import('./session.mjs');
+      const installed = session.installation(BACKEND_ROOT, { platform, filesystem, environment, appDirectory: APP_DIR });
+      return await session.backendSessionReady({ root: BACKEND_ROOT, editor: EDITOR_DIR, platform, installed, doorHealth });
+    } catch { return false; }
+  }
   function saveModeStep(mode) {
     return customStep(async () => {
       ensureProgramDirectory();
@@ -453,7 +460,7 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     shellStep, gitShellStep, launcherPullMessage, customStep, ensureProgramDirectory, readInstallMode, saveModeStep, removeProgramFiles,
     validateExistingEditorCheckout, cloneEditorMessage, pullEditorMessage, sessionMessage, sessionStep,
     pendingUpdateTransaction, hasPendingUpdate, recoverPendingUpdate, assertSafeRemoval, stopForRemoval, stopForUninstall, finishUninstall,
-    stopHook, stopOwnedStart, preflightStop, hasOwnedSupervisor, localSessionReady, ensureDoorPortFree, probeDoor: probe, modeOpenTarget, localSetOpenTarget,
+    stopHook, stopOwnedStart, preflightStop, hasOwnedSupervisor, localSessionReady, backendSessionReady, ensureDoorPortFree, probeDoor: probe, modeOpenTarget, localSetOpenTarget,
     runScript: (root, args) => (isWindows ? windows : posix).run(root, args),
     ...CONSTANTS };
 }
@@ -483,9 +490,7 @@ async function probeDoor({ portOpen = tcpPortOpen, request = fetch } = {}) {
     try {
       const response = await request(DOOR_HEALTH_URL, { headers: { Accept: 'application/json', ...(origin ? { Origin: origin } : {}) }, signal: AbortSignal.timeout(1500) });
       const body = await response.json().catch(() => null);
-      if ((response.status === 200 && body?.protocol === 'workspace.v1')
-        || (response.status === 503 && ['runtime_unavailable', 'runtime_identity_mismatch'].includes(body?.error))
-        || (response.status === 403 && body?.error === 'hosted_origin_required')) return { kind: 'astrid' };
+      if (response.status === 200 && body?.status === 'ok' && body?.protocol === 'workspace.v1') return { kind: 'astrid', health: body };
     } catch { /* An open socket with no Astrid response belongs to another program. */ }
   }
   return { kind: 'occupied' };

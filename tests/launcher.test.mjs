@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import library from '../pinokio/lib.js';
-import { commands, installation, runSession, signalGroup } from '../pinokio/session.mjs';
+import { backendSessionReady, commands, installation, runSession, signalGroup } from '../pinokio/session.mjs';
 
 const require = createRequire(import.meta.url);
 const repository = path.resolve(import.meta.dirname, '..');
@@ -102,7 +102,9 @@ for (const platform of ['darwin', 'linux', 'win32']) {
 test('menu: all operation, installation, starting, ready, external and conflict states', async () => {
   for (const mode of [null, 'backend', 'local']) {
     let probeKind = 'free';
-    const app = { ...fakeApp('darwin', '', mode), probeDoor: async () => ({ kind: probeKind }) };
+    const app = { ...fakeApp('darwin', '', mode), probeDoor: async () => ({ kind: probeKind,
+      ...(probeKind === 'astrid' ? { health: { status: 'ok', protocol: 'workspace.v1', runtime_instance_id: 'selected' } } : {}) }),
+      backendSessionReady: async (health) => Boolean(health), localSessionReady: async () => true };
     let running = '';
     let local = {};
     const info = { exists: () => Boolean(mode), running: (uri) => uri === running, local: () => local };
@@ -124,18 +126,25 @@ test('menu: all operation, installation, starting, ready, external and conflict 
     assert.deepEqual(plain(pending.map((item) => item.text)), ['Starting Astrid…', 'Stop']);
     assert.equal(pending.some((item) => item.default), false);
     local = app.localSetOpenTarget(mode);
+    probeKind = 'astrid';
     const ready = await menu({}, info);
-    assert.deepEqual(plain(ready.map((item) => item.text)), ['Open Astrid', mode ? (mode === 'backend' ? 'Update and restart' : 'Update') : undefined, 'Stop'].filter(Boolean));
-    assert.equal(ready[0].default, true);
-    assert.equal(ready[0].popout, mode !== 'local');
-    assert.equal(ready[0].target_full, mode === 'local' ? undefined : local.url);
-    assert.equal(ready[0].href, mode === 'local' ? local.url : '/');
-    if (mode) assert.equal(ready.at(-2).default, undefined);
+    if (!mode) assert.deepEqual(plain(ready.map((item) => item.text)), ['Starting Astrid…', 'Stop']);
+    else {
+      assert.deepEqual(plain(ready.map((item) => item.text)), ['Open Astrid', mode === 'backend' ? 'Update and restart' : 'Update', 'Stop']);
+      assert.equal(ready[0].default, true);
+      assert.equal(ready[0].popout, mode !== 'local');
+      assert.equal(ready[0].target_full, mode === 'local' ? undefined : local.url);
+      assert.equal(ready[0].href, mode === 'local' ? local.url : '/');
+      assert.equal(ready.at(-2).default, undefined);
+    }
     running = '';
     probeKind = 'astrid';
     const external = await menu({}, info);
-    assert.deepEqual(plain(external.map((item) => item.text)), ['Astrid is already running on this computer. Use Open Astrid, or stop that copy to run Astrid from Pinokio.', 'Open Astrid']);
-    assert.equal(external[1].href, library.HOSTED_OPEN_URL);
+    if (!mode) assert.deepEqual(plain(external.map((item) => item.text)), ['Astrid is already running on this computer, but the selected Runtime is not ready. Choose Start again after it is healthy.']);
+    else {
+      assert.deepEqual(plain(external.map((item) => item.text)), ['Open Astrid', mode === 'backend' ? 'Update and restart' : 'Update', 'Stop']);
+      assert.equal(external[0].href, mode === 'local' ? library.LOCAL_OPEN_URL : library.HOSTED_OPEN_URL);
+    }
     assert.equal(external.some((item) => item.default), false);
     probeKind = 'occupied';
     const conflict = await menu({}, info);
@@ -143,6 +152,51 @@ test('menu: all operation, installation, starting, ready, external and conflict 
     assert.equal(conflict[0].href, undefined);
     assert.equal(conflict[0].default, undefined);
   }
+});
+
+test('menu never offers Open for unavailable or identity-mismatched Runtime responses', async () => {
+  for (const error of ['runtime_unavailable', 'runtime_identity_mismatch']) {
+    const app = { ...fakeApp('darwin', '', 'backend'), probeDoor: async () => ({ kind: 'occupied', error }) };
+    const { menu } = load('pinokio.js', app);
+    const items = await menu({}, { exists: () => true, running: () => false, local: () => ({}) });
+    assert.equal(items.some((item) => item.text === 'Open Astrid'), false, error);
+  }
+  let selectedDoorHealth;
+  const app = { ...fakeApp('darwin', '', 'backend'), hasOwnedSupervisor: () => true,
+    probeDoor: async () => ({ kind: 'astrid', health: { status: 'ok', protocol: 'workspace.v1', runtime_instance_id: 'selected' } }),
+    backendSessionReady: async (health) => { selectedDoorHealth = health; return health?.runtime_instance_id === 'selected'; } };
+  const { menu } = load('pinokio.js', app);
+  const items = await menu({}, { exists: () => true, running: () => false, local: () => ({}) });
+  assert.ok(selectedDoorHealth);
+  assert.equal(items.some((item) => item.text === 'Open Astrid'), true);
+});
+
+test('active Start and external backend paths suppress Open until selected identity matches', async () => {
+  for (const runningStart of [false, true]) for (const response of ['unavailable', 'mismatch', 'matching']) {
+    const door = response === 'unavailable'
+      ? { kind: 'occupied', error: 'runtime_unavailable' }
+      : { kind: 'astrid', health: { status: 'ok', protocol: 'workspace.v1', runtime_instance_id: 'instance', identity: { runtime_head: response } } };
+    const app = { ...fakeApp('darwin', '', 'backend'), probeDoor: async () => door,
+      backendSessionReady: async (health) => response === 'matching' && health?.identity?.runtime_head === 'matching' };
+    const { menu } = load('pinokio.js', app);
+    const local = runningStart ? app.localSetOpenTarget('backend') : {};
+    const info = { exists: () => true, running: (uri) => runningStart && uri === 'pinokio/start.js', local: () => local };
+    const items = await menu({}, info);
+    assert.equal(items.some((item) => item.text === 'Open Astrid'), response === 'matching', `${runningStart ? 'active Start' : 'external'} / ${response}`);
+  }
+});
+
+test('backend session readiness matches CLI status to Door identity and instance', async () => {
+  const identity = { release: 1, runtime_head: 'abc', managed_by: 'pinokio' };
+  const installed = { env: {}, record: { identity } };
+  const status = { support: { healthy: true }, health: { status: 'ok' }, discovery: { runtime_instance_id: 'instance', active_realm: 'realm' } };
+  const run = async () => JSON.stringify(status);
+  const doorHealth = { status: 'ok', protocol: 'workspace.v1', runtime_instance_id: 'instance', identity };
+  assert.equal(await backendSessionReady({ root: '/runtime', editor: '/editor', installed, run, doorHealth }), true);
+  assert.equal(await backendSessionReady({ root: '/runtime', editor: '/editor', installed, run,
+    doorHealth: { ...doorHealth, identity: { ...identity, runtime_head: 'other' } } }), false);
+  assert.equal(await backendSessionReady({ root: '/runtime', editor: '/editor', installed, run,
+    doorHealth: { ...doorHealth, runtime_instance_id: 'other' } }), false);
 });
 
 test('Update keeps the local route and uses the shared transaction for hosted mode', async () => {
@@ -409,7 +463,7 @@ test('settings use ENVIRONMENT first and fall back to the shipped _ENVIRONMENT t
 
 test('port classification and preflight use injected requests; no live port probes', async () => {
   assert.equal((await library.probeDoor({ portOpen: async () => false })).kind, 'free');
-  for (const [status, body, expected] of [[200, { protocol: 'workspace.v1' }, 'astrid'], [503, { error: 'runtime_unavailable' }, 'astrid'], [403, { error: 'hosted_origin_required' }, 'astrid'], [200, { status: 'ok' }, 'occupied'], [404, {}, 'occupied']]) {
+  for (const [status, body, expected] of [[200, { status: 'ok', protocol: 'workspace.v1' }, 'astrid'], [503, { error: 'runtime_unavailable' }, 'occupied'], [503, { error: 'runtime_identity_mismatch' }, 'occupied'], [403, { error: 'hosted_origin_required' }, 'occupied'], [200, { status: 'ok' }, 'occupied'], [404, {}, 'occupied']]) {
     assert.equal((await library.probeDoor({ portOpen: async () => true, request: async () => ({ status, json: async () => body }) })).kind, expected);
   }
   for (const kind of ['astrid', 'occupied']) {
@@ -813,7 +867,7 @@ test('app updater supervisor remains controllable outside the native Start scrip
   assert.equal(app.hasOwnedSupervisor(), true);
   await app.stopOwnedStart({}, () => {}, { api: { running: {}, stop: async () => order.push('force') } });
   assert.deepEqual(order, ['preflight', 'grace', 'lock']);
-  const { menu } = load('pinokio.js', { ...app, readInstallMode: () => 'backend', probeDoor: async () => ({ kind: 'astrid' }) });
+  const { menu } = load('pinokio.js', { ...app, readInstallMode: () => 'backend', probeDoor: async () => ({ kind: 'astrid' }), backendSessionReady: async () => true });
   const items = await menu({}, { exists: () => true, running: () => false });
   assert.deepEqual(plain(items.map((item) => item.text)), ['Open Astrid', 'Update and restart', 'Stop']);
 });
