@@ -115,6 +115,25 @@ export async function localSessionReady({ root, editor, platform = process.platf
   } catch { return false; }
 }
 
+export async function backendSessionReady({ root, editor, platform = process.platform,
+  installed = installation(root, { platform }), run = runCommand, doorHealth } = {}) {
+  try {
+    const operationId = installed.env.ASTRID_INSTALLER_OPERATION_ID ?? process.env.ASTRID_INSTALLER_OPERATION_ID;
+    if (operationId !== undefined && (typeof operationId !== 'string' || !/^[0-9a-f]{32}$/.test(operationId))) return false;
+    const statusOutput = await run(commands(root, editor, 'backend', installed, platform).status,
+      { env: installed.env, cwd: root, timeoutMs: 5000 });
+    const status = JSON.parse(statusOutput);
+    if (!runtimeStatusHealthy(status, operationId)) return false;
+    if (!doorHealth || doorHealth.status !== 'ok' || doorHealth.protocol !== 'workspace.v1'
+      || !status.discovery?.runtime_instance_id
+      || doorHealth.runtime_instance_id !== status.discovery.runtime_instance_id) return false;
+    const sort = (value) => value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sort(value[key])])) : value;
+    return Boolean(installed.record.identity && doorHealth.identity
+      && JSON.stringify(sort(installed.record.identity)) === JSON.stringify(sort(doorHealth.identity)));
+  } catch { return false; }
+}
+
 export function parseSessionOptions(argument = '{}') {
   let options;
   try { options = JSON.parse(argument); }
