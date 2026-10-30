@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +11,8 @@ const agent = path.resolve(repository, '../../../../astrid-agent');
 const revisions = ['bbba620e', 'c3b4cd5', '5e1f256'];
 
 function oldModule(revision, file, app) {
-  const source = execFileSync('git', ['show', `${revision}:${file}`], { cwd: repository, encoding: 'utf8' });
+  const source = revision === 'working' ? fs.readFileSync(path.join(repository, file), 'utf8')
+    : execFileSync('git', ['show', `${revision}:${file}`], { cwd: repository, encoding: 'utf8' });
   const module = { exports: {} };
   const require = (name) => name === './lib' ? app : requireFromNode(name);
   function requireFromNode(name) { return createRequireFromHere(name); }
@@ -32,6 +34,7 @@ function fixture(mode, editorExists = true) {
     modeOpenTarget: (selected) => ({ href: `http://127.0.0.1:17340/${selected}` }),
     probeDoor: async () => ({ kind: 'free' }),
     hasOwnedSupervisor: () => true,
+    hasPendingUpdate: () => false,
     validateExistingEditorCheckout: () => editorExists,
     launcherPullMessage: () => 'OLD_LAUNCHER_PULL',
     pullEditorMessage: () => 'OLD_EDITOR_PULL',
@@ -111,4 +114,19 @@ test('historical fully-local Install and Update arrays retain the editor manifes
     assert.equal(parsed.managed_by, 'pinokio');
     assert.equal(parsed.manifest, calls[0].manifest);
   }
+});
+
+test('current fully-local clicks preserve the existing editor-manifest installer route', async () => {
+  const installed = await buildAction('working', 'pinokio/install-local.js', 'local', false);
+  assert.deepEqual(installed.calls, [{ action: 'install', manifest: '/tmp/pinokio/Astrid/app/astrid/public/install-manifest.json' }]);
+  assert.equal(installed.steps.some((step) => step.params?.message === 'OLD_EDITOR_CLONE'), true);
+  assert.equal(installed.steps.some((step) => step.method === 'session' && step.args[0] === 'build'), true);
+
+  const updated = await buildAction('working', 'pinokio/update.js', 'local');
+  assert.deepEqual(updated.calls, [{ action: 'update', manifest: '/tmp/pinokio/Astrid/app/astrid/public/install-manifest.json' }]);
+  const messages = Array.from(updated.steps, (step) => step.params?.message).filter(Boolean);
+  assert.deepEqual(messages, ['OLD_LAUNCHER_PULL', 'OLD_EDITOR_PULL',
+    `AGENT_INSTALLER:${JSON.stringify(updated.calls[0])}`]);
+  assert.equal(updated.steps.some((step) => step.method === 'session' && step.args[0] === 'build'), true);
+  assert.equal(messages.some((message) => message.includes('npm run update')), false);
 });
