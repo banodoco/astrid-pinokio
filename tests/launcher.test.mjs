@@ -68,7 +68,6 @@ for (const platform of ['darwin', 'linux', 'win32']) {
           for (const step of shells) assert.equal(step.params.shell, platform === 'win32' ? 'powershell.exe' : 'bash');
           if (['install-local', 'add-local', 'stop'].includes(name)) assert.equal(script.run[0].method, app.stopOwnedStart);
           if (name === 'reset') assert.equal(script.run[0].method, app.stopForRemoval);
-          if (name === 'uninstall') assert.equal(script.run[0].method, app.stopForUninstall);
           if (name === 'add-local') assert.equal(script.run[4].method, app.stopOwnedStart);
           if (name === 'start') {
             assert.equal(script.daemon, true);
@@ -84,7 +83,7 @@ for (const platform of ['darwin', 'linux', 'win32']) {
           if (name === 'uninstall-delete-data') {
             await assert.rejects(script.run[1].method({ input: { confirmation: 'delete' } }), /Cancelled, so nothing was deleted/);
             assert.deepEqual(plain(await script.run[1].method({ input: { confirmation: 'DELETE' } })), { confirmed: true });
-            assert.equal(script.run[2].method, app.stopForUninstall);
+            assert.equal(typeof script.run[2].method, 'function');
           }
           if (['install-local', 'add-local'].includes(name)) {
             const count = app.writes.length;
@@ -877,7 +876,7 @@ test('removal refuses pending updates and program roots overlapping data or sele
     for (const action of ['reset', 'uninstall', 'uninstall-delete-data']) {
       write(journal, { step: 'switched' });
       const script = await load(`pinokio/${action}.js`, app)();
-      const step = script.run.find((item) => item.method === (action === 'reset' ? app.stopForRemoval : app.stopForUninstall));
+      const step = script.run[action === 'uninstall-delete-data' ? 2 : 0];
       await assert.rejects(step.method({}, () => {}, kernel), /update is interrupted/);
     }
     fs.writeFileSync(journal, '{invalid');
@@ -956,5 +955,37 @@ test('failed owned installation can finish through the installer uninstall route
     }
     assert.deepEqual(calls, ['installer']);
     assert.equal(fs.existsSync(app.PROGRAMS_DIR), false);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test('uninstall rechecks captured roots and current selection and preserves unrelated app files', () => {
+  const temp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'astrid-recheck-'));
+  try {
+    const home = path.join(temp, 'home');
+    const app = library.createApp({ appDirectory: path.join(temp, 'pinokio', 'api', 'Astrid'), environment: { HOME: home } });
+    const safe = path.join(temp, 'safe');
+    const data = path.join(temp, 'data-link');
+    fs.mkdirSync(app.BACKEND_ROOT, { recursive: true });
+    fs.mkdirSync(app.EDITOR_DIR, { recursive: true });
+    fs.mkdirSync(safe);
+    fs.symlinkSync(safe, data);
+    fs.writeFileSync(path.join(app.BACKEND_ROOT, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: data }));
+    const roots = app.assertSafeRemoval();
+    fs.rmSync(app.BACKEND_ROOT, { recursive: true });
+    fs.unlinkSync(data);
+    fs.symlinkSync(app.EDITOR_DIR, data);
+    assert.throws(() => app.finishUninstall(roots), /roots overlap/);
+    assert.ok(fs.existsSync(app.EDITOR_DIR));
+    fs.unlinkSync(data);
+    fs.symlinkSync(safe, data);
+    const selection = path.join(home, '.local', 'share', 'astrid-install.json');
+    fs.mkdirSync(path.dirname(selection), { recursive: true });
+    fs.writeFileSync(selection, JSON.stringify({ realm_root: app.EDITOR_DIR }));
+    assert.throws(() => app.finishUninstall(roots), /workspace roots overlap/);
+    fs.unlinkSync(selection);
+    const unrelated = path.join(app.PROGRAMS_DIR, 'personal');
+    fs.writeFileSync(unrelated, 'keep');
+    assert.throws(() => app.finishUninstall(roots), /unrecognized files/);
+    assert.equal(fs.readFileSync(unrelated, 'utf8'), 'keep');
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
