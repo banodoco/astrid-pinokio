@@ -90,6 +90,12 @@ export function runtimeStatusHealthy(status, operationId) {
       && Boolean(status.discovery?.active_realm) && Boolean(status.discovery?.runtime_instance_id)));
 }
 
+function sameIdentity(selected, observed) {
+  const sort = (value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sort(value[key])])) : value;
+  return Boolean(selected && observed && JSON.stringify(sort(selected)) === JSON.stringify(sort(observed)));
+}
+
 export async function localPreviewReady(discovery, { request = fetch } = {}) {
   try {
     const response = await request('http://127.0.0.1:5180/tools/video-editor', { signal: AbortSignal.timeout(2500) });
@@ -103,7 +109,8 @@ export async function localPreviewReady(discovery, { request = fetch } = {}) {
 }
 
 export async function localSessionReady({ root, editor, platform = process.platform,
-  installed = installation(root, { platform }), request = fetch, run = runCommand } = {}) {
+  installed = installation(root, { platform }), request = fetch, run = runCommand,
+  probeDoor = app.probeDoor } = {}) {
   try {
     const operationId = installed.env.ASTRID_INSTALLER_OPERATION_ID ?? process.env.ASTRID_INSTALLER_OPERATION_ID;
     if (operationId !== undefined && (typeof operationId !== 'string' || !/^[0-9a-f]{32}$/.test(operationId))) return false;
@@ -111,6 +118,14 @@ export async function localSessionReady({ root, editor, platform = process.platf
       { env: installed.env, cwd: root, timeoutMs: 5000 });
     const status = JSON.parse(statusOutput);
     if (!runtimeStatusHealthy(status, operationId)) return false;
+    if (!sameIdentity(installed.record.identity, status.health?.identity)
+      || !status.discovery?.runtime_instance_id
+      || status.health.runtime_instance_id !== status.discovery.runtime_instance_id) return false;
+    const door = await probeDoor();
+    if (door.kind !== 'astrid') return false;
+    if (door.health && (!sameIdentity(installed.record.identity, door.health.identity)
+      || door.health.runtime_instance_id !== status.discovery.runtime_instance_id)) return false;
+    if (!door.health && !door.originRequired) return false;
     return localPreviewReady(status.discovery, { request });
   } catch { return false; }
 }
@@ -127,10 +142,7 @@ export async function backendSessionReady({ root, editor, platform = process.pla
     if (!doorHealth || doorHealth.status !== 'ok' || doorHealth.protocol !== 'workspace.v1'
       || !status.discovery?.runtime_instance_id
       || doorHealth.runtime_instance_id !== status.discovery.runtime_instance_id) return false;
-    const sort = (value) => value && typeof value === 'object' && !Array.isArray(value)
-      ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sort(value[key])])) : value;
-    return Boolean(installed.record.identity && doorHealth.identity
-      && JSON.stringify(sort(installed.record.identity)) === JSON.stringify(sort(doorHealth.identity)));
+    return sameIdentity(installed.record.identity, doorHealth.identity);
   } catch { return false; }
 }
 

@@ -491,6 +491,7 @@ async function probeDoor({ portOpen = tcpPortOpen, request = fetch } = {}) {
       const response = await request(DOOR_HEALTH_URL, { headers: { Accept: 'application/json', ...(origin ? { Origin: origin } : {}) }, signal: AbortSignal.timeout(1500) });
       const body = await response.json().catch(() => null);
       if (response.status === 200 && body?.status === 'ok' && body?.protocol === 'workspace.v1') return { kind: 'astrid', health: body };
+      if (response.status === 403 && body?.error === 'hosted_origin_required') return { kind: 'astrid', originRequired: true };
     } catch { /* An open socket with no Astrid response belongs to another program. */ }
   }
   return { kind: 'occupied' };
