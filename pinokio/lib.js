@@ -197,19 +197,16 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     }
     return { recovered: true };
   }
-  function assertSafeRemoval() {
+  function assertSafeRemoval(snapshot = []) {
     if (hasPendingUpdate()) throw new Error('An Astrid update is interrupted. Choose Update to recover it before removing files.');
     const readOptional = (file) => {
       try { return JSON.parse(filesystem.readFileSync(file, 'utf8')); }
       catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     };
     const install = readOptional(paths.join(BACKEND_ROOT, 'install.json'));
-    if (!install) {
-      if (filesystem.existsSync(BACKEND_ROOT)) throw new Error('Cannot safely remove an unowned or incomplete Astrid installation.');
-      return;
-    }
-    if (install.owner !== 'haus.astrid.runtime' || install.managed_by !== 'pinokio') throw new Error('Cannot safely remove an unowned Astrid installation.');
-    if (typeof install.data_root !== 'string' || !paths.isAbsolute(install.data_root)) {
+    if (!install && filesystem.existsSync(BACKEND_ROOT)) throw new Error('Cannot safely remove an unowned or incomplete Astrid installation.');
+    if (install && (install.owner !== 'haus.astrid.runtime' || install.managed_by !== 'pinokio')) throw new Error('Cannot safely remove an unowned Astrid installation.');
+    if (install && (typeof install.data_root !== 'string' || !paths.isAbsolute(install.data_root))) {
       throw new Error('Cannot safely remove Astrid files: the data root is unavailable.');
     }
     // Resolve existing ancestors as well as existing targets, so a symlink in
@@ -234,34 +231,37 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
       const contains = (x, y) => { const rel = paths.relative(x, y); return !rel || (rel !== '..' && !rel.startsWith(`..${paths.sep}`) && !paths.isAbsolute(rel)); };
       return contains(a, b) || contains(b, a);
     };
-    const removal = canonical(PROGRAMS_DIR), data = canonical(install.data_root);
-    if (overlaps(removal, data)) throw new Error('Cannot remove Astrid files because the program and data roots overlap.');
+    const removal = canonical(PROGRAMS_DIR), protectedRoots = [...snapshot];
+    const protect = (value, label) => {
+      if (typeof value !== 'string' || !paths.isAbsolute(value)) throw new Error(`Cannot safely remove Astrid files: the ${label} root is unavailable.`);
+      const root = canonical(value);
+      if (overlaps(removal, root)) throw new Error(`Cannot remove Astrid files because the program and ${label} roots overlap.`);
+      protectedRoots.push(value, root);
+    };
+    for (const root of snapshot) protect(root, 'workspace');
+    if (install) protect(install.data_root, 'data');
     const safeEnv = environmentPolicy.buildEnvironment({ appDirectory: APP_DIR, platform, environment });
     const home = isWindows ? safeEnv.USERPROFILE || os.homedir() : safeEnv.HOME || os.homedir();
     const selectionParent = isWindows ? (safeEnv.LOCALAPPDATA || paths.join(home, 'AppData', 'Local')) : paths.join(home, '.local', 'share');
     const selection = readOptional(paths.join(selectionParent, 'astrid-install.json'));
-    if (selection?.data_root !== undefined) {
-      if (typeof selection.data_root !== 'string' || !paths.isAbsolute(selection.data_root)) throw new Error('Cannot safely remove Astrid files: the retained data root is unavailable.');
-      if (overlaps(removal, canonical(selection.data_root))) throw new Error('Cannot remove Astrid files because the program and data roots overlap.');
-    }
-    if (selection?.realm_root !== undefined) {
-      if (typeof selection.realm_root !== 'string' || !paths.isAbsolute(selection.realm_root)) throw new Error('Cannot safely remove Astrid files: the retained workspace root is unavailable.');
-      if (overlaps(removal, canonical(selection.realm_root))) throw new Error('Cannot remove Astrid files because the program and workspace roots overlap.');
-    }
+    if (selection?.data_root !== undefined) protect(selection.data_root, 'data');
+    if (selection?.realm_root !== undefined) protect(selection.realm_root, 'workspace');
+    if (!install) return protectedRoots;
     const catalog = readOptional(paths.join(install.data_root, 'runtime', 'catalog.json'));
     if (!catalog) {
       if (!selection?.realm_root && filesystem.existsSync(paths.join(BACKEND_ROOT, 'current')) && filesystem.existsSync(install.data_root)) {
         throw new Error('Cannot safely remove Astrid files: the selected workspace root is unavailable.');
       }
-      return;
+      return protectedRoots;
     }
     if (!Array.isArray(catalog.realms) || !Object.hasOwn(catalog, 'selected_realm_id')) throw new Error('Cannot safely remove Astrid files: the workspace catalog is invalid.');
-    if (catalog.selected_realm_id == null) return;
+    if (catalog.selected_realm_id == null) return protectedRoots;
     const selected = Array.isArray(catalog.realms) && catalog.realms.filter((row) => row?.realm_id === catalog.selected_realm_id);
     if (!selected || selected.length !== 1 || typeof selected[0].data_root !== 'string' || !paths.isAbsolute(selected[0].data_root)) {
       throw new Error('Cannot safely remove Astrid files: the selected workspace root is unavailable.');
     }
-    if (overlaps(removal, canonical(selected[0].data_root))) throw new Error('Cannot remove Astrid files because the program and workspace roots overlap.');
+    protect(selected[0].data_root, 'workspace');
+    return protectedRoots;
   }
   async function stopForRemoval(req, ondata, kernel) {
     assertSafeRemoval();
@@ -285,9 +285,10 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     }
     return stopOwnedStart(req, ondata, kernel);
   }
-  function finishUninstall() {
+  function finishUninstall(snapshot) {
     if (filesystem.existsSync(BACKEND_ROOT)) throw new Error('Astrid could not remove all program files. Retry Uninstall to finish cleanup.');
-    assertSafeRemoval();
+    if (!Array.isArray(snapshot)) throw new Error('Cannot safely finish uninstall without its preflight roots.');
+    assertSafeRemoval(snapshot);
     removeProgramFiles();
   }
   function hasOwnedSupervisor() {
@@ -313,6 +314,10 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
   }
   function removeProgramFiles() {
     if (paths.dirname(PROGRAMS_DIR) !== APP_DIR) throw new Error('Refusing to remove files outside the Pinokio app.');
+    if (filesystem.readdirSync && filesystem.existsSync(PROGRAMS_DIR)) {
+      const unexpected = filesystem.readdirSync(PROGRAMS_DIR).filter((name) => !['astrid', 'editor', 'install-mode.json'].includes(name));
+      if (unexpected.length) throw new Error('Cannot remove Astrid program files: the app directory contains unrecognized files.');
+    }
     filesystem.rmSync(PROGRAMS_DIR, { recursive: true, force: true });
   }
   function validateExistingEditorCheckout() {
