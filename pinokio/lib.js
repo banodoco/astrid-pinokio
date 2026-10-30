@@ -3,14 +3,47 @@
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const posix = require('./platforms/posix');
 const windows = require('./platforms/windows');
+const environmentPolicy = require('./environment');
+
+function runStreamed(spawnChild, command, args, { onOutput, timeout, maxBuffer, ...options }) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let error;
+    let settled = false;
+    let timer;
+    const child = spawnChild(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
+    const settle = (status, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ status, signal, error, stdout, stderr });
+    };
+    const abort = (code, message) => {
+      if (error) return;
+      error = Object.assign(new Error(message), { code });
+      child.kill();
+    };
+    const checkBuffer = () => {
+      if (maxBuffer && stdout.length + stderr.length > maxBuffer) abort('ENOBUFS', `${command} wrote more output than Astrid keeps.`);
+    };
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout += chunk; onOutput?.(chunk); checkBuffer(); });
+    child.stderr.on('data', (chunk) => { stderr += chunk; onOutput?.(chunk); checkBuffer(); });
+    if (timeout) timer = setTimeout(() => abort('ETIMEDOUT', `${command} timed out.`), timeout);
+    child.once('error', (failure) => { error ??= failure; settle(null, null); });
+    child.once('close', (status, signal) => settle(status, signal));
+  });
+}
 
 // The factory keeps platform command generation testable without executing a
 // shell, querying the real ports, or writing into a real installation.
 function createApp({ platform = process.platform, appDirectory = path.resolve(__dirname, '..'),
-  environment = process.env, filesystem = fs, probe = probeDoor, lifecycle, execute = spawnSync, getTemp } = {}) {
+  environment = process.env, filesystem = fs, probe = probeDoor, lifecycle, execute, spawnProcess = spawn, getTemp } = {}) {
   const isWindows = platform === 'win32';
   const paths = isWindows ? path.win32 : path.posix;
   const APP_DIR = appDirectory;
@@ -20,6 +53,8 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
   const MODE_FILE = paths.join(PROGRAMS_DIR, 'install-mode.json');
   const shellName = isWindows ? 'powershell.exe' : 'bash';
   const q = isWindows ? windows.quotePowerShell : posix.quote;
+  const runSync = execute ?? spawnSync;
+  const runUpdateChild = execute ?? ((command, args, options) => runStreamed(spawnProcess, command, args, options));
 
   function setting(name, fallback = '') {
     if (environment[name] !== undefined) return environment[name];
@@ -99,11 +134,80 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
       return record?.schema_version === 1 && ['backend', 'local'].includes(record.mode) ? record.mode : null;
     } catch { return null; }
   }
+  function pendingUpdateTransaction() {
+    const file = paths.join(BACKEND_ROOT, 'update-transaction.json');
+    try {
+      const transaction = JSON.parse(filesystem.readFileSync(file, 'utf8'));
+      if (!transaction || typeof transaction !== 'object' || Array.isArray(transaction)) {
+        throw new Error('The interrupted Astrid update record is invalid.');
+      }
+      return transaction;
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+  function hasPendingUpdate() {
+    const transaction = pendingUpdateTransaction();
+    if (!transaction) return false;
+    return transaction.step !== 'complete' && transaction.step !== 'rolled_back';
+  }
+  async function recoverPendingUpdate(_req, ondata) {
+    const transaction = pendingUpdateTransaction();
+    if (!transaction || transaction.step === 'complete' || transaction.step === 'rolled_back') return { recovered: false };
+    const { installationFiles } = await import('./session.mjs');
+    let versionOverride;
+    const candidate = transaction.candidate;
+    if (candidate?.root !== undefined) {
+      const candidateRoot = typeof candidate.root === 'string' ? paths.resolve(candidate.root) : '';
+      const versionsRoot = paths.resolve(BACKEND_ROOT, 'versions');
+      const relative = candidateRoot ? paths.relative(versionsRoot, candidateRoot) : '';
+      if (!relative || relative === '..' || relative.startsWith(`..${paths.sep}`) || paths.isAbsolute(relative)
+        || relative.includes(paths.sep) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(relative)) {
+        throw new Error('The interrupted Astrid update candidate is outside the installed versions directory.');
+      }
+      versionOverride = relative;
+    }
+    const installed = installationFiles(BACKEND_ROOT, { platform, filesystem, ...(versionOverride ? { versionOverride } : {}) });
+    if (candidate) {
+      const sort = (value) => value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sort(value[key])]))
+        : value;
+      const record = installed.record;
+      if (candidate.root !== record.root || candidate.python !== record.python || candidate.profile !== record.profile
+        || JSON.stringify(sort(candidate.env)) !== JSON.stringify(sort(record.env))
+        || JSON.stringify(sort(candidate.identity)) !== JSON.stringify(sort(record.identity))) {
+        throw new Error('The interrupted Astrid update candidate does not match its installed version record.');
+      }
+    }
+    let streamed = false;
+    const result = await runUpdateChild(installed.python, ['-I', '-m', 'astrid', 'install', '--root', BACKEND_ROOT, '--managed-by', 'pinokio'], {
+      env: environmentPolicy.buildEnvironment({ appDirectory: APP_DIR, platform, environment }),
+      cwd: APP_DIR, encoding: 'utf8', timeout: 600_000, maxBuffer: 1024 * 1024, windowsHide: true,
+      onOutput: (raw) => { streamed = true; ondata?.({ raw }); },
+    });
+    const output = `${result.stdout || ''}${result.stderr || ''}`;
+    if (output && !streamed) ondata?.({ raw: output });
+    if (result.error || result.status !== 0) {
+      const message = output.trim() || result.error?.message || `Installer recovery failed (exit ${result.status}).`;
+      const failure = new Error(message);
+      if (result.error?.details !== undefined) failure.details = result.error.details;
+      throw failure;
+    }
+    return { recovered: true };
+  }
   function hasOwnedSupervisor() {
     try {
       const record = JSON.parse(filesystem.readFileSync(paths.join(BACKEND_ROOT, 'pinokio-control.json'), 'utf8'));
       return record.schema === 1 && Number.isInteger(record.pid) && record.pid > 0
         && Number.isInteger(record.port) && record.port > 0 && record.port <= 65535;
+    } catch { return false; }
+  }
+  async function localSessionReady() {
+    try {
+      const session = await import('./session.mjs');
+      const installed = session.installation(BACKEND_ROOT, { platform, filesystem, environment, appDirectory: APP_DIR });
+      return await session.localSessionReady({ root: BACKEND_ROOT, editor: EDITOR_DIR, platform, installed });
     } catch { return false; }
   }
   function saveModeStep(mode) {
@@ -120,7 +224,7 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
   function validateExistingEditorCheckout() {
     if (!filesystem.existsSync(EDITOR_DIR)) return false;
     if (!filesystem.existsSync(paths.join(EDITOR_DIR, '.git'))) throw new Error("Astrid's editor files are damaged. Choose Reset, then install again.");
-    const result = execute('git', ['-C', EDITOR_DIR, 'remote', 'get-url', 'origin'], {
+    const result = runSync('git', ['-C', EDITOR_DIR, 'remote', 'get-url', 'origin'], {
       env: environment, encoding: 'utf8', windowsHide: true });
     if (result.status !== 0 || result.stdout.trim().replace(/\.git$/, '').replace(/\/$/, '').toLowerCase() !== EDITOR_REPOSITORY.toLowerCase()) {
       throw new Error(`Astrid's editor folder doesn't come from ${EDITOR_REPOSITORY}. Choose Reset, then install again.`);
@@ -142,10 +246,12 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     return isWindows ? `${command}\nif ($LASTEXITCODE -ne 0) { throw '${label} failed.' }` : command;
   }
 
-  function sessionMessage(action, mode = 'local') {
+  function sessionMessage(action, mode = 'local', options = {}) {
     // Resolve at shell execution time: install/update may have just changed current.
     const helper = paths.join(APP_DIR, 'pinokio', action === 'stop' ? 'lifecycle.mjs' : 'session.mjs');
-    const args = (action === 'stop' ? [helper, action, BACKEND_ROOT] : [helper, action, BACKEND_ROOT, EDITOR_DIR, mode]).map(q).join(' ');
+    const sessionArgs = action === 'stop' ? [helper, action, BACKEND_ROOT]
+      : [helper, action, BACKEND_ROOT, EDITOR_DIR, mode, ...(Object.keys(options).length ? [JSON.stringify(options)] : [])];
+    const args = sessionArgs.map(q).join(' ');
     if (isWindows) return [
       "$ErrorActionPreference = 'Stop'",
       `$version = (Get-Content -Raw -LiteralPath ${q(paths.join(BACKEND_ROOT, 'current'))}).Trim()`,
@@ -168,8 +274,8 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
       `exec "$node" ${args}`,
     ].join('\n');
   }
-  function sessionStep(action, mode) {
-    return shellStep(sessionMessage(action, mode), { env: { ASTRID_INSTALL_MANAGED_BY: 'pinokio' },
+  function sessionStep(action, mode, options = {}) {
+    return shellStep(sessionMessage(action, mode, options), { env: { ASTRID_INSTALL_MANAGED_BY: 'pinokio' },
       ...(action === 'serve' ? { on: [{ event: '/ASTRID_PINOKIO_READY/', done: true }] } : {}) });
   }
   function stopHook() {
@@ -182,26 +288,57 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     const operations = lifecycle || await import('./lifecycle.mjs');
     const options = { filesystem, platform, environment, appDirectory: APP_DIR };
     const errors = [];
-    if (active || hasOwnedSupervisor()) {
-      // Explicitly obtain the result: Pinokio logs but swallows direct hook
-      // failures. The same idempotent request also serves the native Stop hook.
-      try { await operations.requestGracefulStop(BACKEND_ROOT, options); }
-      catch (error) { errors.push(error.message); }
-      // Always perform Pinokio's final forced cleanup, even after grace expires.
-      try { if (active) await kernel.api.stop({ params: { uri } }); }
-      catch (error) { errors.push(error.message); }
+    if (active || hasOwnedSupervisor() || filesystem.existsSync(PROGRAMS_DIR)) {
+      try { await operations.preflightStop(BACKEND_ROOT, options); }
+      catch (error) {
+        errors.push(error);
+      }
     }
-    try { await operations.waitForInstallerLock(BACKEND_ROOT, options); }
-    catch (error) { errors.push(error.message); }
+    if (active || hasOwnedSupervisor()) {
+      // The controller's Runtime down is still the final authority and must
+      // succeed before Pinokio may close the session.
+      if (errors.length === 0) try {
+        const stopped = await operations.requestGracefulStop(BACKEND_ROOT, options);
+        if (active && stopped?.absent) throw new Error('The active Astrid session has no responsive stop controller. Retry after restoring its controller.');
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 0 && active) {
+        try { await kernel.api.stop({ params: { uri } }); }
+        catch (error) { errors.push(error); }
+      }
+    }
+    if (errors.length === 0) {
+      try { await operations.waitForInstallerLock(BACKEND_ROOT, options); }
+      catch (error) { errors.push(error); }
+    }
     if (errors.length) {
       const prefix = 'Astrid is still running. Stop it in Pinokio, then try again.';
-      const details = errors.filter((error) => !error.includes(prefix)).join(' ');
-      const message = `${prefix}${details ? ` ${details}` : ''}`;
+      const first = errors[0];
+      const runtimeRefusal = first.details !== undefined || /^Astrid is busy \(/.test(first.message)
+        || /^Runtime stop preflight/.test(first.message);
+      const format = (error) => `${error.message}${error.details === undefined ? '' : `\n${JSON.stringify(error.details)}`}`;
+      const message = runtimeRefusal ? format(first)
+        : `${prefix}${errors.map(format).filter((value) => !value.includes(prefix)).join(' ') ? ` ${errors.map(format).filter((value) => !value.includes(prefix)).join(' ')}` : ''}`;
       ondata?.({ raw: `${message}\r\n` });
-      throw new Error(message);
+      const refusal = new Error(message);
+      if (first.details !== undefined) refusal.details = first.details;
+      throw refusal;
     }
     ondata?.({ raw: 'Astrid stopped.\r\n' });
     return { stopped: active, lockFree: true };
+  }
+  async function preflightStop(_req, ondata) {
+    const operations = lifecycle || await import('./lifecycle.mjs');
+    try {
+      const report = await operations.preflightStop(BACKEND_ROOT, {
+        filesystem, platform, environment, appDirectory: APP_DIR,
+      });
+      return { safe: true, report };
+    } catch (error) {
+      ondata?.({ raw: `${error.message}${error.details === undefined ? '' : `\r\n${JSON.stringify(error.details)}`}\r\n` });
+      throw error;
+    }
   }
   async function ensureDoorPortFree(_req, ondata) {
     const result = await probe();
@@ -216,7 +353,8 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     getPaths: () => ({ root: BACKEND_ROOT, editor: EDITOR_DIR }), setting, appRef, bootstrapScript,
     shellStep, gitShellStep, launcherPullMessage, customStep, ensureProgramDirectory, readInstallMode, saveModeStep, removeProgramFiles,
     validateExistingEditorCheckout, cloneEditorMessage, pullEditorMessage, sessionMessage, sessionStep,
-    stopHook, stopOwnedStart, hasOwnedSupervisor, ensureDoorPortFree, probeDoor: probe, modeOpenTarget, localSetOpenTarget,
+    pendingUpdateTransaction, hasPendingUpdate, recoverPendingUpdate,
+    stopHook, stopOwnedStart, preflightStop, hasOwnedSupervisor, localSessionReady, ensureDoorPortFree, probeDoor: probe, modeOpenTarget, localSetOpenTarget,
     runScript: (root, args) => (isWindows ? windows : posix).run(root, args),
     ...CONSTANTS };
 }

@@ -25,7 +25,11 @@ module.exports = {
         ? openItem({ href: local.url, popout: false })
         : openItem({ href: '/', target_full: local.url, popout: true });
       open.default = true;
-      return [open, ...(mode === 'backend' ? [item('Update and restart', 'update', 'rotate')] : []), item('Stop', 'stop', 'stop')];
+      return [open, ...(mode ? [item(mode === 'backend' ? 'Update and restart' : 'Update', 'update', 'rotate')] : []), item('Stop', 'stop', 'stop')];
+    }
+    if (mode === 'local' && installed && app.hasOwnedSupervisor()) {
+      if (!await app.localSessionReady()) return [infoItem('Starting Astrid…'), item('Stop', 'stop', 'stop')];
+      return [openItem(app.modeOpenTarget('local')), item('Update', 'update', 'rotate'), item('Stop', 'stop', 'stop')];
     }
     const port = await app.probeDoor();
     if (port.kind === 'astrid' && installed && app.hasOwnedSupervisor()) {
