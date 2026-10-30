@@ -10,8 +10,8 @@ module.exports = async () => ({ run: [
     if (req.input?.confirmation !== 'DELETE') throw new Error('Cancelled, so nothing was deleted. To go ahead, type DELETE in capitals.');
     return { confirmed: true };
   }),
-  app.customStep(app.stopOwnedStart),
+  app.customStep(app.stopForUninstall),
   app.customStep(app.ensureDoorPortFree),
   app.shellStep(app.bootstrapScript('uninstall', undefined, true)),
-  app.customStep(async () => { app.removeProgramFiles(); return { uninstalled: true, dataDeleted: true }; }),
+  app.customStep(async () => { app.finishUninstall(); return { uninstalled: true, dataDeleted: true }; }),
 ] });

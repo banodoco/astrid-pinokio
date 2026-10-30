@@ -66,7 +66,9 @@ for (const platform of ['darwin', 'linux', 'win32']) {
           const shells = script.run.filter((step) => step.method === 'shell.run');
           assert.deepEqual(plain(shells.map((step) => step.params.message)), map[name], name);
           for (const step of shells) assert.equal(step.params.shell, platform === 'win32' ? 'powershell.exe' : 'bash');
-          if (['install-local', 'add-local', 'uninstall', 'reset', 'stop'].includes(name)) assert.equal(script.run[0].method, app.stopOwnedStart);
+          if (['install-local', 'add-local', 'stop'].includes(name)) assert.equal(script.run[0].method, app.stopOwnedStart);
+          if (name === 'reset') assert.equal(script.run[0].method, app.stopForRemoval);
+          if (name === 'uninstall') assert.equal(script.run[0].method, app.stopForUninstall);
           if (name === 'add-local') assert.equal(script.run[4].method, app.stopOwnedStart);
           if (name === 'start') {
             assert.equal(script.daemon, true);
@@ -82,7 +84,7 @@ for (const platform of ['darwin', 'linux', 'win32']) {
           if (name === 'uninstall-delete-data') {
             await assert.rejects(script.run[1].method({ input: { confirmation: 'delete' } }), /Cancelled, so nothing was deleted/);
             assert.deepEqual(plain(await script.run[1].method({ input: { confirmation: 'DELETE' } })), { confirmed: true });
-            assert.equal(script.run[2].method, app.stopOwnedStart);
+            assert.equal(script.run[2].method, app.stopForUninstall);
           }
           if (['install-local', 'add-local'].includes(name)) {
             const count = app.writes.length;
@@ -358,8 +360,8 @@ test('Stop and every maintenance caller preserve busy and unknown failures befor
         filesystem: {
           existsSync: () => true,
           readFileSync: (file) => {
-            if (file.endsWith('update-transaction.json')) throw Object.assign(new Error('absent'), { code: 'ENOENT' });
-            return JSON.stringify(file.endsWith('install-mode.json') ? { schema_version: 1, mode } : { schema: 1, pid: 123, port: 1234 });
+            if (file.endsWith('update-transaction.json') || file.endsWith('astrid-install.json')) throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+            return JSON.stringify(file.endsWith('install-mode.json') ? { schema_version: 1, mode } : file.endsWith('install.json') ? { owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: platform === 'win32' ? 'D:\\data' : '/data' } : file.endsWith('catalog.json') ? { selected_realm_id: null, realms: [] } : { schema: 1, pid: 123, port: 1234 });
           },
           rmSync: () => calls.push('remove'), writeFileSync: () => calls.push('write'), mkdirSync: () => calls.push('mkdir'),
         },
@@ -754,7 +756,7 @@ test('maintenance never mutates after failed grace, forced stop or held installe
     const base = fakeApp(platform);
     const filesystem = {
       existsSync: () => true,
-      readFileSync: () => JSON.stringify({ schema_version: 1, mode: 'backend' }),
+      readFileSync: (file) => { if (file.endsWith('update-transaction.json') || file.endsWith('astrid-install.json')) throw Object.assign(new Error('absent'), { code: 'ENOENT' }); return JSON.stringify(file.endsWith('install.json') ? { owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: platform === 'win32' ? 'D:\\data' : '/data' } : file.endsWith('catalog.json') ? { selected_realm_id: null, realms: [] } : { schema_version: 1, mode: 'backend' }); },
       rmSync: () => log.push('remove'),
     };
     const app = { ...library.createApp({ platform, appDirectory: base.APP_DIR, filesystem, environment: {}, probe: async () => ({ kind: 'free' }),
@@ -856,4 +858,103 @@ test('Switch stops on a post-update busy refusal and retries without writing mod
   events.length = 0;
   await execute();
   assert.deepEqual(events, ['stop', 'lock', 'update', 'stop', 'lock', 'build', 'mode']);
+});
+
+test('removal refuses pending updates and program roots overlapping data or selected workspace', async () => {
+  const temp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'astrid-removal-'));
+  try {
+    const appDirectory = path.join(temp, 'api', 'Astrid');
+    const app = library.createApp({ appDirectory, environment: {}, lifecycle: {
+      preflightStop: async () => assert.fail('refusal must precede stop'),
+    } });
+    fs.mkdirSync(app.BACKEND_ROOT, { recursive: true });
+    const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); };
+    const marker = path.join(app.BACKEND_ROOT, 'install.json');
+    const journal = path.join(app.BACKEND_ROOT, 'update-transaction.json');
+    const data = path.join(temp, 'data');
+    write(marker, { owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: data });
+    const kernel = { api: { running: {}, stop: () => assert.fail('must not stop') } };
+    for (const action of ['reset', 'uninstall', 'uninstall-delete-data']) {
+      write(journal, { step: 'switched' });
+      const script = await load(`pinokio/${action}.js`, app)();
+      const step = script.run.find((item) => item.method === (action === 'reset' ? app.stopForRemoval : app.stopForUninstall));
+      await assert.rejects(step.method({}, () => {}, kernel), /update is interrupted/);
+    }
+    fs.writeFileSync(journal, '{invalid');
+    assert.throws(() => app.assertSafeRemoval(), SyntaxError);
+    write(journal, { step: 'complete' });
+    for (const root of [app.PROGRAMS_DIR, path.join(app.PROGRAMS_DIR, 'nested'), appDirectory]) {
+      write(marker, { owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: root });
+      assert.throws(() => app.assertSafeRemoval(), /roots overlap/);
+    }
+    write(marker, { owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: data });
+    write(path.join(data, 'runtime', 'catalog.json'), { selected_realm_id: 'selected', realms: [{ realm_id: 'selected', data_root: path.join(app.PROGRAMS_DIR, 'workspace') }] });
+    assert.throws(() => app.assertSafeRemoval(), /workspace roots overlap/);
+    const alias = path.join(temp, 'alias');
+    fs.symlinkSync(app.PROGRAMS_DIR, alias);
+    write(path.join(data, 'runtime', 'catalog.json'), { selected_realm_id: 'selected', realms: [{ realm_id: 'selected', data_root: path.join(alias, 'workspace') }] });
+    assert.throws(() => app.assertSafeRemoval(), /workspace roots overlap/);
+    write(path.join(data, 'runtime', 'catalog.json'), { selected_realm_id: 'selected', realms: [] });
+    assert.throws(() => app.assertSafeRemoval(), /workspace root is unavailable/);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test('owned partial install reaches the installer, while unowned, live and residual files remain fenced', async () => {
+  const temp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'astrid-partial-'));
+  try {
+    const appDirectory = path.join(temp, 'pinokio', 'api', 'Astrid');
+    const home = path.join(temp, 'home');
+    const app = library.createApp({ appDirectory, environment: { HOME: home }, lifecycle: {
+      preflightStop: async () => { throw new Error('preflight unavailable'); },
+      waitForInstallerLock: async () => assert.fail('partial defers the lock to installer'),
+    } });
+    fs.mkdirSync(app.BACKEND_ROOT, { recursive: true });
+    const marker = path.join(app.BACKEND_ROOT, 'install.json');
+    const selectionFile = path.join(home, '.local', 'share', 'astrid-install.json');
+    const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); };
+    const idle = { api: { running: {}, stop: () => assert.fail('no session') } };
+    await assert.rejects(app.stopForUninstall({}, () => {}, idle), /unowned or incomplete/);
+    write(marker, { owner: 'other', managed_by: 'pinokio', data_root: path.join(temp, 'data') });
+    await assert.rejects(app.stopForUninstall({}, () => {}, idle), /unowned/);
+    assert.ok(fs.existsSync(marker));
+    write(marker, { owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: path.join(temp, 'data') });
+    assert.deepEqual(await app.stopForUninstall({}, () => {}, idle), { partial: true });
+    assert.throws(() => app.finishUninstall(), /could not remove all program files/);
+    write(selectionFile, { realm_root: path.join(app.EDITOR_DIR, 'realm') });
+    await assert.rejects(app.stopForUninstall({}, () => {}, idle), /workspace roots overlap/);
+    write(selectionFile, { data_root: app.EDITOR_DIR });
+    await assert.rejects(app.stopForUninstall({}, () => {}, idle), /data roots overlap/);
+    fs.unlinkSync(selectionFile);
+    fs.writeFileSync(path.join(app.BACKEND_ROOT, 'pinokio-control.json'), '{}');
+    await assert.rejects(app.stopForUninstall({}, () => {}, idle), /preflight unavailable/);
+    fs.unlinkSync(path.join(app.BACKEND_ROOT, 'pinokio-control.json'));
+    const active = { api: { running: { [path.join(appDirectory, 'pinokio', 'start.js')]: true } } };
+    await assert.rejects(app.stopForUninstall({}, () => {}, active), /preflight unavailable/);
+    const menu = load('pinokio.js', { ...app, probeDoor: async () => ({ kind: 'free' }) });
+    const items = await menu.menu({}, { running: () => false, exists: (p) => p === 'app/astrid/install.json', local: () => ({}) });
+    assert.ok(items.some((item) => item.text === 'Uninstall'));
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test('failed owned installation can finish through the installer uninstall route', async () => {
+  const temp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'astrid-recovery-'));
+  try {
+    const app = library.createApp({ appDirectory: path.join(temp, 'pinokio', 'api', 'Astrid'), environment: { HOME: path.join(temp, 'home') }, probe: async () => ({ kind: 'free' }) });
+    fs.mkdirSync(app.BACKEND_ROOT, { recursive: true });
+    fs.writeFileSync(path.join(app.BACKEND_ROOT, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: path.join(temp, 'data') }));
+    fs.writeFileSync(path.join(app.BACKEND_ROOT, 'staged-file'), 'failed before Runtime staging');
+    const script = await load('pinokio/uninstall.js', app)();
+    const calls = [];
+    for (const step of script.run) {
+      if (typeof step.method === 'function') await step.method({}, () => {}, { api: { running: {} } });
+      else if (step.method === 'shell.run') {
+        assert.match(step.params.message, /--uninstall/);
+        calls.push('installer');
+        // Simulate a successful installer-owned removal, including its lock and stop checks.
+        fs.rmSync(app.BACKEND_ROOT, { recursive: true });
+      }
+    }
+    assert.deepEqual(calls, ['installer']);
+    assert.equal(fs.existsSync(app.PROGRAMS_DIR), false);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });

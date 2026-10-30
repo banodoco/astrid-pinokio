@@ -68,6 +68,7 @@ function fixture(platform, mode) {
     PATH: [p.dirname(node), win ? 'C:\\recorded-tools' : '/recorded-tools', win ? 'C:\\Windows\\System32' : '/usr/bin'].join(win ? ';' : ':'),
     RECORDED_VALUE: 'kept' };
   const files = new Map([
+    [p.join(data, 'runtime', 'catalog.json'), JSON.stringify({ selected_realm_id: null, realms: [] })],
     [p.join(root, 'current'), 'v1'],
     [p.join(root, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: data })],
     [p.join(version, 'version.json'), JSON.stringify({ root: version, python: p.join(version, 'py', win ? 'Scripts/python.exe' : 'bin/python'), profile: p.join(version, 'profile.json'), env: recordEnv })],
@@ -176,6 +177,8 @@ for (const platform of ['darwin', 'linux', 'win32']) for (const mode of ['backen
       },
     } });
     for (const name of scripts) {
+      let removedBackend = false;
+      f.filesystem.existsSync = (file) => !(removedBackend && file === f.root);
       if (name === 'add-local' && mode === 'local') continue;
       const factory = load(name, app);
       const script = typeof factory === 'function' ? await factory({}, {}) : factory;
@@ -198,6 +201,7 @@ for (const platform of ['darwin', 'linux', 'win32']) for (const mode of ['backen
               const child = new EventEmitter(); queueMicrotask(() => child.emit('close', 0)); return child;
             },
           });
+          if ((name === 'uninstall' || name === 'uninstall-delete-data') && message.includes('--uninstall')) removedBackend = true;
           if (message.includes('session.mjs')) await sessionProcesses(f, message.includes("'build'") ? 'build' : 'serve', message.includes("'local'") ? 'local' : 'backend');
         }
       }
@@ -304,6 +308,7 @@ test('older Pinokio tool/cache records refuse Start and block Reset before mutat
   for (const platform of ['darwin', 'linux', 'win32']) {
     const f = fixture(platform, 'backend');
     const filesystem = { ...f.filesystem, readFileSync(file) {
+      if (file.endsWith('catalog.json')) return JSON.stringify({ selected_realm_id: null, realms: [] });
       const bytes = f.filesystem.readFileSync(file);
       if (file.endsWith('version.json')) {
         const record = JSON.parse(bytes);
