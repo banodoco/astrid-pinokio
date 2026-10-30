@@ -460,15 +460,16 @@ async function runHosted() {
     assert.equal(await freePort(5180), true, 'port 5180 remained open after Stop');
 
     await invokeAction('update', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    verifyInstallRecords(app, pinokioHome, 'backend update');
-    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
     health = await step('Update READY: hosted health immediately after Update', () => requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment }));
     assert.equal(health.status, 200, JSON.stringify(health.body));
     assert.equal(health.body.install?.managed_by, 'pinokio', JSON.stringify(health.body));
+    verifyInstallRecords(app, pinokioHome, 'backend update');
+    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
 
     await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
     assert.equal(await freePort(17340), true, 'port 17340 remained open after stopping the Update-launched session');
     await invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    assert.ok(daemon, 'the separate Start must own a fresh Pinokio Start shell');
     health = await step('restarted hosted health', () => requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment }));
     assert.equal(health.status, 200, JSON.stringify(health.body));
 
