@@ -37,7 +37,8 @@ module.exports = {
     }
     if (port.kind === 'astrid') return [infoItem('Astrid is already running on this computer. Use Open Astrid, or stop that copy to run Astrid from Pinokio.'), openItem(app.modeOpenTarget('backend'))];
     if (port.kind === 'occupied') return [infoItem("Another program is using port 17340, so Astrid can't start. Close it, then try again.")];
-    if (!installed) return [item('Install', 'install', 'download'), item('Install fully local', 'install-local', 'laptop')];
+    if (!installed) return [item('Install', 'install', 'download'), item('Install fully local', 'install-local', 'laptop'),
+      ...(info.exists('app/astrid/install.json') ? [item('Uninstall', 'uninstall', 'trash-can-arrow-up')] : [])];
     const items = [item('Start', 'start', 'play'), item('Update', 'update', 'rotate')];
     items[0].default = true;
     if (mode === 'backend') items.push(item('Switch to fully local', 'add-local', 'laptop'));
