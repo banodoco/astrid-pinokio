@@ -316,6 +316,11 @@ test('Update performs only installed-CLI recovery before any new launcher or man
   assert.equal(invoked.command, old.python, 'legacy journals without a candidate fall back to current');
 
   const chunks = [];
+  const installerOutput = [
+    "Astrid is still running. Choose Pinokio's Stop button, then try again.\n",
+    'Recovered your previous version — run Update again\n',
+    'Choose Update to finish\n',
+  ];
   let releaseChild;
   let childStarted;
   const started = new Promise((resolve) => { childStarted = resolve; });
@@ -328,7 +333,12 @@ test('Update performs only installed-CLI recovery before any new launcher or man
       child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
       child.stdout.setEncoding = () => {}; child.stderr.setEncoding = () => {};
       child.kill = () => child.emit('close', null, 'SIGTERM');
-      releaseChild = () => { child.stdout.emit('data', 'recovering\n'); child.stderr.emit('data', 'ready\n'); child.emit('close', 0, null); };
+      releaseChild = () => {
+        child.stdout.emit('data', installerOutput[0]);
+        child.stderr.emit('data', installerOutput[1]);
+        child.stdout.emit('data', installerOutput[2]);
+        child.emit('close', 0, null);
+      };
       childStarted();
       return child;
     },
@@ -339,7 +349,7 @@ test('Update performs only installed-CLI recovery before any new launcher or man
   assert.deepEqual(chunks, [], 'the child remains asynchronous while Pinokio can process events');
   releaseChild();
   assert.deepEqual(await streamed, { recovered: true });
-  assert.deepEqual(chunks, ['recovering\n', 'ready\n']);
+  assert.deepEqual(chunks, installerOutput);
 
   const forged = { ...candidate, root: path.join(temporary, 'outside') };
   fs.writeFileSync(path.join(root, 'update-transaction.json'), JSON.stringify({ format: 'astrid-install-update/v1', step: 'stopping', candidate: forged }));
