@@ -14,7 +14,7 @@ Pinokio seeds its generated `ENVIRONMENT` from `_ENVIRONMENT`. The launcher read
 
 Remote bootstrap commands download the script into a temporary directory before executing it. Ref commands download the manifest there too. POSIX uses `curl -fsSL URL -o FILE` and `sh FILE`; Windows uses TLS 1.2, `Invoke-WebRequest -UseBasicParsing URL -OutFile FILE`, and `& ([scriptblock]::Create((Get-Content -Raw -LiteralPath FILE)))`. The surrounding POSIX EXIT trap / PowerShell finally removes the temporary directory.
 
-Every installer invocation passes `--root R --managed-by pinokio`. Hosted Update uses `--update-app`: one installer process stages the candidate while Astrid runs and owns the short stop/switch/start sequence. The existing workspace is retained; a changed storage schema refuses before stopping and directs the user to the full migration updater. A supervisor started by the updater retains the ordinary authenticated control endpoint, so the menu can open, update, and stop it. Update adds `--update`. Uninstall adds `--uninstall`; only the typed-delete action additionally passes `--delete-data`.
+Every installer invocation passes `--root R --managed-by pinokio`. Hosted Update calls the shared C2 transaction through the ordinary `install` dispatch, which stages and validates its candidate before Runtime's final fenced stop, then starts and verifies the foreground session. Fully local Update keeps the existing route: stop the owned session, pull the editor checkout, invoke its installer with `--update --manifest M`, and build before the next Start. Uninstall adds `--uninstall`; only the typed-delete action additionally passes `--delete-data`.
 
 The current POSIX bootstrap honors a supplied manifest before preparing tool/source pins, so it can run from raw GitHub without an astrid.haus manifest request. It uses absolute public uv/GitHub download URLs, not a URL relative to its own script. The source smoke runs its actual bytes with fake curl, uv and package operations. Windows has the equivalent manifest-selection logic; its native execution remains unqualified here.
 
@@ -27,11 +27,11 @@ The shell is Bash on macOS/Linux and PowerShell on Windows. `B(action)` below me
 | Script | Back-end-only mode | Fully local mode |
 | --- | --- | --- |
 | `install.js` | Port preflight; create `A/app`; `B(install)`; save `backend` | — |
-| `install-local.js` | — | Port preflight; create `A/app`; clone or validate/pull editor; `L(install)`; temporary build session; save `local` |
-| `add-local.js` | Await Stop and lock release; port preflight; clone or validate/pull editor; `L(update)`; temporary build session; save `local` | Refuses |
-| `update.js` | Pull launcher; `B(update-app)` stages while live, verifies unchanged storage schema, switches/restarts, and restores the prior application if startup fails | Await Stop and lock release; port preflight; validate/pull editor; `L(update)`; temporary build session |
+| `install-local.js` | — | If re-invoked on an existing install/session, safe Stop first; port preflight; create `A/app`; clone or validate/pull editor; `L(install)`; temporary build session; save `local` |
+| `add-local.js` | Await Stop and lock release; port preflight; clone or validate/pull editor; `L(update)`; stop the backend session started by Update; temporary build session; save `local` | Refuses |
+| `update.js` | Read-only Runtime stop preflight; pull launcher; `B(install)` shared transaction, which stages before its final fenced stop and starts/verifies the foreground session | Await Stop and lock release; pull launcher; port preflight; validate/pull editor; `L(update)`; temporary build session; choose Start afterwards |
 | `start.js` | Port preflight; foreground hosted session; publish hosted URL after readiness | Port preflight; foreground local session; publish local URL after readiness |
-| `stop.js` | Request graceful stop; await `kernel.api.stop({params:{uri: A/pinokio/start.js}})`; wait for the per-user installer lock | Same; editor before Runtime |
+| `stop.js` | Preflight, await Runtime's final fenced stop, then stop the Start shell and verify the per-user installer lock | Same adapter ordering; native refusal veto remains an upstream dependency |
 | `reset.js` | Await Stop and lock release; recursively remove only `A/app` | Same; no bootstrap/uninstaller |
 | `uninstall.js` | Await Stop and lock release; port preflight; `B(uninstall)`; remove `A/app` | Same |
 | `uninstall-delete-data.js` | Require exact `DELETE`; await Stop; port preflight; `B(uninstall --delete-data)`; remove `A/app` | Same |
@@ -92,7 +92,7 @@ The editor gets the allowlisted base and installed version's environment plus ex
 
 Local sessions additionally set `ASTRID_APP_LOOPBACK_ORIGIN=off`. Hosted sessions clear that variable. `ASTRID_START_COMMAND` names the actual `R/run` or `R/run.cmd`, for diagnostics only. The installer does not provide `start` or `with-env`. An upstream editor error hint still derives nonexistent `with-env` from this variable; actual attach/start resolution uses the explicit Python/profile/data environment, not that hint.
 
-The editor's `--build` requires a live Runtime and does not run `up`. A build session installs npm dependencies, starts one foreground Runtime with its door off, waits for Runtime status, builds, then invokes the installed Runtime’s `down` and drains its owned child in `finally`. npm/build failures and interruption also enter cleanup. It never publishes an Open URL or switches mode on a failed shell step.
+The editor's `--build` requires a live Runtime and does not run `up`. A build session installs npm dependencies, starts one foreground Runtime with its door off, waits for Runtime status, builds, then invokes the installed Runtime’s `down` before draining its owned children. npm/build failures and interruption also enter cleanup. If cleanup is refused as busy or unknown, the supervisor and controller stay available for a successful retry before the failed build returns. It never publishes an Open URL or switches mode on a failed shell step.
 
 Normal local Start runs the foreground Runtime first, waits for status, then starts preview. `dev-local-workspace` validates discovery/credentials/schema/realm and attaches before starting its proxy/Vite server. `ASTRID_START_COMMAND` is not a mechanism for starting or attaching to Runtime. The editor can call `astrid-runtime up` itself if it loses discovery; the supervisor watches its owned Runtime and tears down the editor if that process exits. That custody race is a native qualification item.
 
@@ -114,22 +114,24 @@ After these checks the supervisor emits `ASTRID_PINOKIO_READY`. Pinokio's `done:
 | Installed backend, stopped | Start; Update; Switch to fully local; Reset; Uninstall; Uninstall and delete all Astrid data… |
 | Installed local, stopped | Start; Update; Reset; Uninstall; Uninstall and delete all Astrid data… |
 | Start running, no published URL | Starting Astrid…; Stop |
-| Ready owned Start | Open Astrid; Update and restart (hosted mode); Stop |
+| Ready owned Start | Open Astrid; Update and restart (hosted) or Update (local); Stop |
+| Detached owned local session, ready | Open Astrid; Update; Stop |
+| Detached owned local session, not ready | Starting Astrid…; Stop |
 | Install/add/update/reset/uninstall/delete/stop active | Operation status only |
 | External Astrid on 17340 | Explanation; Open Astrid only (hosted URL) |
 | Other program on 17340 | Conflict message only |
 
-Start is the default stopped menu item. Hosted Open displays `https://astrid.haus/?connect=1` in Pinokio's popout panel; its relative href keeps Pinokio's default-selection scheme check on the app page, and `target_full` carries the hosted URL. The panel opens the browser only after a click. Local Open is `http://127.0.0.1:5180/tools/video-editor?connect=1`, `popout: false`. The owned running menu reads the published URL and does not synthesize Open while startup is pending; once ready, Open Astrid is the default menu item.
+Start is the default stopped menu item. Hosted Open displays `https://astrid.haus/?connect=1` in Pinokio's popout panel; its relative href keeps Pinokio's default-selection scheme check on the app page, and `target_full` carries the hosted URL. The panel opens the browser only after a click. Local Open is `http://127.0.0.1:5180/tools/video-editor?connect=1`, `popout: false`. A detached local session is shown as ready only after Runtime status, preview HTTP, and workspace instance/realm binding checks succeed; it does not probe the hosted door port. The owned running menu reads the published URL and does not synthesize Open while startup is pending; once ready, Open Astrid is the default menu item.
 
 ## Stop hook, graceful shutdown and installer lock
 
-Verified source: pinokiod `add4a674ad1ba95bb62ec427fce519fe5bf0e9bf`.
+Inspected historical source: pinokiod `add4a674ad1ba95bb62ec427fce519fe5bf0e9bf` (package 8.1.1, fetched from its upstream repository for this review). The deployed Pinokio build is unknown.
 
-- `kernel/api/index.js:599-602` does `await this.process(script.on.stop)` **before** `:617-622` kills the script's shell groups. There is no daemon exclusion, so it applies to Start's daemon script.
+- `kernel/api/index.js:599-602` awaits `this.process(script.on.stop)` before `:617-622` kills the script's shell groups. However the direct-method process path catches and logs hook errors instead of rethrowing them (`:2104-2114`), after which `api.stop` still kills the shell groups. A refused hook therefore does **not** veto native Stop in this inspected version.
 - An `on.stop` request with a `uri` does not wait for all script steps: the URI branch of `process()` calls `this.queue(...)` at `:2035` and returns. The direct-method branch instead awaits `this.run(...)` at `:2086`. Therefore Start declares a direct **`shell.run`** hook, not a URI to another script. `shell.run` is itself awaited by its kernel API implementation.
 - `kernel/api/script/index.js:stop` does not await `kernel.api.stop`; the menu and maintenance helper therefore await `kernel.api.stop` directly.
-- `kernel/shell.js:1591,1606` recursively force-kills with `kill-sync(ptyPid, 'SIGKILL', true)` after the hook. That remains the final fallback.
-- **Quit has no script stop hook in this version.** `server/index.js:486-505` calls `kernel.shell.reset()` and then recursively kills the daemon; it never calls `kernel.api.stop`. `kernel/shells.js:reset` directly kills shells. SIGKILL cannot run a launcher handler. Use Stop before quitting for a graceful shutdown on this Pinokio revision; an upstream quit-hook change is required to make direct quit graceful.
+- `kernel/shell.js:1591,1606` recursively force-kills shell groups with SIGKILL after the hook.
+- **Quit bypasses the stop hook** in this inspected version: `server/index.js:486-505` resets shells and kills the daemon directly. The inspected SIGINT/SIGTERM handlers also shut down the server and shell tree. No native Pinokio Stop, Quit, or signal path is proven to preserve a busy Runtime. The matching deployed version and an upstream refusal-veto contract remain unresolved; do not treat these native paths as safe during active work.
 
 `start.js` includes `on: { stop: <direct shell.run request> }`, even when the install mode is missing. The hook resolves the current pinned Node using the same version-record command as Start, then runs:
 
@@ -141,7 +143,7 @@ Full Bash/PowerShell resolution and wrapper bytes are the `stopHook` entries in 
 
 ### Exact stop sequence
 
-For both modes, a confirmed owned Runtime is stopped using the **installed version's Python**, profile and data root, with the installed environment:
+Before that final fenced `down`, Pinokio invokes the installed Python with `-I -c` to call the read-only `astrid_runtime.bootstrap.preflight_stop(RuntimePaths.current(data_root=...))`. It uses the same installed version, environment and recorded data root. Missing API, unreadable result, timeout, or unsafe report is a refusal. This report is an early check only; `down` remains the sole stop authority. The final `down` uses:
 
 ```text
 <record.python> -I -m astrid_runtime down --profile astrid --data-root <install.data_root> --source-manifest <record.profile> --json
@@ -151,22 +153,26 @@ The Python is normally `R/versions/<current>/py/bin/python` on macOS/Linux and `
 
 | Phase | macOS / Linux | Windows |
 | --- | --- | --- |
-| Local editor, if present | Send SIGTERM to the owned editor process group; wait up to 5 seconds for the wrapper's cleanup to finish. If it hangs, leave its root alive for Pinokio's recursive final kill and skip Runtime down. | `System32\taskkill.exe /PID <owned-editor-wrapper-pid> /T /F`; await completion and editor exit, bounded by 8 seconds. |
-| Runtime | Execute the installed Python `down` command above, bounded by 25 seconds. Then wait up to 5 seconds for the owned foreground child to exit and release its lifetime lock. | Same Python argument array and bounds. The foreground child is the owned `cmd.exe /d /s /c` / `run.cmd` tree. |
-| Forced fallback | After the hook returns or its request expires, Pinokio recursively SIGKILLs any remaining shell tree. | Pinokio's recursive forced tree termination and PTY/ConPTY cleanup. |
+| Runtime | Run read-only preflight, then execute the final fenced `down`, bounded by 25 seconds. Wait up to 5 seconds for the owned foreground child to exit. | Same Python argument array and bounds. The foreground child is the owned `cmd.exe /d /s /c` / `run.cmd` tree. |
+| Local editor and remaining owned children | Only after `down` succeeds, terminate the editor/temporary children and wait for them to exit. | Only after `down` succeeds, use `taskkill /T /F` for the owned child tree. |
+| Refusal | Busy, unknown, unreadable, or timed-out shutdown returns failure before editor termination, Runtime termination, controller close, forced tree cleanup, or lock cleanup. The same controller remains available for retry. | Same refusal behavior in the Astrid adapter. Native Pinokio may still kill after swallowing the error; the upstream veto dependency is unresolved. |
 | Maintenance/Stop menu lock gate | Execute the installed Python lock verifier below; wait for the actual per-user lock to become available. | Same verifier, using Runtime's Windows lock implementation. |
 
-A Stop before Runtime readiness has no validated Runtime identity to down: it TERM-signals only the owned foreground child, with bounded cleanup, instead of targeting any stale or external discovery. An already exited Runtime is not downed. Requests share one shutdown promise; they cannot issue duplicate down commands.
+When a Runtime child exists, Stop does not signal it directly, including before readiness. Requests share an in-flight shutdown promise; a failed request clears that promise so the same session can retry. Successful repeated requests are idempotent.
 
-The control request has a 45-second deadline. The down command is killed if its 25-second budget expires. A failed down or hung editor leaves remaining owned processes for Pinokio's final tree kill. The hook finishes even after graceful failure so forced cleanup can proceed.
+An authenticated `/stop` request may carry exactly `{ "c1": "stopped" }` as data after Backend C1 has completed the selected Runtime stop. The supervisor then waits for its owned Runtime child to exit and drains the remaining children without a second `down`. Malformed, oversized, or extra-key reports follow the ordinary preflight and fenced `down` path. A completed `down` is retained within that supervisor so an editor-cleanup retry does not issue another stop.
 
-The Stop menu, Update, Reset, Uninstall, typed data deletion and Switch to fully local (`add-local.js`) all call the same `stopOwnedStart` function:
+The control request has a 45-second deadline. The preflight and final `down` have a 25-second process deadline. A failed preflight or `down` leaves the editor, Runtime, controller, and remaining session processes available for retry; Astrid does not invoke Pinokio's forced cleanup itself.
 
-1. If this Start script is active, request graceful shutdown directly and retain its result. This is necessary because Pinokio's direct-method hook dispatch logs failures but does not propagate them to `api.stop`'s caller.
-2. Always await `kernel.api.stop` for the absolute Start URI, even after graceful failure. Its native stop hook repeats the same idempotent request; normally the completed supervisor record is already gone and this is a no-op.
-3. Wait for the actual installer lock, even when Start was already idle. A failed grace/force/lock check throws **“Astrid is still running. Stop it in Pinokio, then try again.”** and prevents subsequent Git/bootstrap/build/removal/mode-write steps. A successful forced fallback does not conceal a graceful failure; retrying after cleanup can proceed.
+The Stop menu, Reset, Uninstall, typed data deletion and Switch to fully local (`add-local.js`) call the same `stopOwnedStart` function:
 
-If the controller is completely unresponsive, the direct request and the hook request can each consume their 45-second bound before forced cleanup. Lock verification then has its own 10-second poll budget and 12-second subprocess deadline. These are production operation bounds; no test has a harness timeout.
+1. Run the read-only preflight, then request the controller's final Runtime `down` and retain its result.
+2. Call `kernel.api.stop` only after successful Runtime shutdown. Busy, unknown, and timeout errors return before native tree cleanup or lock checks.
+3. Wait for the actual installer lock after successful stop, even when Start was already idle. These maintenance steps do not pull, bootstrap, build, remove files, or save a mode after refusal. Hosted Update runs a read-only preflight before launcher preparation; its shared installer transaction performs candidate staging before the final Runtime fence. Fully local Update follows the maintenance stop path before pulling the editor.
+
+If the controller is unresponsive, its request fails closed. Astrid leaves the session intact and permits another Stop request. Lock verification has a 10-second poll budget and 12-second subprocess deadline after a successful shutdown. These are production operation bounds; no test has a harness timeout.
+
+An active Start with no controller refuses native cleanup. If controller shutdown succeeded but native `kernel.api.stop` then failed, a later request with an absent controller also fails closed; absence cannot authorize another forced tree kill. Resolving that native partial-cleanup case requires upstream ownership evidence. No unbound success flag or persisted cleanup authority is added here.
 
 ### Installer lock gate
 
@@ -188,4 +194,4 @@ The verifier imports `astrid.installer.service.installer_lock_path(Path.home(), 
 
 The lock is **not** beneath `R` and is not the Runtime data-root owner lock. The probe polls nonblocking acquisition for up to 10 seconds, then releases it immediately. The subsequent installer remains responsible for reacquiring it for its transaction; if a different installer/Runtime wins that race its own fail-fast refusal remains authoritative. Reset does not remove files until verification succeeds. An existing partial app without a usable installed verifier fails closed. With no program directory there is no removal to protect.
 
-Direct SIGINT/SIGTERM/SIGHUP/SIGBREAK interruption and temporary build completion also stop non-Runtime children first, attempt installed `down` after established readiness, then drain owned children themselves, because those paths may have no Pinokio forced fallback. POSIX cleanup has TERM/KILL group escalation; Windows uses `taskkill /T /F`. Native process/PTY/ConPTY and durable-work reconciliation remain in the qualification checklist.
+Direct SIGINT/SIGTERM/SIGHUP/SIGBREAK interruption and temporary build completion also run read-only preflight and final Runtime `down` before child cleanup. Refusal leaves the processes and controller alive. POSIX cleanup has TERM/KILL group escalation after successful shutdown; Windows uses `taskkill /T /F`. Native process/PTY/ConPTY and durable-work reconciliation remain in the qualification checklist.

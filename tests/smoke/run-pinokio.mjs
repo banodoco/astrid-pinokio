@@ -462,10 +462,15 @@ async function runHosted() {
     await invokeAction('update', app, appDirectory, environment, pinokioHome, getDaemon, stop);
     verifyInstallRecords(app, pinokioHome, 'backend update');
     await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
-    await invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    health = await step('updated hosted health', () => requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment }));
+    health = await step('Update READY: hosted health immediately after Update', () => requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment }));
     assert.equal(health.status, 200, JSON.stringify(health.body));
     assert.equal(health.body.install?.managed_by, 'pinokio', JSON.stringify(health.body));
+
+    await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    assert.equal(await freePort(17340), true, 'port 17340 remained open after stopping the Update-launched session');
+    await invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    health = await step('restarted hosted health', () => requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment }));
+    assert.equal(health.status, 200, JSON.stringify(health.body));
 
     await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
     assert.equal(await freePort(17340), true, 'port 17340 remained open after the second Stop');
@@ -516,9 +521,19 @@ async function runFullyLocal() {
     assert.equal(await freePort(17340), true, 'port 17340 remained open after fully local Stop');
     assert.equal(await freePort(5180), true, 'port 5180 remained open after fully local Stop');
     await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
+
+    await invokeAction('update', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    assert.equal(await freePort(5180), true, 'fully local Update unexpectedly started the editor');
+    await invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    const restartedPage = await step('local editor after separate Start', () => runTool('curl', ['--max-time', '30', '--silent', '--show-error', '--write-out', '\n%{http_code}',
+      'http://127.0.0.1:5180/tools/video-editor'], environment));
+    assert.equal(Number(restartedPage.trim().split(/\r?\n/).at(-1)), 200, 'local editor did not become ready after Start');
+    await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    assert.equal(await freePort(5180), true, 'port 5180 remained open after the final local Stop');
+    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
     assert.deepEqual(cacheAstridPaths(cacheDirectory), [],
       `Astrid-owned files were created under Pinokio cache: ${cacheAstridPaths(cacheDirectory).join(', ')}`);
-    log('PASS: fully local install, build, editor proxy, hosted door off, and Stop');
+    log('PASS: fully local install, Update, separate Start, hosted door off, and Stop');
   } finally {
     if (daemon) await step('cleanup Start process', stop);
     fs.rmSync(pinokioHome, { recursive: true, force: true });

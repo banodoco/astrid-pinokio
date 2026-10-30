@@ -134,14 +134,16 @@ function checkPinokioEnvironment(env, f) {
 }
 
 async function sessionProcesses(f, action, mode) {
-  let pid = 6000, statuses = 0, stop;
+  let pid = 6000, statuses = 0, stop, runtimeChild;
   const active = new Map();
   const close = (child) => { active.delete(child.pid); child.emit('close', 0); };
   await runSession({ action, mode, root: f.root, editor: f.editor, platform: f.platform, installed: f.installed,
+    checkStop: async () => ({ safe: true }),
     signals: new EventEmitter(), pause: async () => {}, portOpen: async () => false,
     spawnProcess(command, args, options) {
       checkEnvironment(options.env, f, true);
       const child = new EventEmitter(); child.pid = ++pid; child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); active.set(pid, child);
+      if (command.endsWith('/run') || command.endsWith('cmd.exe')) runtimeChild = child;
       queueMicrotask(() => {
         if (args.includes('status')) {
           const healthy = statuses++ > 0;
@@ -153,7 +155,7 @@ async function sessionProcesses(f, action, mode) {
       return child;
     },
     killProcess: (group) => { const child = active.get(-group); if (child) close(child); },
-    gracefulDown: async (_spec, options) => { checkEnvironment(options.env, f, true); for (const child of [...active.values()]) close(child); },
+    gracefulDown: async (_spec, options) => { checkEnvironment(options.env, f, true); if (runtimeChild && active.has(runtimeChild.pid)) close(runtimeChild); },
     openController: async (_root, callback) => { stop = callback; return { close: async () => {} }; },
     request: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok', protocol: 'workspace.v1', schemaVersion: 1, runtimeInstanceId: 'fixture', realmId: 'fixture' }) }),
     output: () => { void stop(); },
@@ -167,6 +169,7 @@ for (const platform of ['darwin', 'linux', 'win32']) for (const mode of ['backen
     let lockChecks = 0;
     const app = library.createApp({ ...f, probe: async () => ({ kind: 'free' }),
       execute: (_command, _args, options) => { checkPinokioEnvironment(options.env, f); return { status: 0, stdout: library.EDITOR_REPOSITORY }; }, lifecycle: {
+      preflightStop: async () => ({ safe: true, blockers: [] }),
       requestGracefulStop: async () => {},
       waitForInstallerLock: async (root, options) => {
         await waitForInstallerLock(root, { ...options, installed: f.installed, run: async (_spec, options) => { checkEnvironment(options.env, f, true); lockChecks++; } });
@@ -297,7 +300,7 @@ test('native shell wrapper strips a Pinokio environment at the real child bounda
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
-test('older Pinokio tool/cache records refuse Start while Reset still checks the lock with a clean environment', async () => {
+test('older Pinokio tool/cache records refuse Start and block Reset before mutation when preflight is unavailable', async () => {
   for (const platform of ['darwin', 'linux', 'win32']) {
     const f = fixture(platform, 'backend');
     const filesystem = { ...f.filesystem, readFileSync(file) {
@@ -316,6 +319,7 @@ test('older Pinokio tool/cache records refuse Start while Reset still checks the
     const order = [];
     filesystem.rmSync = () => order.push('remove');
     const app = library.createApp({ ...f, filesystem, lifecycle: {
+      preflightStop: async () => { order.push('preflight'); throw new Error('Runtime stop preflight is unavailable for this installation.'); },
       waitForInstallerLock: (root, options) => waitForInstallerLock(root, { ...options, run: async (spec, options) => {
         order.push('lock');
         assert.equal(spec.command, f.installed.python);
@@ -329,7 +333,7 @@ test('older Pinokio tool/cache records refuse Start while Reset still checks the
       } }),
     } });
     const script = await load('reset', app)({}, {});
-    for (const step of script.run) await step.method({}, () => {}, { api: { running: {} } });
-    assert.deepEqual(order, ['lock', 'remove']);
+    await assert.rejects(script.run[0].method({}, () => {}, { api: { running: {} } }), /Runtime stop preflight is unavailable/);
+    assert.deepEqual(order, ['preflight']);
   }
 });

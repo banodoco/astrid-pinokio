@@ -6,12 +6,12 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import app from './lib.js';
 import policy from './environment.js';
-import { bounded, createController, DOWN_MS, runCommand } from './lifecycle.mjs';
+import { bounded, createController, DOWN_MS, preflightStop, runCommand } from './lifecycle.mjs';
 
-export function installationFiles(root, { platform = process.platform, filesystem = fs } = {}) {
+export function installationFiles(root, { platform = process.platform, filesystem = fs, versionOverride } = {}) {
   const p = platform === 'win32' ? path.win32 : path.posix;
   const read = (file) => JSON.parse(filesystem.readFileSync(file, 'utf8'));
-  const version = filesystem.readFileSync(p.join(root, 'current'), 'utf8').trim();
+  const version = versionOverride ?? filesystem.readFileSync(p.join(root, 'current'), 'utf8').trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(version)) throw new Error('Invalid Astrid version pointer.');
   const versionRoot = p.join(root, 'versions', version);
   const record = read(p.join(versionRoot, 'version.json'));
@@ -31,7 +31,7 @@ export function installationFiles(root, { platform = process.platform, filesyste
   for (const file of [node, npm, npx, record.python, record.profile]) {
     if (!filesystem.existsSync(file)) throw new Error(`Astrid installed file is missing: ${file}`);
   }
-  return { node, npm, npx, python: record.python, profile: record.profile, data: install.data_root, env: record.env };
+  return { node, npm, npx, python: record.python, profile: record.profile, data: install.data_root, env: record.env, record };
 }
 
 export function installation(root, { platform = process.platform, filesystem = fs, environment = process.env,
@@ -84,6 +84,49 @@ export function commands(root, editor, mode, installed, platform = process.platf
 }
 const environmentCmd = (env) => env.ComSpec || env.COMSPEC || path.win32.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows', 'System32', 'cmd.exe');
 
+export function runtimeStatusHealthy(status, operationId) {
+  return status?.support?.healthy === true && !status.stale_discovery && status.health?.status === 'ok'
+    && (!operationId || (status.discovery?.installer_operation_id === operationId
+      && Boolean(status.discovery?.active_realm) && Boolean(status.discovery?.runtime_instance_id)));
+}
+
+export async function localPreviewReady(discovery, { request = fetch } = {}) {
+  try {
+    const response = await request('http://127.0.0.1:5180/tools/video-editor', { signal: AbortSignal.timeout(2500) });
+    if (!response.ok) return false;
+    const config = await request('http://127.0.0.1:5180/runtime-config/v1/workspace.json', { signal: AbortSignal.timeout(2500) });
+    const binding = await config.json();
+    return config.ok && binding.schemaVersion === 1 && Boolean(discovery?.runtime_instance_id)
+      && Boolean(discovery?.active_realm)
+      && binding.runtimeInstanceId === discovery.runtime_instance_id && binding.realmId === discovery.active_realm;
+  } catch { return false; }
+}
+
+export async function localSessionReady({ root, editor, platform = process.platform,
+  installed = installation(root, { platform }), request = fetch, run = runCommand } = {}) {
+  try {
+    const operationId = installed.env.ASTRID_INSTALLER_OPERATION_ID ?? process.env.ASTRID_INSTALLER_OPERATION_ID;
+    if (operationId !== undefined && (typeof operationId !== 'string' || !/^[0-9a-f]{32}$/.test(operationId))) return false;
+    const statusOutput = await run(commands(root, editor, 'local', installed, platform).status,
+      { env: installed.env, cwd: root, timeoutMs: 5000 });
+    const status = JSON.parse(statusOutput);
+    if (!runtimeStatusHealthy(status, operationId)) return false;
+    return localPreviewReady(status.discovery, { request });
+  } catch { return false; }
+}
+
+export function parseSessionOptions(argument = '{}') {
+  let options;
+  try { options = JSON.parse(argument); }
+  catch { throw new Error('Invalid session options.'); }
+  if (!options || typeof options !== 'object' || Array.isArray(options)
+    || Object.keys(options).some((key) => key !== 'prepareEditor')
+    || (Object.hasOwn(options, 'prepareEditor') && typeof options.prepareEditor !== 'boolean')) {
+    throw new Error('Invalid session options.');
+  }
+  return { prepareEditor: options.prepareEditor ?? false };
+}
+
 // On macOS a disappearing/zombie-only process group can report EPERM rather
 // than ESRCH. Ignore that only after ps confirms no live group members remain.
 export function signalGroup(pid, signal, { killProcess = process.kill.bind(process),
@@ -104,24 +147,39 @@ export function signalGroup(pid, signal, { killProcess = process.kill.bind(proce
 
 export async function runSession({ action, root, editor, mode, platform = process.platform,
   installed = installation(root), spawnProcess = spawn, request = fetch,
+  checkStop = preflightStop,
   portOpen = app.tcpPortOpen, pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   killProcess = process.kill.bind(process), signals = process, output = console.log,
   startupDeadlineMs = 180_000, openController = createController, gracefulDown = runCommand,
-  limit = bounded } = {}) {
+  limit = bounded, prepareEditor = false } = {}) {
   if (!['serve', 'build'].includes(action) || !['backend', 'local'].includes(mode)) throw new Error('Invalid Astrid session arguments.');
+  if (prepareEditor && (action !== 'serve' || mode !== 'local')) throw new Error('Editor preparation requires a local serve session.');
   const specs = commands(root, editor, mode, installed, platform);
   const env = { ...installed.env };
+  const operationId = installed.env.ASTRID_INSTALLER_OPERATION_ID ?? process.env.ASTRID_INSTALLER_OPERATION_ID;
+  if (operationId !== undefined) {
+    if (typeof operationId !== 'string' || !/^[0-9a-f]{32}$/.test(operationId)) throw new Error('Invalid installer transaction operation id.');
+    env.ASTRID_INSTALLER_OPERATION_ID = operationId;
+  }
   if (mode === 'local') env.ASTRID_APP_LOOPBACK_ORIGIN = 'off';
   else delete env.ASTRID_APP_LOOPBACK_ORIGIN;
   const children = [];
   let stopping = false;
+  let downInProgress = false;
+  let runtimeDown = false;
   let discovery;
   let runtimeItem;
   let editorItem;
   let controller;
+  let stopComplete = false;
+  let shutdownPromise;
+  let stopRequestPromise;
   let stopRequested = false;
-  let cleanupPromise;
+  let serveInterruptedByStop = false;
+  let finishStop;
+  const stopFinished = new Promise((resolve) => { finishStop = resolve; });
   let failure;
+  let runtimeExitFailure;
   let wakeFailure;
   const failed = new Promise((_, reject) => { wakeFailure = reject; });
   failed.catch(() => {});
@@ -138,7 +196,13 @@ export async function runSession({ action, root, editor, mode, platform = proces
       child.once('error', (error) => { item.closed = true; reject(error); if (persistent) fail(error); });
       child.once('close', (code, signal) => {
         item.closed = true;
-        if (persistent && !stopping) fail(new Error(`Astrid quit unexpectedly (${signal || code}).`));
+        item.exitCode = code;
+        item.exitSignal = signal;
+        if (persistent && !stopping && !(item === runtimeItem && downInProgress)) {
+          const error = new Error(`Astrid quit unexpectedly (${signal || code}).`);
+          if (item === runtimeItem) runtimeExitFailure = error;
+          fail(error);
+        }
         resolve(code);
       });
     });
@@ -159,7 +223,7 @@ export async function runSession({ action, root, editor, mode, platform = proces
     if (code !== 0) return false;
     try {
       const status = JSON.parse(item.stdout);
-      const healthy = status.support?.healthy === true && !status.stale_discovery && status.health?.status === 'ok';
+      const healthy = runtimeStatusHealthy(status, operationId);
       if (healthy) discovery = status.discovery;
       return healthy;
     } catch { return false; }
@@ -195,52 +259,78 @@ export async function runSession({ action, root, editor, mode, platform = proces
     await item.done;
     item.released = true;
   }
-  function shutdown() {
-    return cleanupPromise ??= (async () => {
-      stopping = true;
+  async function shutdown({ c1Stopped = false } = {}) {
+    if (stopComplete) return { ok: true, errors: [] };
+    // A C1 report can arrive while an automatic down is still resolving.
+    while (shutdownPromise) {
+      const prior = await shutdownPromise;
+      if (prior.ok || !c1Stopped) return prior;
+      if (stopComplete) return { ok: true, errors: [] };
+    }
+    shutdownPromise = (async () => {
       const errors = [];
-      // The editor (and any in-flight build/status command) goes first.
-      for (const item of [...children].reverse().filter((owned) => owned !== runtimeItem && !owned.released)) {
+      if (runtimeItem && !runtimeDown && c1Stopped) {
         try {
-          if (stopRequested && item === editorItem && platform !== 'win32' && !item.closed) {
-            // Keep a hung editor root alive so Pinokio can still enumerate and
-            // kill all descendants, including the app's detached Vite groups.
-            signalGroup(item.child.pid, 'SIGTERM', { killProcess });
-            await limit(item.done, 5000, 'Editor stop');
-            item.released = true;
-          } else await limit(terminate(item), 8000, 'Editor/command stop');
+          downInProgress = true;
+          if (!runtimeItem.closed) await limit(runtimeItem.done, 5000, 'Runtime exit after C1 stop');
+          if (!Number.isInteger(runtimeItem.exitCode) && !runtimeItem.exitSignal) {
+            throw new Error('Astrid Runtime exit has not been confirmed.');
+          }
+          runtimeDown = true;
+        } catch (error) {
+          downInProgress = false;
+          return { ok: false, errors: [error.message] };
         }
+      }
+      // The Runtime's read-only report is an early refusal check. Runtime down
+      // repeats the check under its final fence and remains the stop authority.
+      if (runtimeItem && !runtimeDown) {
+        try {
+          await checkStop(installed, { timeoutMs: DOWN_MS });
+          downInProgress = true;
+          await gracefulDown(specs.down, { env, cwd: root, timeoutMs: DOWN_MS });
+          if (!runtimeItem.closed) await limit(runtimeItem.done, 5000, 'Runtime exit after down');
+          runtimeDown = true;
+        } catch (error) {
+          downInProgress = false;
+          return { ok: false, errors: [error.message], ...(error.details !== undefined ? { details: error.details } : {}) };
+        }
+      }
+
+      // No process, controller or lock cleanup begins until the final Runtime
+      // down has succeeded. A refusal leaves this function callable for retry.
+      stopping = true;
+      for (const item of [...children].reverse().filter((owned) => owned !== runtimeItem && !owned.released)) {
+        try { await limit(terminate(item), 8000, 'Editor/command stop'); }
         catch (error) { errors.push(error.message); }
       }
-      if (runtimeItem && !runtimeItem.released) {
-        if (!runtimeItem.closed && discovery?.runtime_instance_id && errors.length === 0) {
-          try {
-            await gracefulDown(specs.down, { env, cwd: root, timeoutMs: DOWN_MS });
-            await limit(runtimeItem.done, 5000, 'Runtime exit after down');
-          } catch (error) { errors.push(error.message); }
-        } else if (!runtimeItem.closed && !discovery?.runtime_instance_id) {
-          // Startup never established custody. Signal only the owned foreground
-          // process; do not down a stale/external discovery at the same root.
-          try { await limit(terminate(runtimeItem), 8000, 'Starting Runtime stop'); }
-          catch (error) { errors.push(error.message); }
-        }
-        // Controlled Stop leaves a failed/live Runtime for Pinokio's final tree
-        // kill. Direct signals and temporary builds have to drain it themselves.
-        if (!stopRequested || runtimeItem.closed) {
-          try { await limit(terminate(runtimeItem), 8000, 'Runtime cleanup'); }
-          catch (error) { errors.push(error.message); }
-        }
+      if (errors.length === 0) {
+        stopComplete = true;
+        finishStop();
       }
       return { ok: errors.length === 0, errors };
     })();
+    try { return await shutdownPromise; }
+    finally { if (!stopComplete) shutdownPromise = undefined; }
   }
-  const requestStop = () => {
+  const requestStop = ({ c1Stopped = false } = {}) => {
+    if (stopRequestPromise && !c1Stopped) return stopRequestPromise;
     stopRequested = true;
-    stopping = true;
-    fail(new Error('Astrid session stopped.'));
-    return shutdown();
+    const attempt = shutdown({ c1Stopped: c1Stopped === true }).then((result) => {
+      if (result.ok) fail(new Error('Astrid session stopped.'));
+      else if (stopRequestPromise === attempt) { stopRequested = false; stopRequestPromise = undefined; }
+      return result;
+    });
+    stopRequestPromise = attempt;
+    return attempt;
   };
-  const onSignal = () => { stopping = true; fail(new Error('Astrid session stopped.')); };
+  const onSignal = () => {
+    stopRequested = true;
+    shutdown().then((result) => {
+      if (result.ok) fail(new Error('Astrid session stopped.'));
+      else { stopRequested = false; output(result.errors.join(' ')); }
+    }).catch((error) => output(error.message));
+  };
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) signals.on(signal, onSignal);
   try {
     // Never attach the editor to someone else's same-data-root Runtime.
@@ -254,18 +344,16 @@ export async function runSession({ action, root, editor, mode, platform = proces
     if (action === 'build') {
       await checked(specs.build, { cwd: editor });
     } else {
+      if (prepareEditor) {
+        await checked(specs.dependencies, { cwd: editor });
+        await checked(specs.build, { cwd: editor });
+      }
       if (mode === 'local') editorItem = launch(specs.preview, { cwd: editor, persistent: true });
       const url = mode === 'local' ? 'http://127.0.0.1:5180/tools/video-editor' : app.DOOR_HEALTH_URL;
       await waitUntil(async () => {
+        if (mode === 'local') return localPreviewReady(discovery, { request });
         try {
           const response = await request(url, { signal: AbortSignal.timeout(2500), headers: mode === 'backend' ? { Origin: 'https://astrid.haus' } : {} });
-          if (mode === 'local') {
-            if (!response.ok) return false;
-            const config = await request('http://127.0.0.1:5180/runtime-config/v1/workspace.json', { signal: AbortSignal.timeout(2500) });
-            const binding = await config.json();
-            return config.ok && binding.schemaVersion === 1 && Boolean(discovery?.runtime_instance_id)
-              && binding.runtimeInstanceId === discovery.runtime_instance_id && binding.realmId === discovery.active_realm;
-          }
           const body = await response.json();
           return response.status === 200 && body.status === 'ok' && body.protocol === 'workspace.v1';
         } catch { return false; }
@@ -275,16 +363,43 @@ export async function runSession({ action, root, editor, mode, platform = proces
       await failed;
     }
   } catch (error) {
-    if (!stopRequested) throw error;
+    const orderlyRuntimeExit = error === runtimeExitFailure && runtimeItem?.closed
+      && runtimeItem.exitCode === 0 && !runtimeItem.exitSignal;
+    // Cleanup completion does not prove that ci or the build completed. Only
+    // serve sessions may finish successfully after a controlled/orderly stop.
+    if (action === 'build' || (!stopComplete && !orderlyRuntimeExit)) {
+      serveInterruptedByStop = action === 'serve' && stopRequested;
+      throw error;
+    }
   } finally {
-    const result = await shutdown();
-    await controller?.close();
-    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) signals.removeListener(signal, onSignal);
-    if (!result.ok && !stopRequested) throw new Error(result.errors.join(' '));
+    let result = await shutdown();
+    if (!result.ok && controller) {
+      // A build/startup failure can reach finally while work is still busy.
+      // Keep this session waiting for a successful controller/signal retry;
+      // returning here would orphan a live controller with no finalizer.
+      output(result.errors.join(' '));
+      await stopFinished;
+      result = { ok: true };
+    }
+    if (result.ok) {
+      await controller?.close();
+      for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) signals.removeListener(signal, onSignal);
+      // Serve may be stopped during startup; build cancellation must still
+      // reject after all owned children and the controller have drained.
+      if (serveInterruptedByStop && stopRequested && stopComplete) return;
+    } else if (runtimeItem?.closed && runtimeItem.exitCode === 0 && !runtimeItem.exitSignal) {
+      throw new Error(result.errors.join(' '));
+    } else if (!failure) throw new Error(result.errors.join(' '));
   }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [action, root, editor, mode] = process.argv.slice(2);
-  runSession({ action, root, editor, mode }).catch((error) => { console.error(`Astrid: ${error.message}`); process.exitCode = 1; });
+  const [action, root, editor, mode, options = '{}'] = process.argv.slice(2);
+  let parsed;
+  try { parsed = parseSessionOptions(options); }
+  catch {
+    console.error('Astrid: Invalid session options.'); process.exitCode = 1;
+  }
+  if (parsed) runSession({ action, root, editor, mode, prepareEditor: parsed.prepareEditor })
+    .catch((error) => { console.error(`Astrid: ${error.message}`); process.exitCode = 1; });
 }
