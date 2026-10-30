@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import library from '../pinokio/lib.js';
-import { commands, installation, localSessionReady, parseSessionOptions, runSession, signalGroup } from '../pinokio/session.mjs';
+import { commands, installation, runSession, signalGroup } from '../pinokio/session.mjs';
 
 const require = createRequire(import.meta.url);
 const repository = path.resolve(import.meta.dirname, '..');
@@ -142,67 +142,6 @@ test('menu: all operation, installation, starting, ready, external and conflict 
     assert.equal(conflict[0].href, undefined);
     assert.equal(conflict[0].default, undefined);
   }
-});
-
-test('detached local owner readiness avoids hosted port and stopped Start keeps its preflight', async () => {
-  const app = fakeApp('linux', '', 'local');
-  let owned = true;
-  let ready = true;
-  let probeCalls = 0;
-  let probeKind = 'occupied';
-  app.hasOwnedSupervisor = () => owned;
-  app.localSessionReady = async () => ready;
-  app.probeDoor = async () => { probeCalls++; return { kind: probeKind }; };
-  const info = { exists: () => true, running: () => false, local: () => ({}) };
-  const { menu } = load('pinokio.js', app);
-
-  const open = await menu({}, info);
-  assert.deepEqual(plain(open.map((entry) => entry.text)), ['Open Astrid', 'Update', 'Stop']);
-  assert.equal(open[0].href, library.LOCAL_OPEN_URL);
-  assert.equal(open.some((entry) => entry.default), false);
-  assert.equal(open[1].href, 'pinokio/update.js');
-  assert.equal(open[2].href, 'pinokio/stop.js');
-
-  ready = false;
-  const pending = await menu({}, info);
-  assert.deepEqual(plain(pending.map((entry) => entry.text)), ['Starting Astrid…', 'Stop']);
-  assert.equal(pending.some((entry) => entry.default), false);
-  assert.equal(probeCalls, 0);
-
-  owned = false;
-  probeKind = 'free';
-  const stopped = await menu({}, info);
-  assert.equal(stopped[0].text, 'Start');
-  assert.equal(stopped[0].default, true);
-  assert.equal(probeCalls, 1);
-});
-
-test('detached local readiness reuses the session status and preview/config binding', async () => {
-  const discovery = { runtime_instance_id: 'instance-1', active_realm: 'realm-1' };
-  const installed = { env: {} };
-  const requests = [];
-  let configMatches = true;
-  const result = () => JSON.stringify({ support: { healthy: true }, health: { status: 'ok' }, discovery });
-  const ready = await localSessionReady({ root: '/astrid', editor: '/editor', installed,
-    run: async (spec) => { assert.ok(spec.args.includes('status')); return result(); },
-    request: async (url) => {
-      requests.push(url);
-      if (url.endsWith('/tools/video-editor')) return { ok: true };
-      return { ok: configMatches, json: async () => ({ schemaVersion: 1,
-        runtimeInstanceId: 'instance-1', realmId: configMatches ? 'realm-1' : 'other-realm' }) };
-    },
-  });
-  assert.equal(ready, true);
-  assert.deepEqual(requests, ['http://127.0.0.1:5180/tools/video-editor', 'http://127.0.0.1:5180/runtime-config/v1/workspace.json']);
-  configMatches = false;
-  assert.equal(await localSessionReady({ root: '/astrid', editor: '/editor', installed,
-    run: async () => result(), request: async (url) => url.endsWith('/tools/video-editor') ? { ok: true }
-      : { ok: false, json: async () => ({ schemaVersion: 1, runtimeInstanceId: 'instance-1', realmId: 'other-realm' }) },
-  }), false);
-  const bound = { env: { ASTRID_INSTALLER_OPERATION_ID: 'a'.repeat(32) } };
-  assert.equal(await localSessionReady({ root: '/astrid', editor: '/editor', installed: bound,
-    run: async () => result(), request: async () => assert.fail('must reject a mismatched transaction binding before HTTP'),
-  }), false);
 });
 
 test('Update keeps the local route and uses the shared transaction for hosted mode', async () => {
@@ -636,51 +575,6 @@ test('serve only announces ready after correct health; signal/error/conflict cle
   for (const setting of [{ occupied: true }, { earlyExit: true }]) {
     const h = sessionHarness(setting);
     await assert.rejects(runSession({ ...h.options, action: 'serve', mode: 'local', output: () => assert.fail('published before readiness') }), /5180|quit unexpectedly/);
-    assert.equal(h.active.size, 0);
-  }
-});
-
-test('local update preparation builds before preview and announces READY under one retained Runtime', async () => {
-  const h = sessionHarness({ platform: 'linux' });
-  let stop;
-  let ready = false;
-  await runSession({ ...h.options, action: 'serve', mode: 'local', prepareEditor: true,
-    openController: async (_root, callback) => { stop = callback; return { close: async () => {} }; },
-    request: async (url) => url.endsWith('/runtime-config/v1/workspace.json')
-      ? { ok: true, json: async () => ({ schemaVersion: 1, runtimeInstanceId: 'instance', realmId: 'realm' }) }
-      : { ok: true, status: 200 },
-    output: (line) => { assert.equal(line, 'ASTRID_PINOKIO_READY'); ready = true; queueMicrotask(() => h.signals.emit('SIGTERM')); },
-  });
-  const commandsRun = h.log.map((item) => item.args?.includes('ci') ? 'dependencies'
-    : item.args?.includes('--build') ? 'build'
-      : item.args?.includes('--preview') ? 'preview'
-        : item.command?.endsWith('/run') ? 'runtime' : null).filter(Boolean);
-  assert.deepEqual(commandsRun, ['runtime', 'dependencies', 'build', 'preview']);
-  assert.equal(ready, true);
-  assert.equal(h.active.size, 0);
-  assert.equal(typeof stop, 'function');
-});
-
-test('session CLI accepts only the boolean editor preparation option', () => {
-  assert.deepEqual(parseSessionOptions(), { prepareEditor: false });
-  assert.deepEqual(parseSessionOptions('{"prepareEditor":true}'), { prepareEditor: true });
-  for (const value of ['null', '[]', '{"root":"/elsewhere"}', '{"action":"stop"}', '{"prepareEditor":"yes"}', '{']) {
-    assert.throws(() => parseSessionOptions(value), /Invalid session options/);
-  }
-});
-
-test('local update build failures never publish READY and drain the provisional session', async () => {
-  for (const failure of [{ dependencyCode: 1 }, { buildCode: 1 }]) {
-    const h = sessionHarness({ platform: 'linux', ...failure });
-    let ready = false;
-    await assert.rejects(runSession({ ...h.options, action: 'serve', mode: 'local', prepareEditor: true,
-      request: async (url) => url.endsWith('/runtime-config/v1/workspace.json')
-        ? { ok: true, json: async () => ({ schemaVersion: 1, runtimeInstanceId: 'instance', realmId: 'realm' }) }
-        : { ok: true, status: 200 },
-      output: (line) => { if (line === 'ASTRID_PINOKIO_READY') ready = true; },
-    }), /command failed/);
-    assert.equal(ready, false);
-    assert.equal(h.log.some((item) => item.args?.includes('--preview')), false);
     assert.equal(h.active.size, 0);
   }
 });
