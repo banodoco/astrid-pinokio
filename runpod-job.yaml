@@ -1,0 +1,13 @@
+repos:
+  astrid-pinokio: lane/M-PIN/R-20
+gpu: false
+max_minutes: 60
+setup:
+  - 'TASK_TMP="$PWD/runpod-tmp"; mkdir -p "$TASK_TMP"'
+  - 'TASK_TMP="$PWD/runpod-tmp"; git clone https://github.com/pinokiocomputer/pinokiod.git "$TASK_TMP/pinokiod" && git -C "$TASK_TMP/pinokiod" checkout --detach add4a674ad1ba95bb62ec427fce519fe5bf0e9bf'
+  - 'TASK_TMP="$PWD/runpod-tmp"; git clone https://github.com/pinokiocomputer/pterm.git "$TASK_TMP/pterm" && git -C "$TASK_TMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb && npm ci --omit=dev --prefix "$TASK_TMP/pterm" --silent'
+  - 'TASK_TMP="$PWD/runpod-tmp"; docker build -t r20-pinokiod "$TASK_TMP/pinokiod"'
+run:
+  - 'export TASK_TMP="$PWD/runpod-tmp" RUNNER_TEMP="$PWD/runpod-tmp" GITHUB_RUN_ID=runpod GITHUB_RUN_ATTEMPT=1; bash .github/venue/linux.sh'
+artifacts:
+  - 'runpod-tmp/r20-evidence/**'
