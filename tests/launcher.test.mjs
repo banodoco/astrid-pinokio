@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import library from '../pinokio/lib.js';
-import { commands, installation, runSession, signalGroup } from '../pinokio/session.mjs';
+import { backendSessionReady, commands, installation, runSession, signalGroup } from '../pinokio/session.mjs';
 
 const require = createRequire(import.meta.url);
 const repository = path.resolve(import.meta.dirname, '..');
@@ -142,6 +142,27 @@ test('menu: all operation, installation, starting, ready, external and conflict 
     assert.equal(conflict[0].href, undefined);
     assert.equal(conflict[0].default, undefined);
   }
+});
+
+test('menu never offers Open for unavailable or identity-mismatched Runtime responses', async () => {
+  for (const error of ['runtime_unavailable', 'runtime_identity_mismatch']) {
+    const app = { ...fakeApp('darwin', '', 'backend'), hasOwnedSupervisor: () => true,
+      probeDoor: async () => ({ kind: 'occupied', error }), backendSessionReady: async () => true };
+    const { menu } = load('pinokio.js', app);
+    const items = await menu({}, { exists: () => true, running: () => false, local: () => ({}) });
+    assert.equal(items.some((item) => item.text === 'Open Astrid'), false, error);
+  }
+});
+
+test('backend Open requires matching selected CLI and Door health identities', async () => {
+  const identity = { release: 1, runtime_head: 'abc', managed_by: 'pinokio' };
+  const installed = { env: {}, record: { identity } };
+  const status = { support: { healthy: true }, health: { status: 'ok' }, discovery: { runtime_instance_id: 'instance', active_realm: 'realm' } };
+  const run = async () => JSON.stringify(status);
+  const doorHealth = { status: 'ok', protocol: 'workspace.v1', runtime_instance_id: 'instance', identity };
+  assert.equal(await backendSessionReady({ root: '/runtime', editor: '/editor', installed, run, doorHealth }), true);
+  assert.equal(await backendSessionReady({ root: '/runtime', editor: '/editor', installed, run,
+    doorHealth: { ...doorHealth, identity: { ...identity, runtime_head: 'other' } } }), false);
 });
 
 test('Update keeps the local route and uses the shared transaction for hosted mode', async () => {
@@ -408,7 +429,7 @@ test('settings use ENVIRONMENT first and fall back to the shipped _ENVIRONMENT t
 
 test('port classification and preflight use injected requests; no live port probes', async () => {
   assert.equal((await library.probeDoor({ portOpen: async () => false })).kind, 'free');
-  for (const [status, body, expected] of [[200, { protocol: 'workspace.v1' }, 'astrid'], [503, { error: 'runtime_unavailable' }, 'astrid'], [403, { error: 'hosted_origin_required' }, 'astrid'], [200, { status: 'ok' }, 'occupied'], [404, {}, 'occupied']]) {
+  for (const [status, body, expected] of [[200, { status: 'ok', protocol: 'workspace.v1' }, 'astrid'], [503, { error: 'runtime_unavailable' }, 'occupied'], [503, { error: 'runtime_identity_mismatch' }, 'occupied'], [403, { error: 'hosted_origin_required' }, 'astrid'], [200, { status: 'ok' }, 'occupied'], [404, {}, 'occupied']]) {
     assert.equal((await library.probeDoor({ portOpen: async () => true, request: async () => ({ status, json: async () => body }) })).kind, expected);
   }
   for (const kind of ['astrid', 'occupied']) {
