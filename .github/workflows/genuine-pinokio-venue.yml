@@ -27,6 +27,7 @@ jobs:
       PTERM_ROOT: ${{ runner.temp }}/m4-6-pinokio/pterm
       PINOKIO_HOME: ${{ runner.temp }}/m4-6-pinokio/home
       VENUE_EVIDENCE_DIR: ${{ runner.temp }}/m4-6-pinokio/evidence
+      VENUE_DIAGNOSTIC_DIR: ${{ runner.temp }}/m4-6-pinokio/local-diagnostics
     steps:
       - name: Checkout clean Pinokio candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9afca # v4.2.2
@@ -73,5 +74,5 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: genuine-pinokio-venue-evidence
-          path: ${{ runner.temp }}/m4-6-pinokio/evidence
-          if-no-files-found: warn
+          path: ${{ runner.temp }}/m4-6-pinokio/evidence/venue-evidence.json
+          if-no-files-found: error
