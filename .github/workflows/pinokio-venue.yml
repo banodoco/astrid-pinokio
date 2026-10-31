@@ -1,6 +1,8 @@
 name: Real Pinokio venue spike
 
 on:
+  push:
+    branches: [lane/M-PIN/R-20]
   workflow_dispatch:
 
 permissions:

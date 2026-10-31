@@ -25,6 +25,11 @@ failed=0
 probe pterm https://github.com/pinokiocomputer/pterm.git 5be43718701c448b43daf0ce51d8935f170065bb || failed=1
 probe pinokiod https://github.com/pinokiocomputer/pinokiod.git add4a674ad1ba95bb62ec427fce519fe5bf0e9bf || failed=1
 if [ "$failed" = 0 ]; then
-  node .github/venue/native-probe.cjs || failed=1
+  if node "$RUNNER_TEMP/pterm/index.js" version terminal >> "$out/host.txt"; then
+    node .github/venue/native-probe.cjs || failed=1
+  else
+    printf 'pterm launch=failed\n' >> "$out/host.txt"
+    failed=1
+  fi
 fi
 exit "$failed"
