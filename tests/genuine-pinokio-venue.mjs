@@ -25,6 +25,7 @@ const daemonPidFile = path.join(evidenceDir, 'pinokiod.pid');
 const actionPacketFile = path.join(evidenceDir, 'engine-packets.jsonl');
 let daemonProcess = null;
 let postSettlementCaptured = false;
+let venuePostconditionsProven = false;
 
 fs.mkdirSync(evidenceDir, { recursive: true });
 fs.mkdirSync(path.dirname(pinokioHome), { recursive: true });
@@ -291,27 +292,85 @@ function verifyDeployedActionBytes() {
   }
 }
 
+function parseProcessRows(output) {
+  return output.split('\n').map((line) => {
+    const fields = line.trim().split(/\s+/, 5);
+    if (fields.length < 5 || fields.slice(0, 3).some((field) => !/^\d+$/.test(field))) return null;
+    const [pid, ppid, pgid, stat, command] = fields;
+    return { pid, ppid, pgid, stat, command };
+  }).filter(Boolean);
+}
+
+function ownedProcessGroupObservation() {
+  const ownedGroupId = String(evidence.daemon.process_group || '');
+  const snapshot = {
+    available: false,
+    owned_group_id: ownedGroupId || null,
+    selection: 'exact-pgid',
+    members: [],
+    member_pids: [],
+    member_count: 0,
+    present: false,
+    daemon_pid_member: false,
+  };
+  if (!/^\d+$/.test(ownedGroupId)) {
+    snapshot.error = 'owned process-group identifier was unavailable';
+    return snapshot;
+  }
+  try {
+    const output = execFileSync('ps', ['-eo', 'pid=,ppid=,pgid=,stat=,command='], { encoding: 'utf8' });
+    const members = parseProcessRows(output).filter((row) => row.pgid === ownedGroupId);
+    snapshot.available = true;
+    snapshot.members = members;
+    snapshot.member_pids = members.map((row) => row.pid);
+    snapshot.member_count = members.length;
+    snapshot.present = members.length > 0;
+    snapshot.daemon_pid_member = members.some((row) => row.pid === String(evidence.daemon.pid));
+    snapshot.source = 'ps -eo filtered by exact owned pgid; other runner process groups excluded';
+  } catch (error) {
+    snapshot.error = redact(error.message);
+  }
+  return snapshot;
+}
+
+function groupEvidenceContract(snapshot, phase, requireDaemonMember = false) {
+  const group = snapshot?.process_group;
+  const expectedGroupId = String(evidence.daemon.process_group || '');
+  const valid = group?.available === true &&
+    group.owned_group_id === expectedGroupId &&
+    group.selection === 'exact-pgid' &&
+    Array.isArray(group.members) &&
+    Array.isArray(group.member_pids) &&
+    group.member_count === group.members.length &&
+    group.member_pids.length === group.member_count &&
+    group.members.every((member) => member.pgid === expectedGroupId) &&
+    (!requireDaemonMember || group.daemon_pid_member === true);
+  if (!valid) evidence.engine.boundary ||= `${phase} independent owned process-group evidence was missing or ambiguous`;
+  return valid;
+}
+
 function independentObservation(phase) {
   const pid = evidence.daemon.pid;
-  const snapshot = { captured_at: new Date().toISOString(), phase, daemon_pid: pid, process: null, listener: null };
+  const snapshot = {
+    captured_at: new Date().toISOString(),
+    phase,
+    daemon_pid: pid,
+    owned_process_group_id: evidence.daemon.process_group,
+    process: null,
+    process_group: ownedProcessGroupObservation(),
+    listener: null,
+  };
   try {
     const processList = execFileSync('ps', ['-p', String(pid), '-o', 'pid=,ppid=,pgid=,stat=,command='], { encoding: 'utf8' });
     const groupId = processList.trim().split(/\s+/)[2] || String(pid);
-    let groupList = '';
-    try {
-      groupList = execFileSync('ps', ['-g', groupId, '-o', 'pid=,ppid=,pgid=,stat=,command='], { encoding: 'utf8' });
-    } catch (error) {
-      if (error.status !== 1) throw error;
-    }
     snapshot.process = {
       available: true,
       present: Boolean(processList.trim()),
-      process_group_present: Boolean(groupList.trim()),
       output: redact(processList),
-      process_group_output: redact(groupList),
+      observed_group_id: groupId,
     };
   } catch (error) {
-    snapshot.process = { available: error.status === 1, present: false, process_group_present: false, error: redact(error.message) };
+    snapshot.process = { available: error.status === 1, present: false, error: redact(error.message) };
   }
   try {
     const listenerList = execFileSync('ss', ['-ltnp'], { encoding: 'utf8' });
@@ -453,7 +512,14 @@ function appendDaemonOutput(label, chunk) {
 async function cleanupDaemon() {
   const pid = evidence.daemon.pid;
   if (!pid || !daemonProcess) return;
-  const cleanup = { pid, signals: [], forced: false, exited: false };
+  const cleanup = {
+    pid,
+    process_group_id: evidence.daemon.process_group,
+    signals: [],
+    forced: false,
+    exited: false,
+    group_absent: false,
+  };
   const waitForExit = async (timeoutMs) => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -462,19 +528,31 @@ async function cleanupDaemon() {
     }
     return daemonProcess.exitCode !== null || daemonProcess.signalCode !== null;
   };
+  const waitForGroupAbsence = async (timeoutMs) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const group = ownedProcessGroupObservation();
+      cleanup.last_group_observation = group;
+      if (group.available && !group.present && group.member_count === 0) return true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const group = ownedProcessGroupObservation();
+    cleanup.last_group_observation = group;
+    return group.available && !group.present && group.member_count === 0;
+  };
   try {
     if (daemonProcess.exitCode === null && daemonProcess.signalCode === null) {
       process.kill(-pid, 'SIGTERM');
       cleanup.signals.push('SIGTERM(process-group)');
-      cleanup.exited = await waitForExit(5_000);
-    } else {
-      cleanup.exited = true;
     }
-    if (!cleanup.exited) {
+    cleanup.exited = await waitForExit(5_000);
+    cleanup.group_absent = await waitForGroupAbsence(5_000);
+    if (!cleanup.group_absent) {
       cleanup.forced = true;
       process.kill(-pid, 'SIGKILL');
       cleanup.signals.push('SIGKILL(process-group)');
       cleanup.exited = await waitForExit(2_000);
+      cleanup.group_absent = await waitForGroupAbsence(2_000);
     }
   } catch (error) {
     cleanup.error = redact(error.message);
@@ -507,7 +585,7 @@ async function main() {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   evidence.daemon.pid = daemonProcess.pid;
-  evidence.daemon.process_group = daemonProcess.pid;
+  evidence.daemon.process_group = String(daemonProcess.pid);
   fs.writeFileSync(daemonPidFile, `${daemonProcess.pid}\n`);
   daemonProcess.stdout.on('data', (chunk) => appendDaemonOutput('[stdout] ', chunk));
   daemonProcess.stderr.on('data', (chunk) => appendDaemonOutput('[stderr] ', chunk));
@@ -536,10 +614,11 @@ async function main() {
       evidence.independent.pre_settlement?.listener?.available &&
       evidence.independent.pre_settlement?.listener?.present &&
       postObservation.process.available && postObservation.process.present &&
-      postObservation.listener.available && postObservation.listener.present;
+      postObservation.listener.available && postObservation.listener.present &&
+      groupEvidenceContract(evidence.independent.pre_settlement, 'pre_settlement', true) &&
+      groupEvidenceContract(evidence.independent.post_settlement, 'post_settlement');
     const terminalSettled = ['explicit-refusal', 'terminal-stop'].includes(evidence.engine.settlement) && postAssessment.valid;
-    evidence.status = evidence.engine.settlement === 'explicit-refusal' ? 'UNKNOWN' :
-      (terminalSettled && observersComplete ? 'PASS' : 'UNKNOWN');
+    venuePostconditionsProven = evidence.engine.settlement !== 'explicit-refusal' && terminalSettled && observersComplete;
     if (!terminalSettled || !observersComplete) {
       fail(`venue postconditions were not proven: ${redact({ settlement: evidence.engine.settlement, postAssessment, observersComplete })}`);
     }
@@ -565,12 +644,22 @@ async function main() {
         };
       }
     }
+    const beforeCleanupObservation = independentObservation('before_cleanup');
+    groupEvidenceContract(beforeCleanupObservation, 'before_cleanup');
     await cleanupDaemon();
     const cleanupObservation = independentObservation('post_cleanup');
+    const groupEvidenceComplete =
+      groupEvidenceContract(evidence.independent.pre_settlement, 'pre_settlement', true) &&
+      groupEvidenceContract(evidence.independent.post_settlement, 'post_settlement') &&
+      groupEvidenceContract(beforeCleanupObservation, 'before_cleanup') &&
+      groupEvidenceContract(cleanupObservation, 'post_cleanup');
     const cleanupComplete = cleanupObservation.process.available && !cleanupObservation.process.present &&
+      cleanupObservation.process_group.available && !cleanupObservation.process_group.present &&
+      cleanupObservation.process_group.member_count === 0 &&
       cleanupObservation.listener.available && !cleanupObservation.listener.present;
-    if (evidence.status === 'PASS' && !cleanupComplete) {
-      evidence.status = 'UNKNOWN';
+    const passPredicate = venuePostconditionsProven && groupEvidenceComplete && cleanupComplete;
+    evidence.status = passPredicate ? 'PASS' : 'UNKNOWN';
+    if (!passPredicate) {
       evidence.engine.boundary ||= 'bounded cleanup did not prove owned process-group and listener disappearance';
     }
     writeEvidence();
