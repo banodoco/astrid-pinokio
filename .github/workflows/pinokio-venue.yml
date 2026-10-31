@@ -2,7 +2,29 @@ name: Real Pinokio venue spike
 
 on:
   push:
-    branches: [lane/M-PIN/R-20]
+    branches:
+      - feat/pinokio
+      - main
+      - release-1
+      - 'int/**'
+      - 'lane/M-PIN/**'
+    paths:
+      - '.github/workflows/**'
+      - '.github/venue/**'
+      - pinokio.js
+      - pinokio.json
+      - 'pinokio/**'
+      - 'tests/**'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/venue/**'
+      - pinokio.js
+      - pinokio.json
+      - 'pinokio/**'
+      - 'tests/**'
+  # T4 checkpoint rehearsal and RV-5 qualification run on explicit dispatch;
+  # dispatches are not constrained by the change-path filters above.
   workflow_dispatch:
 
 permissions:
