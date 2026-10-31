@@ -1,0 +1,132 @@
+name: G3 pinokio ci
+'on':
+  workflow_call:
+    inputs:
+      runtime_sha:
+        required: true
+        type: string
+      agent_sha:
+        required: true
+        type: string
+      app_sha:
+        required: true
+        type: string
+      pinokio_sha:
+        required: true
+        type: string
+      vibecomfy_sha:
+        required: true
+        type: string
+    secrets:
+      RUNTIME_READ_TOKEN:
+        required: false
+      ASTRID_READ_TOKEN:
+        required: false
+permissions:
+  contents: read
+jobs:
+  unit:
+    name: Unit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - ubuntu-latest
+        - macos-latest
+        - windows-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: banodoco/astrid-pinokio
+        ref: ${{ inputs.pinokio_sha }}
+        persist-credentials: false
+    - name: Assert and record pinokio checkout
+      shell: bash
+      env:
+        EXPECTED: ${{ inputs.pinokio_sha }}
+        CHECKOUT_PATH: .
+      run: 'set -euo pipefail
+
+        [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]]
+
+        actual=$(git -C "$GITHUB_WORKSPACE/$CHECKOUT_PATH" rev-parse HEAD)
+
+        printf "%s: %s\n" "pinokio" "$actual" | tee -a "$GITHUB_STEP_SUMMARY"
+
+        [[ "$actual" == "$EXPECTED" ]]
+
+        '
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20.19.4
+    - run: node --test --test-reporter=spec tests/*.test.mjs
+      shell: bash
+  pinokio-smoke:
+    name: Pinokio smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 15 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - ubuntu-latest
+        - macos-latest
+        - windows-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: banodoco/astrid-pinokio
+        ref: ${{ inputs.pinokio_sha }}
+        persist-credentials: false
+    - name: Assert and record pinokio checkout
+      shell: bash
+      env:
+        EXPECTED: ${{ inputs.pinokio_sha }}
+        CHECKOUT_PATH: .
+      run: 'set -euo pipefail
+
+        [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]]
+
+        actual=$(git -C "$GITHUB_WORKSPACE/$CHECKOUT_PATH" rev-parse HEAD)
+
+        printf "%s: %s\n" "pinokio" "$actual" | tee -a "$GITHUB_STEP_SUMMARY"
+
+        [[ "$actual" == "$EXPECTED" ]]
+
+        '
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20.19.4
+    - run: node tests/smoke/run-pinokio.mjs
+  fully-local:
+    name: Fully local (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: banodoco/astrid-pinokio
+        ref: ${{ inputs.pinokio_sha }}
+        persist-credentials: false
+    - name: Assert and record pinokio checkout
+      shell: bash
+      env:
+        EXPECTED: ${{ inputs.pinokio_sha }}
+        CHECKOUT_PATH: .
+      run: 'set -euo pipefail
+
+        [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]]
+
+        actual=$(git -C "$GITHUB_WORKSPACE/$CHECKOUT_PATH" rev-parse HEAD)
+
+        printf "%s: %s\n" "pinokio" "$actual" | tee -a "$GITHUB_STEP_SUMMARY"
+
+        [[ "$actual" == "$EXPECTED" ]]
+
+        '
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20.19.4
+    - run: node tests/smoke/run-pinokio.mjs fully-local
