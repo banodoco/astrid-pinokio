@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Fast T0 check: Node syntax checks for changed JavaScript files only.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+ranges=()
+while (($#)); do
+  case "$1" in
+    --range)
+      (($# >= 2)) || { echo 'missing value for --range' >&2; exit 2; }
+      ranges+=("$2")
+      shift 2
+      ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+collect_changed_files() {
+  local range
+  for range in "${ranges[@]}"; do
+    git diff --name-only -z "$range" -- 2>/dev/null || true
+  done
+  git diff --cached --name-only -z --
+  git diff --name-only -z --
+  git ls-files --others --exclude-standard -z
+}
+
+changed=()
+while IFS= read -r -d '' file; do
+  duplicate=false
+  for previous in "${changed[@]}"; do
+    [[ "$previous" == "$file" ]] && { duplicate=true; break; }
+  done
+  [[ "$duplicate" == true ]] || changed+=("$file")
+done < <(collect_changed_files)
+js_files=()
+for file in "${changed[@]}"; do
+  case "$file" in
+    *.js|*.mjs|*.cjs) [[ -f "$file" ]] && js_files+=("$file") ;;
+  esac
+done
+
+if ((${#js_files[@]} == 0)); then
+  echo 'No changed JavaScript files; node --check skipped.'
+  exit 0
+fi
+
+node_bin="${NODE:-node}"
+command -v "$node_bin" >/dev/null 2>&1 || { echo 'Node.js is required for changed JavaScript files.' >&2; exit 127; }
+for file in "${js_files[@]}"; do
+  "$node_bin" --check "$file"
+done
