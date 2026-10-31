@@ -2,11 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [feat/pinokio, main]
+    branches: [main, release-1, "int/**"]
   pull_request:
+  merge_group:
   workflow_dispatch:
   schedule:
     - cron: '17 4 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
