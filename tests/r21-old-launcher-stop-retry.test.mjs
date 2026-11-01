@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -14,9 +15,9 @@ const oldLauncher = 'bbba620e3d89eeff8021417f365e6ea584203105';
 const r17Candidate = '017472bf3e26ad8567accce88991942d094c71c8';
 const r17Refusal = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const nodeRequire = createRequire(import.meta.url);
-const source = (revision, file) => execFileSync('git', ['show', `${revision}:${file}`], {
-  cwd: repo, encoding: 'utf8',
-});
+const source = (revision, file) => revision === 'worktree'
+  ? fs.readFileSync(path.join(repo, file), 'utf8')
+  : execFileSync('git', ['show', `${revision}:${file}`], { cwd: repo, encoding: 'utf8' });
 
 function moduleAt(revision, file, dependencies = {}) {
   const module = { exports: {} };
@@ -155,14 +156,14 @@ test('R-21 component harness: old first click refuses, current Stop succeeds, an
   assert.equal(kernel.api.running[uri], true, 'the candidate refusal does not invent a launcher-side Stop');
 
   events.length = 0;
-  const stop = moduleAt('HEAD', 'pinokio/stop.js', { './lib': app });
+  const stop = moduleAt('worktree', 'pinokio/stop.js', { './lib': app });
   const stopped = await stop.run[0].method({}, () => {}, kernel);
   assert.deepEqual(stopped, { stopped: true, lockFree: true });
   assert.deepEqual(events, ['preflight', 'graceful-stop', 'kernel-stop', 'lock']);
   assert.equal(kernel.api.running[uri], undefined);
 
   events.length = 0;
-  const update = moduleAt('HEAD', 'pinokio/update.js', { './lib': app });
+  const update = moduleAt('worktree', 'pinokio/update.js', { './lib': app });
   const retryAction = await update();
   assert.notEqual(retryAction, firstAction, 'Stop is followed by a new click, not a resumed old action array');
   const retry = await replayFreshRetry(retryAction, app, kernel, events);
