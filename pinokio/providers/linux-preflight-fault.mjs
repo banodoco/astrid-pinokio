@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 const PREFLIGHT_CODE_SHA256 = '28eb075c4225b72ed883cfa53b86461e7febd2f043866393f056e8156739e03b';
+const occupiedSlots = new WeakSet();
 
 export function installPreflightOutputFault(slot, { timeoutMs = 5000 } = {}) {
   if (process.platform !== 'linux' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('Invalid Linux fault configuration.');
@@ -12,6 +13,7 @@ export function installPreflightOutputFault(slot, { timeoutMs = 5000 } = {}) {
   if (!descriptor || !('value' in descriptor) || !descriptor.writable || typeof descriptor.value !== 'function') {
     throw new Error('A writable, own preflight runner is required.');
   }
+  if (occupiedSlots.has(slot)) throw new Error('Fault slot is already in use or invalid.');
   const prior = descriptor.value;
   let active = true;
   let used = false;
@@ -53,6 +55,7 @@ export function installPreflightOutputFault(slot, { timeoutMs = 5000 } = {}) {
     });
   };
   Object.defineProperty(slot, 'run', { ...descriptor, value: fault });
+  occupiedSlots.add(slot);
   return {
     async finalize() {
       if (finalization) return finalization;
@@ -91,6 +94,7 @@ export function installPreflightOutputFault(slot, { timeoutMs = 5000 } = {}) {
         const restored = Object.getOwnPropertyDescriptor(slot, 'run');
         if (!restored || restored.value !== prior || restored.writable !== descriptor.writable ||
             restored.enumerable !== descriptor.enumerable || restored.configurable !== descriptor.configurable) issues.push('runner-not-restored');
+        if (!issues.length) occupiedSlots.delete(slot);
         return { state: issues.length ? 'fail' : 'unknown', issues };
       })();
       return finalization;

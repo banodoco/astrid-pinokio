@@ -53,12 +53,14 @@ test('tampering prevents restoration from being declared successful', async () =
   assert.deepEqual(result.issues, ['seam-identity-changed', 'runner-not-restored']);
   assert.equal(slot.run, replacement);
   assert.deepEqual(await seam.finalize(), result);
+  assert.throws(() => installPreflightOutputFault(slot), /invalid/);
 });
 
 test('rejects unsafe slots, unrelated commands and reuse', async t => {
   assert.throws(() => installPreflightOutputFault({}), /writable/);
   const slot = { run: async () => {} };
   const seam = installPreflightOutputFault(slot);
+  assert.throws(() => installPreflightOutputFault(slot), /already in use/);
   await assert.rejects(slot.run({ command: process.execPath, args: ['-e', ''] }, {}), /not dispatched/);
   await assert.rejects(preflightStop(fixture(t, ''), { run: slot.run }), /closed/);
   assert.equal((await seam.finalize()).state, 'unknown');
