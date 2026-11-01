@@ -2,7 +2,7 @@ name: Native observer adapter checks
 
 on:
   push:
-    branches: [lane/M-PIN/R-25-ADAPTER-CI, lane/M-PIN/R-25-ADAPTER-CI-R1]
+    branches: [lane/M-PIN/R-25-ADAPTER-CI, lane/M-PIN/R-25-ADAPTER-CI-R1, lane/M-PIN/R-25-ADAPTER-SDK-PROBE-R1]
 
 permissions:
   contents: read
@@ -17,22 +17,48 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
+      - name: Record macOS SDK and minimal link probe
+        run: |
+          mkdir -p "$RUNNER_TEMP/macos-sdk-probe"
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          XCODE_PATH="$(xcode-select -p)"
+          SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+          {
+            printf 'xcode_select_path=%s\n' "$XCODE_PATH"
+            xcodebuild -version
+            printf 'sdk_path=%s\n' "$SDKROOT"
+            printf 'sdk_version=%s\n' "$SDK_VERSION"
+            if [ -d "$SDKROOT/System/Library/Frameworks/EndpointSecurity.framework" ]; then
+              echo 'framework_present=true'
+            else
+              echo 'framework_present=false'
+            fi
+            if printf 'int main(void) { return 0; }\n' | clang -x c -isysroot "$SDKROOT" -framework EndpointSecurity -o "$RUNNER_TEMP/macos-sdk-probe-link" - >/dev/null 2>&1; then
+              echo 'minimal_link=success'
+            else
+              echo 'minimal_link=failure'
+            fi
+          } > "$RUNNER_TEMP/macos-sdk-probe/facts.txt"
+          printf 'SDKROOT=%s\n' "$SDKROOT" >> "$GITHUB_ENV"
+          cat "$RUNNER_TEMP/macos-sdk-probe/facts.txt"
       - name: Compile native adapter
         run: |
           mkdir -p "$RUNNER_TEMP/macos-adapter"
-          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
           clang -isysroot "$SDKROOT" -O2 -Wall -Wextra -fblocks .github/venue/adapters/macos-observer.c -framework EndpointSecurity -lbsm -o "$RUNNER_TEMP/macos-adapter/macos-observer"
-          shasum -a 256 "$RUNNER_TEMP/macos-adapter/macos-observer" | tee "$RUNNER_TEMP/macos-adapter/SHA256SUMS"
+          (cd "$RUNNER_TEMP/macos-adapter" && shasum -a 256 macos-observer) > "$RUNNER_TEMP/macos-sdk-probe/SHA256SUMS"
       - name: Run focused adapter test
+        if: ${{ !cancelled() }}
         run: node --test tests/macos-observer.test.mjs
-      - name: Upload native build and hash
+      - name: Upload bounded macOS probe facts
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: macos-observer-build
-          path: ${{ runner.temp }}/macos-adapter/
+          name: macos-sdk-probe-facts
+          path: ${{ runner.temp }}/macos-sdk-probe/
           if-no-files-found: error
 
   windows-adapter:
+    if: github.ref != 'refs/heads/lane/M-PIN/R-25-ADAPTER-SDK-PROBE-R1'
     name: Windows adapter build and focused test
     runs-on: windows-latest
     timeout-minutes: 10
