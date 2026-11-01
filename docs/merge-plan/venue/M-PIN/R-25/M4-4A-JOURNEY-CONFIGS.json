@@ -1,11 +1,10 @@
 {
   "linux": {
     "acceptance_state": "DISPATCH_INPUT_TEMPLATE_ONLY",
-    "pinned_schema_conflict": {
-      "status": "UNRESOLVED_PINNED_AGENT_CONTRACT_CONFLICT",
-      "ci_journey_expected_custom_step": {"kind": "custom", "name": "preflightStop"},
-      "backend_validator_expected_custom_step": {"kind": "custom", "bootstrap_action": "preflightStop"},
-      "resolution_owner": "M-QUAL/M-VENUE; no Agent harness change in this task"
+    "pinned_agent_contract": {
+      "status": "RESOLVED_M_QUAL_R05_CUSTOM_STEP_SCHEMA_R1",
+      "schema_source": "banodoco/astrid-agent lane/M-QUAL/R-05-CUSTOM-STEP-SCHEMA-R1@258ccddc4fc02de864487518a45ca745e0a23855",
+      "retry_custom_step": {"kind": "custom", "bootstrap_action": "preflightStop"}
     },
     "actions": {
       "first": {
@@ -73,7 +72,7 @@
         "steps": [
           {
             "kind": "custom",
-            "name": "preflightStop"
+            "bootstrap_action": "preflightStop"
           },
           {
             "bootstrap_action": null,
@@ -449,11 +448,10 @@
   },
   "macos": {
     "acceptance_state": "DISPATCH_INPUT_TEMPLATE_ONLY",
-    "pinned_schema_conflict": {
-      "status": "UNRESOLVED_PINNED_AGENT_CONTRACT_CONFLICT",
-      "ci_journey_expected_custom_step": {"kind": "custom", "name": "preflightStop"},
-      "backend_validator_expected_custom_step": {"kind": "custom", "bootstrap_action": "preflightStop"},
-      "resolution_owner": "M-QUAL/M-VENUE; no Agent harness change in this task"
+    "pinned_agent_contract": {
+      "status": "RESOLVED_M_QUAL_R05_CUSTOM_STEP_SCHEMA_R1",
+      "schema_source": "banodoco/astrid-agent lane/M-QUAL/R-05-CUSTOM-STEP-SCHEMA-R1@258ccddc4fc02de864487518a45ca745e0a23855",
+      "retry_custom_step": {"kind": "custom", "bootstrap_action": "preflightStop"}
     },
     "actions": {
       "first": {
@@ -521,7 +519,7 @@
         "steps": [
           {
             "kind": "custom",
-            "name": "preflightStop"
+            "bootstrap_action": "preflightStop"
           },
           {
             "bootstrap_action": null,
@@ -897,11 +895,10 @@
   },
   "windows": {
     "acceptance_state": "DISPATCH_INPUT_TEMPLATE_ONLY",
-    "pinned_schema_conflict": {
-      "status": "UNRESOLVED_PINNED_AGENT_CONTRACT_CONFLICT",
-      "ci_journey_expected_custom_step": {"kind": "custom", "name": "preflightStop"},
-      "backend_validator_expected_custom_step": {"kind": "custom", "bootstrap_action": "preflightStop"},
-      "resolution_owner": "M-QUAL/M-VENUE; no Agent harness change in this task"
+    "pinned_agent_contract": {
+      "status": "RESOLVED_M_QUAL_R05_CUSTOM_STEP_SCHEMA_R1",
+      "schema_source": "banodoco/astrid-agent lane/M-QUAL/R-05-CUSTOM-STEP-SCHEMA-R1@258ccddc4fc02de864487518a45ca745e0a23855",
+      "retry_custom_step": {"kind": "custom", "bootstrap_action": "preflightStop"}
     },
     "actions": {
       "first": {
@@ -969,7 +966,7 @@
         "steps": [
           {
             "kind": "custom",
-            "name": "preflightStop"
+            "bootstrap_action": "preflightStop"
           },
           {
             "bootstrap_action": null,

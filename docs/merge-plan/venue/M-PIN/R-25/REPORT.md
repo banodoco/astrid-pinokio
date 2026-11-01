@@ -1,6 +1,6 @@
-# R-25 journey-config publish receipt
+# R-25 journey-config schema reconciliation receipt
 
-Status: `PUBLISHED_DISPATCH_INPUT_TEMPLATE` / `NO_HOSTED_EVIDENCE`
+Status: `DISPATCH_INPUT_ONLY` / `NO_HOSTED_EVIDENCE`
 
 This receipt records the documentation-only publication of the accepted,
 non-empty M4-4a bridge on a lane derived from the accepted R-25 venue packet.
@@ -12,20 +12,23 @@ R-21, R-24, or R-25 acceptance.
 | Field | Value |
 |---|---|
 | Repository | `banodoco/astrid-pinokio` |
-| Lane | `lane/M-PIN/R-25-JOURNEY-CONFIG-PUBLISH` |
-| Lane head | Final immutable remote SHA is recorded in the task-folder receipt after commit/push verification |
-| Base lane | `lane/M-PIN/R-25-VENUE-PACKET-R2` |
-| Base commit / parent | `ca8b3bf6e6b2283c90e131c189e2ebd3e53148d6` / `89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4` |
+| Lane | `lane/M-PIN/R-25-SCHEMA-R1` |
+| Lane head | Final immutable remote SHA is recorded in the task-folder `R-25-SCHEMA-R1/REPORT.md` after commit/push verification |
+| Base lane | `lane/M-PIN/R-25-JOURNEY-CONFIG-PUBLISH` |
+| Base commit / parent | `58e7191d915777db86a8b597f01a98b687e02bb7` / `ca8b3bf6e6b2283c90e131c189e2ebd3e53148d6` |
 | Scope | `docs/merge-plan/venue/M-PIN/R-25/` only |
 
 ## Publication disposition
 
-- The five accepted R2 packet files are retained. The three packet payload
-  files (`RC-0-EXECUTOR-CONFIGS.json`, `SLOT-MAPPING.md`, and
-  `R-21-R7-DISPATCH.md`) are unchanged byte-for-byte; `SHA256SUMS.md`-style
-  inventory and this receipt are updated only to record the bridge.
-- `M4-4A-JOURNEY-CONFIGS.json` and `CONFIG-BINDING.md` are copied byte-for-byte
-  from the accepted `R-25-JOURNEY-CONFIG` deliverables.
+- The three accepted R2 packet payload files (`RC-0-EXECUTOR-CONFIGS.json`,
+  `SLOT-MAPPING.md`, and `R-21-R7-DISPATCH.md`) are unchanged byte-for-byte.
+- The retry custom step in `M4-4A-JOURNEY-CONFIGS.json` is corrected for all
+  three OS configurations from stale `name` syntax to the resolved M-QUAL
+  contract `{"kind":"custom","bootstrap_action":"preflightStop"}`.
+  The per-OS contract annotation identifies
+  `banodoco/astrid-agent lane/M-QUAL/R-05-CUSTOM-STEP-SCHEMA-R1@258ccddc4fc02de864487518a45ca745e0a23855`.
+- `CONFIG-BINDING.md`, this receipt, and `SHA256SUMS` are updated only to bind
+  and inventory this correction.
 - The bridge root is exactly `linux`, `macos`, `windows`; each OS has one
   `pinokio-backend` and one `pinokio-fully-local` row, for exactly six unique
   slots. No D9 row, product source, workflow, Agent harness, or frozen
@@ -46,8 +49,8 @@ R-21, R-24, or R-25 acceptance.
 ## Generated-file hashes
 
 ```text
-f64139c53918493b7c940dc8d44be536dd16bcf4e29870711ef51d5dd985f9e8  M4-4A-JOURNEY-CONFIGS.json
-e06d802e938da252b3285d3a9e9b5b336dc186d3144268ba96a1b8bd516e2fcc  CONFIG-BINDING.md
+05af45fb505d773dedf146ead35d3c5d46cde7735bbe81eb1361afdac895eb10  M4-4A-JOURNEY-CONFIGS.json
+d9bafc0e1354af2bbf3a9e7b8d7fd4b3a8e4f1bd0a8055b2bdd369939f488b8e  CONFIG-BINDING.md
 ```
 
 `SHA256SUMS` inventories the three retained packet payload files plus these
@@ -58,13 +61,12 @@ self-referential digest; the task-folder receipt records its final hash.
 
 | Command/check | Result |
 |---|---|
-| `df -h .` | PASS; 4.5 GB available, above the required 2 GB floor |
-| `/home/user/merge/kit/codex/task-clone.sh astrid-pinokio <task-folder>/astrid-pinokio ca8b3bf6e6b2283c90e131c189e2ebd3e53148d6` | PASS; exact accepted packet base |
-| exact base / branch creation | PASS; base `ca8b3bf6e6b2283c90e131c189e2ebd3e53148d6`, parent `89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4` |
-| source-to-venue `cmp` | PASS; JSON and binding note byte-for-byte identical to accepted source |
+| `df -h .` before setup and checks | PASS; 2.2 GB then 3.2 GB available, above the required 2 GB floor |
+| `/home/user/merge/kit/codex/task-clone.sh astrid-pinokio <task-folder>/product 58e7191d915777db86a8b597f01a98b687e02bb7` | PASS; exact bridge base |
+| exact source verification | PASS; M-QUAL source `258ccddc4fc02de864487518a45ca745e0a23855` is fetched and its validator requires `bootstrap_action: preflightStop` |
 | JSON root/schema/six-slot assertion | PASS; root exactly `linux`, `macos`, `windows`; six unique mapped slots |
 | tuple and credential-like material scans | PASS; tuple exact; no credential material or invented provider identity |
-| `sha256sum` and `sha256sum -c SHA256SUMS` | PASS; five retained packet payload/receipt hashes and two added-file hashes |
+| `sha256sum` and `sha256sum -c SHA256SUMS` | PASS; five retained packet payload/binding hashes |
 | `git diff --check` | PASS |
 | changed-path allowlist | PASS; only bridge, binding note, `SHA256SUMS`, and `REPORT.md` under venue path |
 | commit / non-force push / `git ls-remote` | Recorded in the task-folder receipt after publication |
@@ -104,11 +106,12 @@ runtime identity, installed-product identity, fixture, or credential identity
 is asserted or fabricated. Missing provider/spec/hash/action-array checks are
 hard pre-dispatch failures.
 
-The pinned Agent custom-step seam remains unresolved: `ci_journey.py` requires
-`{"kind":"custom","name":"preflightStop"}`, while the backend validator
-requires `{"kind":"custom","bootstrap_action":"preflightStop"}`. This
-task changes no Agent-owned file. M-QUAL/M-VENUE must resolve or gate that seam
-before treating the config as dispatchable. No hosted receipt exists and no
-R-20, R-21, R-24, or R-25 acceptance is claimed.
+The resolved M-QUAL source contract is
+`{"kind":"custom","bootstrap_action":"preflightStop"}`. This task changes
+no Agent-owned file. Hosted execution, provider authority, installed-product
+identity, R-24 evidence, R-36 verification, and R-25 acceptance remain open
+unless independently supplied. No hosted receipt exists.
 
-`PEER: M-VENUE: fetch lane/M-PIN/R-25-JOURNEY-CONFIG-PUBLISH at the exact immutable SHA in the task-folder receipt; hash-verify M4-4A-JOURNEY-CONFIGS.json and CONFIG-BINDING.md, wire all three OS objects without {} fallback, pass the frozen manifest, set fail-fast: false, and keep hosted qualification fail-closed until the provider and pinned Agent schema seam are resolved.`
+PEER: M-VENUE: fetch lane/M-PIN/R-25-SCHEMA-R1 at the exact immutable SHA in the task-folder receipt; hash-verify M4-4A-JOURNEY-CONFIGS.json, CONFIG-BINDING.md, and SHA256SUMS; wire all three OS objects without `{}` fallback, pass the frozen manifest, set fail-fast: false, and keep hosted qualification fail-closed until provider authority and required terminal evidence are independently supplied.
+
+PEER: M-QUAL: the `name`-spelled M4-4a bridge on lane/M-PIN/R-25-JOURNEY-CONFIG-PUBLISH is superseded by this lane's M-QUAL-source-aligned `bootstrap_action` bridge.

@@ -71,14 +71,13 @@ especially required on Windows because the pinned builder emits a
 PowerShell-5.1 command whose Node executable and quoting are runner-local.
 Reject the packet if the comparison fails.
 
-There is also a pinned-source contract mismatch that this task records but
-does not fix: `ci_journey.py` compares the custom Stop step as
-`{"kind":"custom","name":"preflightStop"}`, while
-`pinokio_backend_executor.py` validates it as
-`{"kind":"custom","bootstrap_action":"preflightStop"}`. These cannot be
-made byte-identical in one JSON value. M-QUAL/M-VENUE must resolve or explicitly
-gate this Agent-side seam before treating a hosted run as dispatchable; no
-Agent harness file is changed by this Pinokio task.
+M-QUAL resolved the custom-step schema at
+`banodoco/astrid-agent` `lane/M-QUAL/R-05-CUSTOM-STEP-SCHEMA-R1` commit
+`258ccddc4fc02de864487518a45ca745e0a23855`. The pinned bridge contract for
+every retry is exactly
+`{"kind":"custom","bootstrap_action":"preflightStop"}`; the stale
+`name` spelling is not accepted. This binding carries that resolved source
+contract without changing an Agent-owned file or changing the tuple.
 
 ## Caller wiring
 
