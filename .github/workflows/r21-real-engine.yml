@@ -55,6 +55,7 @@ jobs:
             set -euo pipefail
             git clone --filter=blob:none https://github.com/pinokiocomputer/pinokiod.git "$RUNNER_TEMP/pinokiod"
             git -C "$RUNNER_TEMP/pinokiod" checkout --detach add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
+            npm ci --omit=dev --prefix "$RUNNER_TEMP/pinokiod" --silent
             git clone --filter=blob:none https://github.com/pinokiocomputer/pterm.git "$RUNNER_TEMP/pterm"
             git -C "$RUNNER_TEMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb
             npm ci --omit=dev --prefix "$RUNNER_TEMP/pterm" --silent
