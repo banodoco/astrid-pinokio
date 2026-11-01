@@ -9,6 +9,7 @@ const raw = (...records) => records.map(r => JSON.stringify(r)).join('\n') + '\n
 const reason = (...records) => inspect(raw(...records), 0).reason;
 test('client and subscription failures are unknown with explicit cleanup', () => {
   assert.equal(reason({ type: 'open-failed', code: 3 }), 'client-unavailable');
+  assert.equal(inspect(raw({ type: 'open-failed', code: 3 }), 1).source_result.code, 3);
   assert.equal(reason({ type: 'subscribe-failed', code: 1, cleanup: 0 }), 'subscription-failed');
   assert.equal(reason({ type: 'subscribe-failed', code: 1, cleanup: 1 }), 'cleanup-failed');
 });
@@ -41,6 +42,7 @@ test('reject unrecognized fields and malformed records', () => {
   assert.equal(reason(ready, { ...event(1), path: '/secret' }, terminal), 'malformed');
   assert.equal(reason(ready, { ...event(1), sequence: '01' }, terminal), 'malformed');
   assert.equal(inspect('{\n', 0).reason, 'malformed');
+  assert.equal(inspect('{"type":"ready","type":"ready"}\n', 0).reason, 'malformed');
   assert.equal(inspect(raw(ready).slice(0, -1), 0).reason, 'malformed');
 });
 test('other hosts do not select or run an alternate source', { skip: process.platform === 'darwin' }, async () => {

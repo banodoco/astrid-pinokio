@@ -17,8 +17,8 @@ function inspect(raw, exitCode) {
   try { records = raw.slice(0, -1).split('\n').map(line => { const value = JSON.parse(line); if (JSON.stringify(value) !== line) throw new Error('noncanonical record'); return value; }); } catch { return result; }
   if (records.length > MAX_EVENTS + 2 || !records.length) return result;
   const first = records[0];
-  if (keys(first, ['type', 'code']) && first.type === 'open-failed' && integer(first.code) && records.length === 1) { result.reason = 'client-unavailable'; return result; }
-  if (keys(first, ['type', 'code', 'cleanup']) && first.type === 'subscribe-failed' && integer(first.code) && integer(first.cleanup) && records.length === 1) { result.cleanup = first.cleanup === 0 ? 'success' : 'failed'; result.reason = first.cleanup === 0 ? 'subscription-failed' : 'cleanup-failed'; return result; }
+  if (keys(first, ['type', 'code']) && first.type === 'open-failed' && integer(first.code) && records.length === 1) { result.source_result = first; result.reason = 'client-unavailable'; return result; }
+  if (keys(first, ['type', 'code', 'cleanup']) && first.type === 'subscribe-failed' && integer(first.code) && integer(first.cleanup) && records.length === 1) { result.source_result = first; result.cleanup = first.cleanup === 0 ? 'success' : 'failed'; result.reason = first.cleanup === 0 ? 'subscription-failed' : 'cleanup-failed'; return result; }
   if (!keys(first, ['type']) || first.type !== 'ready') return result;
   let previous = null;
   for (let i = 1; i < records.length; i++) {
@@ -26,6 +26,7 @@ function inspect(raw, exitCode) {
     if (r.type === 'terminal') {
       if (i !== records.length - 1 || !keys(r, ['type', 'stop', 'unsubscribe', 'barrier', 'cleanup', 'overflow']) || ![r.stop, r.barrier, r.overflow].every(x => x === 0 || x === 1) || !integer(r.unsubscribe) || !integer(r.cleanup)) return result;
       result.continuity.terminal = true;
+      result.source_result = r;
       result.cleanup = r.cleanup === 0 ? 'success' : 'failed';
       if (r.cleanup !== 0 || r.unsubscribe !== 0) result.reason = 'cleanup-failed';
       else if (r.overflow) result.reason = 'overflow';
