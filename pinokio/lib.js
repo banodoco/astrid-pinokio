@@ -480,10 +480,22 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
         cwd: APP_DIR, env, timeout: 1_200_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
         onOutput: (raw) => ondata?.({ raw }),
       });
-      if (result.error || result.status !== 0) throw new Error((result.stderr || result.stdout || result.error?.message || `exit ${result.status}`).trim());
+      // Preserve an adapter's structured refusal for the caller. The R-17
+      // installer contract still determines how a real refusal is decoded;
+      // an unrecognised nonzero exit remains a failure, never a retry signal.
+      if (result.error || result.status !== 0) {
+        const failure = new Error((result.stderr || result.stdout || result.error?.message || `exit ${result.status}`).trim(),
+          result.error ? { cause: result.error } : undefined);
+        if (result.error?.details !== undefined) failure.details = result.error.details;
+        throw failure;
+      }
       ondata?.({ raw: 'Editor and Runtime update completed. Starting Astrid.\r\n' });
     } catch (error) {
-      if (promoting) throw new Error(`${promoted ? 'Editor promoted, but the installer update failed' : 'Editor promotion failed'}; Astrid is stopped. ${error.message}${promoted ? ' Choose Update to recover or retry before starting.' : ` Inspect retained candidate at ${prepared.parent}.`}`, { cause: error });
+      if (promoting) {
+        const failure = new Error(`${promoted ? 'Editor promoted, but the installer update failed' : 'Editor promotion failed'}; Astrid is stopped. ${error.message}${promoted ? ' Choose Update to recover or retry before starting.' : ` Inspect retained candidate at ${prepared.parent}.`}`, { cause: error });
+        if (error.details !== undefined) failure.details = error.details;
+        throw failure;
+      }
       throw error;
     } finally {
       if (!promoting || promoted) await prepared.cleanup();

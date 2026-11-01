@@ -1199,7 +1199,7 @@ test('isolated update preparation preserves the checkout and reports build and r
 test('fully-local Update route stages failure, promotes success, and reports installer failure', async (t) => {
   const { execFileSync } = await import('node:child_process');
   const { buildWithSession } = await import('../pinokio/update-stage.mjs');
-  for (const outcome of ['build failure', 'success', 'installer failure']) {
+  for (const outcome of ['build failure', 'success', 'installer failure', 'installer refusal']) {
     const parent = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'pinokio-route-'));
     t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
     const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -1255,6 +1255,11 @@ test('fully-local Update route stages failure, promotes success, and reports ins
         installer: async (_cmd, args) => {
           events.push('installer'); assert.equal(git(editor, 'rev-parse', 'HEAD'), target);
           assert.match(args.join(' '), /--update/); assert.match(args.join(' '), /install-manifest\.json/);
+          if (outcome === 'installer refusal') {
+            const error = new Error('controlled refusal');
+            error.details = { fixture: 'opaque refusal details' };
+            return { status: null, error };
+          }
           return { status: outcome === 'installer failure' ? 1 : 0, stderr: outcome === 'installer failure' ? 'controlled installer failure' : '' };
         },
       } });
@@ -1271,7 +1276,13 @@ test('fully-local Update route stages failure, promotes success, and reports ins
       assert.equal(fs.readFileSync(path.join(editor, 'dist', 'old'), 'utf8'), 'ignored build');
       assert.equal(fs.readFileSync(path.join(editor, 'node_modules', 'old'), 'utf8'), 'ignored dependency');
     } else {
-      if (outcome === 'installer failure') await assert.rejects(script.run[0].method({}, () => {}, kernel), /Editor promoted, but the installer update failed.*controlled installer failure/);
+      if (outcome === 'installer refusal') await assert.rejects(script.run[0].method({}, () => {}, kernel), (error) => {
+        assert.match(error.message, /Editor promoted, but the installer update failed.*controlled refusal/);
+        assert.deepEqual(error.details, { fixture: 'opaque refusal details' });
+        assert.equal(error.cause.message, 'controlled refusal');
+        return true;
+      });
+      else if (outcome === 'installer failure') await assert.rejects(script.run[0].method({}, () => {}, kernel), /Editor promoted, but the installer update failed.*controlled installer failure/);
       else await script.run[0].method({}, () => {}, kernel);
       assert.deepEqual(events, ['build', 'preflight', 'stop', 'kernel-stop', 'installer']);
       assert.equal(git(editor, 'rev-parse', 'HEAD'), target);
