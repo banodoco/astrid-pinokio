@@ -1,0 +1,33 @@
+name: R-25 observer source probe
+on:
+  push:
+    branches: ['lane/M-PIN/R-25-SOURCES']
+permissions:
+  contents: read
+jobs:
+  source-probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Focused observer tests
+        run: node --test tests/native-observer-source.test.mjs
+      - name: Probe source and retain allowlisted facts
+        run: node .github/venue/observer-probe/probe.cjs
+      - name: Upload bounded probe facts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r25-source-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: observer-probe-result.json
+          if-no-files-found: warn
+          retention-days: 30
