@@ -39,7 +39,7 @@ permissions:
 
 jobs:
   linux-real-action:
-    if: github.ref != 'refs/heads/lane/M-PIN/R-20-WINDOWS-wip'
+    if: github.ref != 'refs/heads/lane/M-PIN/R-20-WINDOWS-wip' && github.ref != 'refs/heads/lane/M-PIN/R-20-WINCAUSE'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -76,7 +76,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        # The bounded cause rerun intentionally includes only its Windows venue.
+        os: ${{ github.ref == 'refs/heads/lane/M-PIN/R-20-WINCAUSE' && fromJSON('["windows-latest"]') || fromJSON('["macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:

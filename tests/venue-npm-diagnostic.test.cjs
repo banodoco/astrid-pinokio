@@ -20,3 +20,29 @@ test('handles scoped packages and legacy npm format without retaining untrusted 
     'package=@scope/native@1.2.3\ncode=ENOENT');
   assert.equal(diagnose('npm error path /token/node_modules/unknown\nnpm error code https://secret', lock), '');
 });
+
+test('retains only allowlisted lifecycle, tool, and reason tokens', () => {
+  const log = [
+    'npm error lifecycle better-sqlite3@12.11.1~install: failed',
+    'npm error command C:\\Users\\secret\\node_modules\\node-gyp\\bin\\node-gyp.js rebuild https://secret.invalid/token',
+    'gyp ERR! find Python Python is not set from command line or npm configuration',
+    'npm error path C:\\Users\\secret\\node_modules\\better-sqlite3',
+    'npm error code 1',
+  ].join('\n');
+  assert.equal(diagnose(log, lock), [
+    'package=better-sqlite3@12.11.1',
+    'phase=install',
+    'tool=node-gyp',
+    'reason=python-missing',
+    'code=1',
+  ].join('\n'));
+});
+
+test('does not echo unrecognized lifecycle commands or reason text', () => {
+  const log = [
+    'npm error lifecycle secret-package@1.0.0~custom: failed',
+    'npm error command C:\\Users\\secret\\unknown-build-tool --token https://secret.invalid',
+    'fatal: secret local directory missing',
+  ].join('\n');
+  assert.equal(diagnose(log, lock), '');
+});
