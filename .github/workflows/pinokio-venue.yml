@@ -24,8 +24,8 @@ on:
       - 'pinokio/**'
       - 'tests/**'
   # T4 checkpoint rehearsal and RV-5 qualification can call this workflow at
-  # the integrated Pinokio ref through workflow_call. Manual dispatch is also
-  # available after this workflow exists on the repository's default branch.
+  # the integrated Pinokio ref through workflow_call. Manual dispatch is
+  # limited to the independently selectable hosted macOS/Windows lanes.
   workflow_call:
     inputs:
       pinokio_ref:
@@ -33,19 +33,90 @@ on:
         required: true
         type: string
   workflow_dispatch:
+    inputs:
+      pinokio_ref:
+        description: Immutable 40-character Pinokio commit SHA
+        required: true
+        type: string
+      slot_label:
+        description: Bounded rehearsal or M4-6 slot label
+        required: true
+        type: string
+      target_os:
+        description: Hosted venue lane to run
+        required: true
+        default: both
+        type: choice
+        options:
+          - macos
+          - windows
+          - both
 
 permissions:
   contents: read
 
 jobs:
+  validate-inputs:
+    name: Validate immutable venue inputs
+    runs-on: ubuntu-latest
+    outputs:
+      pinokio_ref: ${{ steps.validate.outputs.pinokio_ref }}
+      slot_label: ${{ steps.validate.outputs.slot_label }}
+      target_os: ${{ steps.validate.outputs.target_os }}
+    steps:
+      - id: validate
+        name: Reject mutable or unbounded dispatch requests
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PINOKIO_REF: ${{ inputs.pinokio_ref }}
+          INPUT_SLOT_LABEL: ${{ inputs.slot_label }}
+          INPUT_TARGET_OS: ${{ inputs.target_os }}
+          GITHUB_SHA_VALUE: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "workflow_call" ]]; then
+            selected_ref="$INPUT_PINOKIO_REF"
+            [[ -n "$selected_ref" ]] || { echo 'pinokio_ref is required for dispatch/call' >&2; exit 1; }
+            slot_label="$INPUT_SLOT_LABEL"
+            target_os="$INPUT_TARGET_OS"
+          else
+            selected_ref="$GITHUB_SHA_VALUE"
+            slot_label="push-${GITHUB_SHA_VALUE:0:12}"
+            target_os='both'
+          fi
+          [[ "$selected_ref" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo 'pinokio_ref must be exactly a 40-character hexadecimal commit SHA' >&2
+            exit 1
+          }
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            [[ "$slot_label" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$ ]] || {
+              echo 'slot_label must be 1-64 characters: letters, digits, dot, underscore, slash, or hyphen' >&2
+              exit 1
+            }
+            [[ "$target_os" == 'macos' || "$target_os" == 'windows' || "$target_os" == 'both' ]] || {
+              echo 'target_os must be macos, windows, or both' >&2
+              exit 1
+            }
+          fi
+          {
+            echo "pinokio_ref=$selected_ref"
+            echo "slot_label=$slot_label"
+            echo "target_os=$target_os"
+          } >> "$GITHUB_OUTPUT"
+
   linux-real-action:
+    needs: validate-inputs
+    # Linux qualification stays on the RunPod venue. This workflow only
+    # dispatches the hosted macOS/Windows lanes, and R-25 lane pushes do not
+    # claim a GitHub-hosted Linux run.
+    if: ${{ github.event_name != 'workflow_dispatch' && !startsWith(github.ref, 'refs/heads/lane/M-PIN/R-25') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           repository: banodoco/astrid-pinokio
-          ref: ${{ inputs.pinokio_ref || github.sha }}
+          ref: ${{ needs.validate-inputs.outputs.pinokio_ref }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -71,22 +142,54 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  native-probe:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  macos-native-probe:
+    needs: validate-inputs
+    if: ${{ needs.validate-inputs.outputs.target_os == 'both' || needs.validate-inputs.outputs.target_os == 'macos' }}
+    name: macOS native venue — ${{ needs.validate-inputs.outputs.slot_label }}
+    runs-on: macos-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           repository: banodoco/astrid-pinokio
-          ref: ${{ inputs.pinokio_ref || github.sha }}
+          ref: ${{ needs.validate-inputs.outputs.pinokio_ref }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
+      - name: Record dispatch metadata
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          REQUESTED_REF: ${{ needs.validate-inputs.outputs.pinokio_ref }}
+          REQUESTED_SLOT_LABEL: ${{ needs.validate-inputs.outputs.slot_label }}
+          REQUESTED_TARGET_OS: ${{ needs.validate-inputs.outputs.target_os }}
+          RUNNER_OS_NAME: ${{ runner.os }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const dir = path.join(process.env.RUNNER_TEMP, 'r20-evidence');
+          fs.mkdirSync(dir, { recursive: true });
+          const metadata = {
+            event: process.env.EVENT_NAME,
+            workflow_ref: process.env.WORKFLOW_REF,
+            run_id: process.env.RUN_ID,
+            run_attempt: process.env.RUN_ATTEMPT,
+            requested_pinokio_ref: process.env.REQUESTED_REF,
+            requested_slot_label: process.env.REQUESTED_SLOT_LABEL,
+            requested_target_os: process.env.REQUESTED_TARGET_OS,
+            runner_os: process.env.RUNNER_OS_NAME,
+            linux_execution_venue: 'RunPod; not this hosted lane',
+            evidence_class: 'component-native-probe',
+            protected_m4_6_evidence: false,
+            real_engine_settlement_claimed: false,
+            queued_or_component_result_is_not_a_slot_receipt: true
+          };
+          fs.writeFileSync(path.join(dir, 'dispatch-metadata.json'), `${JSON.stringify(metadata, null, 2)}\n`);
+          NODE
       - name: Probe native dependencies and launch
         shell: bash
         run: bash .github/venue/native.sh
@@ -94,7 +197,67 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r20-native-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: r25-native-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/r20-evidence
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-native-probe:
+    needs: validate-inputs
+    if: ${{ needs.validate-inputs.outputs.target_os == 'both' || needs.validate-inputs.outputs.target_os == 'windows' }}
+    name: Windows native venue — ${{ needs.validate-inputs.outputs.slot_label }}
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: banodoco/astrid-pinokio
+          ref: ${{ needs.validate-inputs.outputs.pinokio_ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Record dispatch metadata
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          REQUESTED_REF: ${{ needs.validate-inputs.outputs.pinokio_ref }}
+          REQUESTED_SLOT_LABEL: ${{ needs.validate-inputs.outputs.slot_label }}
+          REQUESTED_TARGET_OS: ${{ needs.validate-inputs.outputs.target_os }}
+          RUNNER_OS_NAME: ${{ runner.os }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const dir = path.join(process.env.RUNNER_TEMP, 'r20-evidence');
+          fs.mkdirSync(dir, { recursive: true });
+          const metadata = {
+            event: process.env.EVENT_NAME,
+            workflow_ref: process.env.WORKFLOW_REF,
+            run_id: process.env.RUN_ID,
+            run_attempt: process.env.RUN_ATTEMPT,
+            requested_pinokio_ref: process.env.REQUESTED_REF,
+            requested_slot_label: process.env.REQUESTED_SLOT_LABEL,
+            requested_target_os: process.env.REQUESTED_TARGET_OS,
+            runner_os: process.env.RUNNER_OS_NAME,
+            linux_execution_venue: 'RunPod; not this hosted lane',
+            evidence_class: 'component-native-probe',
+            protected_m4_6_evidence: false,
+            real_engine_settlement_claimed: false,
+            queued_or_component_result_is_not_a_slot_receipt: true
+          };
+          fs.writeFileSync(path.join(dir, 'dispatch-metadata.json'), `${JSON.stringify(metadata, null, 2)}\n`);
+          NODE
+      - name: Probe native dependencies and launch
+        shell: bash
+        run: bash .github/venue/native.sh
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r25-native-windows-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/r20-evidence
           if-no-files-found: warn
           retention-days: 30
