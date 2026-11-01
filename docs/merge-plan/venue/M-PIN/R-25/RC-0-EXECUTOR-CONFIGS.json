@@ -1,0 +1,382 @@
+{
+  "schema_version": "r25-executor-config.v1",
+  "packet_id": "R-25-EXECUTOR-CONFIG-RC-0-M4-6",
+  "packet_kind": "sanitized-immutable-executor-configurations",
+  "producer": "M-PIN/R-25-EXECUTOR-CONFIG",
+  "execution_owner": "M-VENUE",
+  "mapping_consumer": "M-QUAL",
+  "acceptance_state": "DISPATCH_INPUT_ONLY",
+  "dispatch_eligibility": {
+    "status": "ELIGIBLE_FOR_M_VENUE_DISPATCH",
+    "basis": "RC-0 tuple, D9 all-six canon, and prior bounded six-request packet agree",
+    "qualification_claimed": false
+  },
+  "repository_base_identity": {
+    "repository": "banodoco/astrid-pinokio",
+    "nominal_branch": "lane/M-PIN/R-25-EXECUTOR-CONFIG",
+    "product_commit": null,
+    "pinokio_base_sha": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+    "product_commit_policy": "none; documentation/evidence handoff only"
+  },
+  "immutable_rc0_tuple": {
+    "runtime": "47e5949465cb6f3afdfd1cb8a0e90009fd9d4020",
+    "agent": "af5ae8afdb9829beb2bba4f811dbe97765bd72b2",
+    "app": "a55bec9ff384b5bbfee5535962880084ab2adb1b",
+    "pinokio": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4"
+  },
+  "required_scenario_groups": [
+    "interruption_recovery",
+    "failed_candidate_rollback",
+    "keep_data_uninstall",
+    "stop_safety"
+  ],
+  "required_stop_safety_outcomes": [
+    "refused",
+    "unknown"
+  ],
+  "receipt_contract": {
+    "evidence_class": "authentic-m4-6-terminal-receipt",
+    "required_terminal_fields": [
+      "hosted_run_id",
+      "hosted_job_id",
+      "inner_exit_code",
+      "immutable_checkout_head",
+      "runtime_sha",
+      "agent_sha",
+      "app_sha",
+      "pinokio_sha",
+      "requirements_runtime_lock_sha256",
+      "installed_product_digest",
+      "per_scenario_evidence",
+      "stop_safety_refused_evidence",
+      "stop_safety_unknown_evidence",
+      "artifact_hashes",
+      "trusted_r36_collector_disposition",
+      "trusted_r36_verifier_result",
+      "accepted_r24_provider_binding"
+    ],
+    "non_accepting_evidence": [
+      "dispatch_metadata",
+      "queued_run",
+      "component_native_probe",
+      "bounded_adapter_diagnostic"
+    ]
+  },
+  "source_inputs": {
+    "rc0_manifest": {
+      "path": "/home/user/merge-docs/docs/merge-plan/aggregate/RC-0.md",
+      "sha256": "7049f2a89c1789cbd16bbdcce422fdd07abb8188be00b01566c3a056559585d8"
+    },
+    "tasks_d9_canon": {
+      "path": "/home/user/merge-docs/docs/merge-plan/TASKS.md",
+      "sha256": "724a0e8ff71c93394cea697d40cfc624bef18486c4b93eea0070cd1a6d4b68fc"
+    },
+    "decisions_d9_canon": {
+      "path": "/home/user/merge-docs/docs/merge-plan/DECISIONS.md",
+      "sha256": "c39fa84b436ef527069a437893378c86a57f1159679d892f8d0a46b3ec283f00"
+    },
+    "orchestrator_m_int_instruction": {
+      "path": "/home/user/merge/ws/M-PIN/ORCHESTRATOR.md",
+      "sha256": "34da3d671eecbb541b93403f431828a6a42da140d7ef4d99c3c71e9c67dbd448",
+      "instruction_timestamp": "2026-11-01T14:58:36Z"
+    },
+    "prior_request_packet": {
+      "path": "/home/user/merge/ws/M-PIN/queue/done/R-25-R3/RC-0-REQUEST-PACKET.json",
+      "sha256": "2b0b8f83eaeb28f3ed6d8a830d5580ed9a10970c8fe772bb124808a93ae7199d"
+    },
+    "prior_reports": [
+      {
+        "path": "/home/user/merge/ws/M-PIN/queue/done/R-25-R3/REPORT.md",
+        "sha256": "364f8e44047d3cd6ee61ebf9e7ba201beeac542d36fb272b29e45b195f47916e"
+      },
+      {
+        "path": "/home/user/merge/ws/M-PIN/queue/done/R-25-R2/REPORT.md",
+        "sha256": "8aab9d5500364921dfb7126deecec7081b604077906fdefba636ac769b7fe520"
+      },
+      {
+        "path": "/home/user/merge/ws/M-PIN/queue/done/R-25-DISPATCH/REPORT.md",
+        "sha256": "6e95cae6382c1a6071486d496344e01a7f3072ade5e7afc4c47e8802dabbb328"
+      }
+    ],
+    "m_venue_status": {
+      "path": "/home/user/merge-docs/docs/merge-plan/status/M-VENUE.md",
+      "sha256": "b60f12f83cf85f9b0c55a8c01e91aa4fc66f3c53129cc04c26248fce6f37d04d"
+    },
+    "m_qual_status": {
+      "path": "/home/user/merge-docs/docs/merge-plan/status/M-QUAL.md",
+      "sha256": "dc4035c31fe6930691c12a05ca0d980d9781099427a7f5ec0ebea6f1906f2a80"
+    }
+  },
+  "records": [
+    {
+      "request_id": "R-25-EXECUTOR-CONFIG-RC-0-pinokio-backend-macos",
+      "slot_id": "pinokio-backend-macos",
+      "os": "macos",
+      "runner": "macos-14",
+      "shell": "sh",
+      "channel": "pinokio-backend",
+      "mode": "backend",
+      "venue": "M-VENUE",
+      "immutable_pinokio_sha": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+      "rc0_tuple": {
+        "runtime": "47e5949465cb6f3afdfd1cb8a0e90009fd9d4020",
+        "agent": "af5ae8afdb9829beb2bba4f811dbe97765bd72b2",
+        "app": "a55bec9ff384b5bbfee5535962880084ab2adb1b",
+        "pinokio": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4"
+      },
+      "required_scenario_groups": ["interruption_recovery", "failed_candidate_rollback", "keep_data_uninstall", "stop_safety"],
+      "required_stop_safety_outcomes": ["refused", "unknown"],
+      "dispatch": {
+        "status": "READY_FOR_M_VENUE_DISPATCH",
+        "run_id": null,
+        "job_id": null
+      },
+      "receipt": {
+        "status": "AWAITING_TERMINAL_RECEIPT",
+        "hosted_run_id": null,
+        "hosted_job_id": null,
+        "inner_exit_code": null,
+        "immutable_checkout_head": null,
+        "requirements_runtime_lock_sha256": null,
+        "installed_product_digest": null,
+        "scenario_evidence": {
+          "interruption_recovery": null,
+          "failed_candidate_rollback": null,
+          "keep_data_uninstall": null,
+          "stop_safety": {"refused": null, "unknown": null}
+        },
+        "artifact_hashes": []
+      },
+      "collector": {
+        "r24_provider_binding": null,
+        "r36_collector_disposition": null,
+        "r36_verifier_result": null
+      }
+    },
+    {
+      "request_id": "R-25-EXECUTOR-CONFIG-RC-0-pinokio-backend-linux",
+      "slot_id": "pinokio-backend-linux",
+      "os": "linux",
+      "runner": "ubuntu-24.04",
+      "shell": "sh",
+      "channel": "pinokio-backend",
+      "mode": "backend",
+      "venue": "M-VENUE",
+      "immutable_pinokio_sha": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+      "rc0_tuple": {
+        "runtime": "47e5949465cb6f3afdfd1cb8a0e90009fd9d4020",
+        "agent": "af5ae8afdb9829beb2bba4f811dbe97765bd72b2",
+        "app": "a55bec9ff384b5bbfee5535962880084ab2adb1b",
+        "pinokio": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4"
+      },
+      "required_scenario_groups": ["interruption_recovery", "failed_candidate_rollback", "keep_data_uninstall", "stop_safety"],
+      "required_stop_safety_outcomes": ["refused", "unknown"],
+      "dispatch": {
+        "status": "READY_FOR_M_VENUE_DISPATCH",
+        "run_id": null,
+        "job_id": null
+      },
+      "receipt": {
+        "status": "AWAITING_TERMINAL_RECEIPT",
+        "hosted_run_id": null,
+        "hosted_job_id": null,
+        "inner_exit_code": null,
+        "immutable_checkout_head": null,
+        "requirements_runtime_lock_sha256": null,
+        "installed_product_digest": null,
+        "scenario_evidence": {
+          "interruption_recovery": null,
+          "failed_candidate_rollback": null,
+          "keep_data_uninstall": null,
+          "stop_safety": {"refused": null, "unknown": null}
+        },
+        "artifact_hashes": []
+      },
+      "collector": {
+        "r24_provider_binding": null,
+        "r36_collector_disposition": null,
+        "r36_verifier_result": null
+      }
+    },
+    {
+      "request_id": "R-25-EXECUTOR-CONFIG-RC-0-pinokio-backend-windows",
+      "slot_id": "pinokio-backend-windows",
+      "os": "windows",
+      "runner": "windows-2022",
+      "shell": "powershell.exe",
+      "channel": "pinokio-backend",
+      "mode": "backend",
+      "venue": "M-VENUE",
+      "immutable_pinokio_sha": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+      "rc0_tuple": {
+        "runtime": "47e5949465cb6f3afdfd1cb8a0e90009fd9d4020",
+        "agent": "af5ae8afdb9829beb2bba4f811dbe97765bd72b2",
+        "app": "a55bec9ff384b5bbfee5535962880084ab2adb1b",
+        "pinokio": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4"
+      },
+      "required_scenario_groups": ["interruption_recovery", "failed_candidate_rollback", "keep_data_uninstall", "stop_safety"],
+      "required_stop_safety_outcomes": ["refused", "unknown"],
+      "dispatch": {
+        "status": "READY_FOR_M_VENUE_DISPATCH",
+        "run_id": null,
+        "job_id": null
+      },
+      "receipt": {
+        "status": "AWAITING_TERMINAL_RECEIPT",
+        "hosted_run_id": null,
+        "hosted_job_id": null,
+        "inner_exit_code": null,
+        "immutable_checkout_head": null,
+        "requirements_runtime_lock_sha256": null,
+        "installed_product_digest": null,
+        "scenario_evidence": {
+          "interruption_recovery": null,
+          "failed_candidate_rollback": null,
+          "keep_data_uninstall": null,
+          "stop_safety": {"refused": null, "unknown": null}
+        },
+        "artifact_hashes": []
+      },
+      "collector": {
+        "r24_provider_binding": null,
+        "r36_collector_disposition": null,
+        "r36_verifier_result": null
+      }
+    },
+    {
+      "request_id": "R-25-EXECUTOR-CONFIG-RC-0-pinokio-fully-local-macos",
+      "slot_id": "pinokio-fully-local-macos",
+      "os": "macos",
+      "runner": "macos-14",
+      "shell": "sh",
+      "channel": "pinokio-fully-local",
+      "mode": "fully-local",
+      "venue": "M-VENUE",
+      "immutable_pinokio_sha": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+      "rc0_tuple": {
+        "runtime": "47e5949465cb6f3afdfd1cb8a0e90009fd9d4020",
+        "agent": "af5ae8afdb9829beb2bba4f811dbe97765bd72b2",
+        "app": "a55bec9ff384b5bbfee5535962880084ab2adb1b",
+        "pinokio": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4"
+      },
+      "required_scenario_groups": ["interruption_recovery", "failed_candidate_rollback", "keep_data_uninstall", "stop_safety"],
+      "required_stop_safety_outcomes": ["refused", "unknown"],
+      "dispatch": {
+        "status": "READY_FOR_M_VENUE_DISPATCH",
+        "run_id": null,
+        "job_id": null
+      },
+      "receipt": {
+        "status": "AWAITING_TERMINAL_RECEIPT",
+        "hosted_run_id": null,
+        "hosted_job_id": null,
+        "inner_exit_code": null,
+        "immutable_checkout_head": null,
+        "requirements_runtime_lock_sha256": null,
+        "installed_product_digest": null,
+        "scenario_evidence": {
+          "interruption_recovery": null,
+          "failed_candidate_rollback": null,
+          "keep_data_uninstall": null,
+          "stop_safety": {"refused": null, "unknown": null}
+        },
+        "artifact_hashes": []
+      },
+      "collector": {
+        "r24_provider_binding": null,
+        "r36_collector_disposition": null,
+        "r36_verifier_result": null
+      }
+    },
+    {
+      "request_id": "R-25-EXECUTOR-CONFIG-RC-0-pinokio-fully-local-linux",
+      "slot_id": "pinokio-fully-local-linux",
+      "os": "linux",
+      "runner": "ubuntu-24.04",
+      "shell": "sh",
+      "channel": "pinokio-fully-local",
+      "mode": "fully-local",
+      "venue": "M-VENUE",
+      "immutable_pinokio_sha": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+      "rc0_tuple": {
+        "runtime": "47e5949465cb6f3afdfd1cb8a0e90009fd9d4020",
+        "agent": "af5ae8afdb9829beb2bba4f811dbe97765bd72b2",
+        "app": "a55bec9ff384b5bbfee5535962880084ab2adb1b",
+        "pinokio": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4"
+      },
+      "required_scenario_groups": ["interruption_recovery", "failed_candidate_rollback", "keep_data_uninstall", "stop_safety"],
+      "required_stop_safety_outcomes": ["refused", "unknown"],
+      "dispatch": {
+        "status": "READY_FOR_M_VENUE_DISPATCH",
+        "run_id": null,
+        "job_id": null
+      },
+      "receipt": {
+        "status": "AWAITING_TERMINAL_RECEIPT",
+        "hosted_run_id": null,
+        "hosted_job_id": null,
+        "inner_exit_code": null,
+        "immutable_checkout_head": null,
+        "requirements_runtime_lock_sha256": null,
+        "installed_product_digest": null,
+        "scenario_evidence": {
+          "interruption_recovery": null,
+          "failed_candidate_rollback": null,
+          "keep_data_uninstall": null,
+          "stop_safety": {"refused": null, "unknown": null}
+        },
+        "artifact_hashes": []
+      },
+      "collector": {
+        "r24_provider_binding": null,
+        "r36_collector_disposition": null,
+        "r36_verifier_result": null
+      }
+    },
+    {
+      "request_id": "R-25-EXECUTOR-CONFIG-RC-0-pinokio-fully-local-windows",
+      "slot_id": "pinokio-fully-local-windows",
+      "os": "windows",
+      "runner": "windows-2022",
+      "shell": "powershell.exe",
+      "channel": "pinokio-fully-local",
+      "mode": "fully-local",
+      "venue": "M-VENUE",
+      "immutable_pinokio_sha": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+      "rc0_tuple": {
+        "runtime": "47e5949465cb6f3afdfd1cb8a0e90009fd9d4020",
+        "agent": "af5ae8afdb9829beb2bba4f811dbe97765bd72b2",
+        "app": "a55bec9ff384b5bbfee5535962880084ab2adb1b",
+        "pinokio": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4"
+      },
+      "required_scenario_groups": ["interruption_recovery", "failed_candidate_rollback", "keep_data_uninstall", "stop_safety"],
+      "required_stop_safety_outcomes": ["refused", "unknown"],
+      "dispatch": {
+        "status": "READY_FOR_M_VENUE_DISPATCH",
+        "run_id": null,
+        "job_id": null
+      },
+      "receipt": {
+        "status": "AWAITING_TERMINAL_RECEIPT",
+        "hosted_run_id": null,
+        "hosted_job_id": null,
+        "inner_exit_code": null,
+        "immutable_checkout_head": null,
+        "requirements_runtime_lock_sha256": null,
+        "installed_product_digest": null,
+        "scenario_evidence": {
+          "interruption_recovery": null,
+          "failed_candidate_rollback": null,
+          "keep_data_uninstall": null,
+          "stop_safety": {"refused": null, "unknown": null}
+        },
+        "artifact_hashes": []
+      },
+      "collector": {
+        "r24_provider_binding": null,
+        "r36_collector_disposition": null,
+        "r36_verifier_result": null
+      }
+    }
+  ]
+}
