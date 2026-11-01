@@ -682,6 +682,38 @@ test('Stop of an idle/partial install and resolving Start without a mode remain 
   assert.equal(freshLocal.run[0].method, app.ensureDoorPortFree);
 });
 
+test('Stop preserves the failing operation and only continues after a separate successful attempt', async () => {
+  for (const failingStage of ['preflight', 'graceful', 'lock']) {
+    const events = [];
+    const original = Object.assign(new Error('controlled stop failure'), { details: { fixture: failingStage } });
+    let fail = true;
+    const operation = (stage) => async () => {
+      events.push(stage);
+      if (fail && stage === failingStage) throw original;
+    };
+    const app = library.createApp({ platform: 'linux', appDirectory: '/fixture/astrid', environment: {},
+      filesystem: { existsSync: () => true, readFileSync: () => { throw Object.assign(new Error('absent'), { code: 'ENOENT' }); } },
+      lifecycle: { preflightStop: operation('preflight'), requestGracefulStop: operation('graceful'),
+        waitForInstallerLock: operation('lock') },
+    });
+    const uri = path.join(app.APP_DIR, 'pinokio', 'start.js');
+    const kernel = { api: { running: { [uri]: true }, stop: async () => events.push('kernel-stop') } };
+    const stop = load('pinokio/stop.js', app).run[0].method;
+    await assert.rejects(stop({}, () => {}, kernel), (error) => {
+      assert.equal(error.cause, original);
+      assert.equal(error.details, original.details);
+      assert.match(error.message, /controlled stop failure/);
+      return true;
+    });
+    const expected = ['preflight', 'graceful', 'kernel-stop', 'lock'];
+    assert.deepEqual(events, expected.slice(0, expected.indexOf(failingStage) + 1));
+    fail = false;
+    events.length = 0;
+    assert.deepEqual(await stop({}, () => {}, kernel), { stopped: true, lockFree: true });
+    assert.deepEqual(events, expected);
+  }
+});
+
 
 test('controlled Stop runs fenced down before editor cleanup and releases Runtime on every platform and mode', async () => {
   for (const platform of ['darwin', 'linux', 'win32']) for (const mode of ['backend', 'local']) {

@@ -427,7 +427,7 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
       const message = runtimeRefusal ? format(first)
         : `${prefix}${errors.map(format).filter((value) => !value.includes(prefix)).join(' ') ? ` ${errors.map(format).filter((value) => !value.includes(prefix)).join(' ')}` : ''}`;
       ondata?.({ raw: `${message}\r\n` });
-      const refusal = new Error(message);
+      const refusal = new Error(message, { cause: first });
       if (first.details !== undefined) refusal.details = first.details;
       throw refusal;
     }
