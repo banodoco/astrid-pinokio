@@ -3,7 +3,7 @@ name: R-21 native old-launcher Update Stop retry
 on:
   push:
     branches:
-      - venue/M-PIN-R-21-R10
+      - venue/M-PIN-R-21-R11
   workflow_dispatch:
     inputs:
       request_id:
@@ -20,87 +20,82 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: r21-real-engine-${{ inputs.request_id }}-${{ inputs.runner_ref }}
+  group: r21-real-engine-${{ github.run_id }}-${{ github.run_attempt }}
   cancel-in-progress: false
 
 jobs:
-  validate-request:
-    name: Bind dedicated R-21 request
+  native-old-launcher-journey:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      runner_ref: ${{ steps.request.outputs.runner_ref }}
+    timeout-minutes: 90
+    env:
+      R21_REQUEST_ID: ${{ github.event_name == 'push' && 'R-21-R11' || inputs.request_id }}
+      R21_RUNNER_REF: ${{ github.event_name == 'push' && github.sha || inputs.runner_ref }}
+      R21_CONFIRMATION: ${{ github.event_name == 'push' && 'REAL_ENGINE_UPDATE_STOP_RETRY' || inputs.confirmation }}
+      GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-          persist-credentials: false
-      - id: request
-        name: Reject mutable, wrong-lane, or non-R-21 dispatches
-        env:
-          R21_REQUEST_ID: ${{ github.event_name == 'push' && 'R-21-R10' || inputs.request_id }}
-          R21_RUNNER_REF: ${{ github.event_name == 'push' && github.sha || inputs.runner_ref }}
-          R21_CONFIRMATION: ${{ github.event_name == 'push' && 'REAL_ENGINE_UPDATE_STOP_RETRY' || inputs.confirmation }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_REF: ${{ github.ref }}
-          GITHUB_SHA: ${{ github.sha }}
-          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          node .github/venue/r21-inputs.cjs --output "$RUNNER_TEMP/r21-request.json"
-          echo "runner_ref=${R21_RUNNER_REF}" >> "$GITHUB_OUTPUT"
-      - name: Retain the request binding only
-        uses: actions/upload-artifact@v4
-        with:
-          name: r21-request-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/r21-request.json
-          if-no-files-found: error
-          retention-days: 30
-
-  native-old-launcher-journey:
-    needs: validate-request
-    name: Native old-launcher Update Stop retry
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate-request.outputs.runner_ref }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
-      - name: Provision pinned native engine inputs
+      - id: request
+        name: Admit immutable dedicated request
+        run: node .github/venue/r21-inputs.cjs --output "$RUNNER_TEMP/r21-request.json"
+      - id: execute
+        name: Provision pinned inputs and run native journey
+        run: |
+          set +e
+          (
+            set -euo pipefail
+            git clone --filter=blob:none https://github.com/pinokiocomputer/pinokiod.git "$RUNNER_TEMP/pinokiod"
+            git -C "$RUNNER_TEMP/pinokiod" checkout --detach add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
+            git clone --filter=blob:none https://github.com/pinokiocomputer/pterm.git "$RUNNER_TEMP/pterm"
+            git -C "$RUNNER_TEMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb
+            npm ci --omit=dev --prefix "$RUNNER_TEMP/pterm" --silent
+          )
+          setup_exit=$?
+          journey_exit=not-run
+          if [ "$setup_exit" -eq 0 ]; then
+            bash .github/venue/r21-real-engine.sh "$RUNNER_TEMP/r21-request.json"
+            journey_exit=$?
+          fi
+          echo "setup_exit=$setup_exit" >> "$GITHUB_OUTPUT"
+          echo "journey_exit=$journey_exit" >> "$GITHUB_OUTPUT"
+      - name: Publish immutable sanitized result ref
+        if: ${{ always() && steps.request.outcome == 'success' && steps.execute.outcome == 'success' }}
+        env:
+          RESULT_TOKEN: ${{ github.token }}
+          SETUP_EXIT: ${{ steps.execute.outputs.setup_exit }}
+          JOURNEY_EXIT: ${{ steps.execute.outputs.journey_exit }}
         run: |
           set -euo pipefail
-          git clone --filter=blob:none https://github.com/pinokiocomputer/pinokiod.git "$RUNNER_TEMP/pinokiod"
-          git -C "$RUNNER_TEMP/pinokiod" checkout --detach add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
-          git clone --filter=blob:none https://github.com/pinokiocomputer/pterm.git "$RUNNER_TEMP/pterm"
-          git -C "$RUNNER_TEMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb
-          npm ci --omit=dev --prefix "$RUNNER_TEMP/pterm" --silent
-      - name: Execute the dedicated real-engine R-21 journey
+          result="$RUNNER_TEMP/r21-result"
+          node .github/venue/r21-publish.cjs "$RUNNER_TEMP/r21-evidence" "$result" "$SETUP_EXIT" "$JOURNEY_EXIT"
+          ref="refs/heads/venue-results/M-PIN-R-21-R11/${R21_REQUEST_ID}/${GITHUB_WORKFLOW_SHA}/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
+          git check-ref-format "$ref"
+          git init --quiet "$result"
+          git -C "$result" config user.name 'github-actions[bot]'
+          git -C "$result" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C "$result" add request.json verdict.json SHA256SUMS
+          for file in r21-receipt.json runner-failure.json observer-failure.json; do
+            if [ -f "$result/$file" ]; then git -C "$result" add "$file"; fi
+          done
+          git -C "$result" commit --quiet -m "R-21 sanitized hosted result"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$RESULT_TOKEN" | base64 -w0)"
+          export GIT_CONFIG_VALUE_0
+          test -z "$(git -C "$result" ls-remote https://github.com/banodoco/astrid-pinokio.git "$ref")"
+          git -C "$result" push https://github.com/banodoco/astrid-pinokio.git "HEAD:$ref"
+          echo "Result ref: $ref" >> "$GITHUB_STEP_SUMMARY"
+      - name: Mark unsuccessful inner execution
+        if: ${{ always() && steps.request.outcome == 'success' && steps.execute.outcome == 'success' }}
         env:
-          R21_REQUEST_ID: ${{ inputs.request_id }}
-          R21_RUNNER_REF: ${{ needs.validate-request.outputs.runner_ref }}
-          R21_CONFIRMATION: ${{ inputs.confirmation }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_REF: ${{ github.ref }}
-          GITHUB_SHA: ${{ github.sha }}
-          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: bash .github/venue/r21-real-engine.sh "$RUNNER_TEMP/r21-request.json"
-      - name: Retain sanitised R-21 receipt
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: r21-real-engine-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/r21-evidence
-          if-no-files-found: warn
-          retention-days: 30
+          SETUP_EXIT: ${{ steps.execute.outputs.setup_exit }}
+          JOURNEY_EXIT: ${{ steps.execute.outputs.journey_exit }}
+        run: test "$SETUP_EXIT" = 0 && test "$JOURNEY_EXIT" = 0 && node -e 'process.exit(require(process.env.RUNNER_TEMP + "/r21-result/verdict.json").status === "ACCEPTED" ? 0 : 1)'

@@ -27,7 +27,7 @@ function receipt() {
     },
     retry: {
       action_id: 3, action_uri: ACTIONS.update, inner_exit: innerExit(), terminal: terminal(),
-      installer_dispatch: true, running_after: false, runtime_ready: true, application_ready: true, start_to_ready: true,
+      installer_dispatch: true, running_after: false, runtime_ready: true, application_ready: true, start_running_after_retry: true, start_to_ready: true,
     },
     cleanup: {
       action_id: 4, action_uri: ACTIONS.stop, inner_exit: innerExit(), terminal: terminal(),
@@ -76,9 +76,9 @@ test('R-21 venue verifier rejects a successful-looking wrapper with a nonzero in
 test('R-21 dispatch binding accepts only the exact product dispatch or self-serve venue ref', () => {
   const environment = {
     GITHUB_EVENT_NAME: 'push',
-    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-R10',
+    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-R11',
     GITHUB_SHA: 'a'.repeat(40),
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-R10',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-R11',
     GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1',
   };
   const bound = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment);
@@ -91,8 +91,45 @@ test('R-21 dispatch binding accepts only the exact product dispatch or self-serv
   const manual = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, {
     ...environment,
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-R10',
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R10',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-R11',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R11',
   });
   assert.equal(manual.workflow.event, 'workflow_dispatch');
+});
+
+test('publisher binds the run and only retains sanitized evidence with inner exits', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { createRequire } = await import('node:module');
+  const { publish } = createRequire(import.meta.url)('../.github/venue/r21-publish.cjs');
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-publisher-'));
+  try {
+    const environment = {
+      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-R11',
+      GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
+      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-R11',
+      GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: REQUEST_ID,
+      R21_CONFIRMATION: CONFIRMATION, R21_RUNNER_REF: 'a'.repeat(40),
+    };
+    const input = path.join(root, 'in');
+    fs.mkdirSync(input);
+    const sample = receipt();
+    for (const v of Object.values(sample.protected_state)) {
+      v.program = 'a'.repeat(64); v.selected_version = 'b'.repeat(64); v.user_data = 'c'.repeat(64);
+    }
+    sample.secret = 'must-never-leave-runner';
+    fs.writeFileSync(path.join(input, 'r21-receipt.json'), JSON.stringify(sample));
+    const out = path.join(root, 'out');
+    assert.equal(publish({ env: environment, evidenceDir: input, destination: out, setupExit: 0, journeyExit: 0 }).status, 'ACCEPTED');
+    assert.equal(fs.readFileSync(path.join(out, 'r21-receipt.json'), 'utf8').includes(sample.secret), false);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(out, 'verdict.json'))).action_inner_exits.retry.code, 0);
+    assert.throws(() => publish({ env: { ...environment, GITHUB_WORKFLOW_SHA: 'b'.repeat(40) }, evidenceDir: input, destination: out, setupExit: 0, journeyExit: 0 }), /workflow SHA/);
+    assert.equal(publish({ env: environment, evidenceDir: input, destination: out, setupExit: 0, journeyExit: 1 }).status, 'FAILED');
+    fs.unlinkSync(path.join(input, 'r21-receipt.json'));
+    fs.writeFileSync(path.join(input, 'r21-progress.json'), JSON.stringify({ first_click: sample.first_click, secret: sample.secret }));
+    const missing = publish({ env: environment, evidenceDir: input, destination: path.join(root, 'missing'), setupExit: 0, journeyExit: 1 });
+    assert.equal(missing.reason, 'journey_receipt_missing');
+    assert.equal(missing.action_inner_exits.first_click.code, 0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

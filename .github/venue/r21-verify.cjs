@@ -14,11 +14,11 @@ const TUPLE = Object.freeze({
   pterm: '5be43718701c448b43daf0ce51d8935f170065bb',
 });
 
-const REQUEST_ID = 'R-21-R10';
+const REQUEST_ID = 'R-21-R11';
 const CONFIRMATION = 'REAL_ENGINE_UPDATE_STOP_RETRY';
 const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
-const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-R10';
-const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-R10';
+const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-R11';
+const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-R11';
 const WORKFLOW_PATH = '.github/workflows/r21-real-engine.yml';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const ACTIONS = Object.freeze({
@@ -125,7 +125,7 @@ function verifyReceipt(receipt) {
   }
   if (retry.installer_dispatch !== true) fail('retry did not retain an installer dispatch');
   idle(retry.running_after, 'retry action status');
-  if (retry.runtime_ready !== true || retry.application_ready !== true || retry.start_to_ready !== true) {
+  if (retry.start_running_after_retry !== true || retry.runtime_ready !== true || retry.application_ready !== true || retry.start_to_ready !== true) {
     fail('retry lacks independent Runtime, application, or Stop-to-Start readiness');
   }
   if (protectedState.before.user_data !== protectedState.after_retry?.user_data) {
