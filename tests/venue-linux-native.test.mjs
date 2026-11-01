@@ -27,7 +27,11 @@ for (const failObserver of [false, true]) test(`native Linux uses its own action
     script('docker', 'echo invoked > "$TEST_ROOT/docker-called"; exit 1');
     script('curl', 'printf "{}\\n"');
     script('node', `if [ "$1" = -e ]; then exit 0; fi
-if [ "$1" = script/index.js ]; then echo "$$" > "$TEST_ROOT/daemon-pid"; exec sleep 60; fi
+if [ "$1" = script/index.js ]; then
+  trap 'printf stopped > "$TEST_ROOT/daemon-stopped"; exit 0' TERM
+  echo "$$" > "$TEST_ROOT/daemon-pid"
+  while :; do sleep 1 & wait "$!"; done
+fi
 printf '%s' "$R20_ACTION_URI" > "$TEST_ROOT/action-uri"
 exit ${failObserver ? 1 : 0}`);
     const result = spawnSync('bash', ['.github/venue/linux.sh'], { cwd: repo, encoding: 'utf8', timeout: 10000, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_ROOT: shellRoot, REAL_GIT: git.stdout.trim(), RUNNER_TEMP: shellRunner, R20_LINUX_MODE: 'native', GITHUB_RUN_ID: 'test', GITHUB_RUN_ATTEMPT: '1' } });
@@ -35,8 +39,8 @@ exit ${failObserver ? 1 : 0}`);
     assert.equal(readFileSync(path.join(root, 'action-uri'), 'utf8'), `${shellRunner}/r20-home/api/astrid/pinokio/reset.js`);
     assert.throws(() => readFileSync(path.join(root, 'docker-called')));
     assert.match(readFileSync(path.join(runner, 'r20-evidence', 'SHA256SUMS'), 'utf8'), /identity\.txt/);
-    const pid = Number(readFileSync(path.join(root, 'daemon-pid'), 'utf8'));
-    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    assert.ok(Number(readFileSync(path.join(root, 'daemon-pid'), 'utf8')) > 0);
+    assert.equal(readFileSync(path.join(root, 'daemon-stopped'), 'utf8'), 'stopped');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
