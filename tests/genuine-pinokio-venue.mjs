@@ -36,6 +36,8 @@ const MAX_DIAGNOSTIC_BYTES = 500_000;
 const SECRET_SHAPED = /(?:api[_-]?key|access[_-]?key|secret|token|password|authorization|bearer)\s*[:=]\s*[^\s,]{8,}|\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9_]{20,}\b/i;
 const CONTROL_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 const PATH_TRAVERSAL = /(^|[\\/])\.\.([\\/]|$)/;
+const ABSOLUTE_PATH = /(?:^|[\s"'(=])\/(?!\/)(?:[^\/\s"'(),]+\/)*[^\/\s"'(),]*/;
+const WINDOWS_ABSOLUTE_PATH = /(?:^|[\s"'(=])[A-Za-z]:[\\/][^\s"'(),]*/;
 let daemonProcess = null;
 let postSettlementCaptured = false;
 let venuePostconditionsProven = false;
@@ -85,7 +87,7 @@ const evidence = {
 };
 
 function recordFailure(message) {
-  const text = typeof message === 'string' ? message : String(message);
+  const text = scrubFreeform(String(message));
   if (!evidence.failures.includes(text)) evidence.failures.push(text);
   evidence.status = 'UNKNOWN';
   evidence.engine.boundary ||= text;
@@ -104,28 +106,61 @@ function redact(value, maxLength = 6000) {
     [candidateRoot, '$GITHUB_WORKSPACE'],
     [pinokiodRoot, '$PINOKIOD_ROOT'],
     [ptermRoot, '$PTERM_ROOT'],
-    [pinokioHome, '$PINOKIO_HOME'],
     [selectedAppRoot, '$SELECTED_APP_ROOT'],
+    [pinokioHome, '$PINOKIO_HOME'],
   ]) text = text.split(needle).join(replacement);
   return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
 }
 
-function redactJson(value) {
+function scrubFreeform(value, maxLength = MAX_EXPORT_STRING_BYTES) {
+  let text = redact(value, maxLength + 1)
+    .replace(SECRET_SHAPED, '[REDACTED_SECRET]')
+    .replace(CONTROL_CHARACTER, '�')
+    .replace(PATH_TRAVERSAL, '$PATH');
+  if (ABSOLUTE_PATH.test(text) || WINDOWS_ABSOLUTE_PATH.test(text)) {
+    text = text.replace(ABSOLUTE_PATH, '$ABSOLUTE_PATH').replace(WINDOWS_ABSOLUTE_PATH, '$ABSOLUTE_PATH');
+  }
+  return text;
+}
+
+function exportText(value, label, maxBytes = MAX_EXPORT_STRING_BYTES) {
+  if (value === null || value === undefined) return null;
+  const text = scrubFreeform(String(value), maxBytes);
+  safeExportText(text, label, maxBytes);
+  return text;
+}
+
+function exportPath(value, label) {
+  return exportText(value, label);
+}
+
+function redactJson(value, seen = new WeakSet()) {
   if (typeof value === 'string') return redact(value);
-  if (Array.isArray(value)) return value.map(redactJson);
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return '[Circular]';
+    seen.add(value);
+    const result = value.map((child) => redactJson(child, seen));
+    seen.delete(value);
+    return result;
+  }
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactJson(child)]));
+    if (seen.has(value)) return '[Circular]';
+    seen.add(value);
+    const result = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactJson(child, seen)]));
+    seen.delete(value);
+    return result;
   }
   return value;
 }
 
 function safeExportText(value, label, maxBytes = MAX_EXPORT_STRING_BYTES) {
   if (typeof value !== 'string') throw new Error(`${label} was not a string`);
-  const text = redact(value, maxBytes + 1);
+  const text = value;
   if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new Error(`${label} exceeded export size limit`);
   if (CONTROL_CHARACTER.test(text)) throw new Error(`${label} contained a control character`);
   if (SECRET_SHAPED.test(text)) throw new Error(`${label} was secret-shaped`);
   if (PATH_TRAVERSAL.test(text)) throw new Error(`${label} contained path traversal`);
+  if (ABSOLUTE_PATH.test(text) || WINDOWS_ABSOLUTE_PATH.test(text)) throw new Error(`${label} contained a raw filesystem path`);
   return text;
 }
 
@@ -134,16 +169,16 @@ const EXPORT_KEYS = new Set([
   'pterm_ref', 'actions', 'relative', 'source_sha256', 'ref_sha256', 'git_blob', 'selected_sha256',
   'selected_ref_match', 'deployed_match', 'venue', 'platform', 'node', 'pinokio_home', 'port',
   'selected_app_id', 'selected_ref', 'selected_root', 'daemon', 'pid', 'process_group', 'version',
-  'home', 'health', 'ok', 'engine', 'requested_uri', 'task_id', 'task_id_provenance', 'source', 'observed_at',
-  'requested_uri', 'identity_failure', 'failed', 'reason', 'packets', 'type', 'id', 'settlement',
-  'boundary', 'readbacks', 'phase', 'matched_task_id', 'running_ids', 'assessment', 'valid', 'running',
-  'task_present', 'task_id_matches_readback', 'resource_running', 'app_running', 'home_app_stopped',
-  'final_packet', 'observed', 'bound_to_task_id', 'transport', 'closed', 'source', 'independent',
-  'pre_settlement', 'post_settlement', 'before_cleanup', 'post_cleanup', 'captured_at', 'daemon_pid',
-  'owned_process_group_id', 'process', 'available', 'present', 'observed_group_id', 'process_group',
-  'owned_group_id', 'selection', 'members', 'member_pids', 'member_count', 'daemon_pid_member',
-  'listener', 'cleanup', 'attempted', 'signals', 'forced', 'exited', 'group_absent', 'completed',
-  'error', 'last_group_observation', 'process_group_id', 'failures', 'task_id_provenance', 'control', 'observation',
+  'home', 'health', 'ok', 'pinokiod', 'path', 'engine', 'requested_uri', 'task_id', 'task_id_provenance', 'source', 'observed_at',
+  'identity_failure', 'failed', 'reason', 'packets', 'type', 'id', 'settlement', 'boundary', 'readbacks',
+  'phase', 'matched_task_id', 'running_ids', 'assessment', 'valid', 'running', 'task_present',
+  'task_id_matches_readback', 'resource_running', 'app_running', 'home_app_stopped', 'final_packet',
+  'observed', 'bound_to_task_id', 'transport', 'closed', 'independent', 'pre_settlement', 'post_settlement',
+  'before_cleanup', 'post_cleanup', 'captured_at', 'daemon_pid', 'owned_process_group_id', 'process',
+  'available', 'present', 'observed_group_id', 'process_group', 'owned_group_id', 'selection', 'members',
+  'member_pids', 'member_count', 'daemon_pid_member', 'ppid', 'pgid', 'stat', 'listener', 'cleanup', 'attempted', 'signals', 'forced',
+  'exited', 'group_absent', 'completed', 'error', 'control', 'health_ok', 'home_status_present',
+  'resource_status_present', 'app_status_present', 'process_group_id', 'failures',
   'pinokio/start.js', 'pinokio/stop.js', 'pinokio/update.js',
 ]);
 
@@ -175,7 +210,19 @@ function exportAssessment(assessment) {
     resource_running: assessment.resource_running ?? null,
     app_running: assessment.app_running ?? null,
     home_app_stopped: Boolean(assessment.home_app_stopped),
-    running_ids: Array.isArray(assessment.running_ids) ? assessment.running_ids.slice(0, 32) : [],
+    running_ids: Array.isArray(assessment.running_ids) ? assessment.running_ids.slice(0, 32)
+      .map((id, index) => exportPath(id, `assessment.running_ids[${index}]`)) : [],
+  };
+}
+
+function exportControlSummary(control) {
+  if (!control) return null;
+  return {
+    captured_at: exportText(control.captured_at, 'observation.control.captured_at'),
+    health_ok: control.health?.ok === true,
+    home_status_present: Boolean(control.home_status),
+    resource_status_present: Boolean(control.resource_status),
+    app_status_present: Boolean(control.app_status),
   };
 }
 
@@ -183,26 +230,27 @@ function exportObservation(observation) {
   if (!observation) return null;
   const processGroup = observation.process_group;
   return {
-    captured_at: observation.captured_at || null,
-    phase: observation.phase || null,
+    captured_at: exportText(observation.captured_at, 'observation.captured_at'),
+    phase: exportText(observation.phase, 'observation.phase'),
     daemon_pid: observation.daemon_pid || null,
-    owned_process_group_id: observation.owned_process_group_id || null,
+    owned_process_group_id: exportText(observation.owned_process_group_id, 'observation.owned_process_group_id'),
     process: observation.process ? {
       available: Boolean(observation.process.available),
       present: Boolean(observation.process.present),
-      observed_group_id: observation.process.observed_group_id || null,
+      observed_group_id: exportText(observation.process.observed_group_id, 'observation.process.observed_group_id'),
     } : null,
     process_group: processGroup ? {
       available: Boolean(processGroup.available),
-      owned_group_id: processGroup.owned_group_id || null,
-      selection: processGroup.selection || null,
+      owned_group_id: exportText(processGroup.owned_group_id, 'observation.process_group.owned_group_id'),
+      selection: exportText(processGroup.selection, 'observation.process_group.selection'),
       members: Array.isArray(processGroup.members) ? processGroup.members.slice(0, 128).map((member) => ({
-        pid: member.pid || null,
-        ppid: member.ppid || null,
-        pgid: member.pgid || null,
-        stat: member.stat || null,
+        pid: exportText(member.pid, 'observation.process_group.member.pid'),
+        ppid: exportText(member.ppid, 'observation.process_group.member.ppid'),
+        pgid: exportText(member.pgid, 'observation.process_group.member.pgid'),
+        stat: exportText(member.stat, 'observation.process_group.member.stat'),
       })) : [],
-      member_pids: Array.isArray(processGroup.member_pids) ? processGroup.member_pids.slice(0, 128) : [],
+      member_pids: Array.isArray(processGroup.member_pids) ? processGroup.member_pids.slice(0, 128)
+        .map((pid, index) => exportText(pid, `observation.process_group.member_pids[${index}]`)) : [],
       member_count: processGroup.member_count || 0,
       daemon_pid_member: Boolean(processGroup.daemon_pid_member),
     } : null,
@@ -210,6 +258,9 @@ function exportObservation(observation) {
       available: Boolean(observation.listener.available),
       present: Boolean(observation.listener.present),
     } : null,
+    control: exportControlSummary(observation.control),
+    assessment: exportAssessment(observation.assessment),
+    error: exportText(observation.error, 'observation.error'),
   };
 }
 
@@ -217,73 +268,74 @@ function buildExport() {
   const exportValue = {
     status: evidence.status,
     immutable: {
-      candidate_commit_expected: evidence.immutable.candidate_commit_expected,
-      candidate_commit_observed: evidence.immutable.candidate_commit_observed,
-      pinokiod_ref: evidence.immutable.pinokiod_ref,
-      pterm_ref: evidence.immutable.pterm_ref,
+      candidate_commit_expected: exportText(evidence.immutable.candidate_commit_expected, 'immutable.candidate_commit_expected'),
+      candidate_commit_observed: exportText(evidence.immutable.candidate_commit_observed, 'immutable.candidate_commit_observed'),
+      pinokiod_ref: exportText(evidence.immutable.pinokiod_ref, 'immutable.pinokiod_ref'),
+      pterm_ref: exportText(evidence.immutable.pterm_ref, 'immutable.pterm_ref'),
       actions: Object.fromEntries(Object.entries(evidence.immutable.actions).map(([relative, descriptor]) => [relative, {
-        relative,
-        source_sha256: descriptor.source_sha256,
-        ref_sha256: descriptor.ref_sha256,
-        git_blob: descriptor.git_blob,
-        selected_sha256: descriptor.selected_sha256,
+        relative: exportText(relative, `immutable.actions.${relative}.relative`),
+        source_sha256: exportText(descriptor.source_sha256, `immutable.actions.${relative}.source_sha256`),
+        ref_sha256: exportText(descriptor.ref_sha256, `immutable.actions.${relative}.ref_sha256`),
+        git_blob: exportText(descriptor.git_blob, `immutable.actions.${relative}.git_blob`),
+        selected_sha256: exportText(descriptor.selected_sha256, `immutable.actions.${relative}.selected_sha256`),
         selected_ref_match: Boolean(descriptor.selected_ref_match),
         deployed_match: Boolean(descriptor.deployed_match),
       }])),
     },
     venue: {
-      platform: process.platform,
-      node: process.version,
-      pinokio_home: pinokioHome,
+      platform: exportText(process.platform, 'venue.platform'),
+      node: exportText(process.version, 'venue.node'),
+      pinokio_home: exportPath(pinokioHome, 'venue.pinokio_home'),
       port: PINOKIO_PORT,
-      selected_app_id: appId,
-      selected_ref: selectedRef,
-      selected_root: evidence.venue.selected_root,
+      selected_app_id: exportText(appId, 'venue.selected_app_id'),
+      selected_ref: exportText(selectedRef, 'venue.selected_ref'),
+      selected_root: exportPath(evidence.venue.selected_root, 'venue.selected_root'),
     },
     daemon: {
       pid: evidence.daemon.pid ?? null,
-      process_group: evidence.daemon.process_group ?? null,
+      process_group: exportText(evidence.daemon.process_group, 'daemon.process_group'),
       version: evidence.daemon.version ? { pinokiod: Boolean(evidence.daemon.version.pinokiod) } : null,
-      home: evidence.daemon.home ? { path: evidence.daemon.home.path || null } : null,
+      home: evidence.daemon.home ? { path: exportPath(evidence.daemon.home.path, 'daemon.home.path') } : null,
       health: evidence.daemon.health ? { ok: evidence.daemon.health.ok === true } : null,
     },
     engine: {
-      requested_uri: selectedStart,
-      task_id: evidence.engine.task_id,
+      requested_uri: exportPath(selectedStart, 'engine.requested_uri'),
+      task_id: exportPath(evidence.engine.task_id, 'engine.task_id'),
       task_id_provenance: evidence.engine.task_id_provenance ? {
-        source: evidence.engine.task_id_provenance.source,
-        observed_at: evidence.engine.task_id_provenance.observed_at,
-        requested_uri: evidence.engine.task_id_provenance.requested_uri,
+        source: exportText(evidence.engine.task_id_provenance.source, 'engine.task_id_provenance.source'),
+        observed_at: exportText(evidence.engine.task_id_provenance.observed_at, 'engine.task_id_provenance.observed_at'),
+        requested_uri: exportPath(evidence.engine.task_id_provenance.requested_uri, 'engine.task_id_provenance.requested_uri'),
       } : null,
       identity_failure: {
         failed: Boolean(evidence.engine.identity_failure.failed),
-        reason: evidence.engine.identity_failure.reason,
-        observed_at: evidence.engine.identity_failure.observed_at,
+        reason: exportText(evidence.engine.identity_failure.reason, 'engine.identity_failure.reason'),
+        observed_at: exportText(evidence.engine.identity_failure.observed_at, 'engine.identity_failure.observed_at'),
       },
       packets: evidence.engine.packets.slice(-64).map((packet) => ({
-        observed_at: packet.observed_at,
-        type: packet.type,
-        id: packet.id,
+        observed_at: exportText(packet.observed_at, 'engine.packet.observed_at'),
+        type: exportText(packet.type, 'engine.packet.type'),
+        id: exportPath(packet.id, 'engine.packet.id'),
       })),
-      settlement: evidence.engine.settlement,
-      boundary: evidence.engine.boundary,
+      settlement: exportText(evidence.engine.settlement, 'engine.settlement'),
+      boundary: exportText(evidence.engine.boundary, 'engine.boundary'),
       readbacks: evidence.engine.readbacks.slice(-24).map((readback) => ({
-        phase: readback.phase,
+        phase: exportText(readback.phase, 'engine.readback.phase'),
         matched_task_id: readback.matched_task_id ?? null,
-        running_ids: Array.isArray(readback.running_ids) ? readback.running_ids : [],
+        running_ids: Array.isArray(readback.running_ids) ? readback.running_ids.slice(0, 32)
+          .map((id, index) => exportPath(id, `engine.readback.running_ids[${index}]`)) : [],
         assessment: exportAssessment(readback.assessment),
       })),
       final_packet: evidence.engine.final_packet ? {
         observed: Boolean(evidence.engine.final_packet.observed),
-        type: evidence.engine.final_packet.type,
-        id: evidence.engine.final_packet.id,
+        type: exportText(evidence.engine.final_packet.type, 'engine.final_packet.type'),
+        id: exportPath(evidence.engine.final_packet.id, 'engine.final_packet.id'),
         bound_to_task_id: Boolean(evidence.engine.final_packet.bound_to_task_id),
-        observed_at: evidence.engine.final_packet.observed_at,
+        observed_at: exportText(evidence.engine.final_packet.observed_at, 'engine.final_packet.observed_at'),
       } : null,
       transport: {
         closed: Boolean(evidence.engine.transport.closed),
-        source: evidence.engine.transport.source,
-        observed_at: evidence.engine.transport.observed_at,
+        source: exportText(evidence.engine.transport.source, 'engine.transport.source'),
+        observed_at: exportText(evidence.engine.transport.observed_at, 'engine.transport.observed_at'),
       },
     },
     independent: {
@@ -296,14 +348,15 @@ function buildExport() {
       attempted: Boolean(evidence.cleanup.attempted),
       pid: evidence.cleanup.pid || null,
       process_group_id: evidence.cleanup.process_group_id || null,
-      signals: Array.isArray(evidence.cleanup.signals) ? evidence.cleanup.signals.slice(0, 8) : [],
+      signals: Array.isArray(evidence.cleanup.signals) ? evidence.cleanup.signals.slice(0, 8)
+        .map((signal, index) => exportText(signal, `cleanup.signals[${index}]`)) : [],
       forced: Boolean(evidence.cleanup.forced),
       exited: Boolean(evidence.cleanup.exited),
       group_absent: Boolean(evidence.cleanup.group_absent),
       completed: Boolean(evidence.cleanup.completed),
-      error: evidence.cleanup.error || null,
+      error: exportText(evidence.cleanup.error, 'cleanup.error'),
     } : null,
-    failures: evidence.failures.slice(0, 64),
+    failures: evidence.failures.slice(0, 64).map((failure, index) => exportText(failure, `failures[${index}]`)),
   };
   validateExportValue(exportValue);
   const serialized = JSON.stringify(exportValue, null, 2);
@@ -317,10 +370,22 @@ function writeEvidence() {
 
 function writeLocalDiagnostics() {
   try {
-    const serialized = JSON.stringify(evidence, null, 2);
-    fs.writeFileSync(path.join(diagnosticDir, 'venue-diagnostics.json'), `${serialized.slice(0, MAX_DIAGNOSTIC_BYTES)}\n`);
+    const serialized = JSON.stringify(redactJson(evidence), null, 2);
+    const output = Buffer.byteLength(serialized, 'utf8') <= MAX_DIAGNOSTIC_BYTES
+      ? serialized
+      : JSON.stringify({
+        status: evidence.status,
+        failures: evidence.failures.slice(0, 64),
+        diagnostic_truncated: true,
+      }, null, 2);
+    fs.writeFileSync(path.join(diagnosticDir, 'venue-diagnostics.json'), `${output}\n`);
   } catch (error) {
     recordFailure(`local diagnostics were not serializable: ${error.message}`);
+    fs.writeFileSync(path.join(diagnosticDir, 'venue-diagnostics.json'), `${JSON.stringify({
+      status: 'UNKNOWN',
+      failures: evidence.failures.slice(0, 64),
+      diagnostic_truncated: true,
+    }, null, 2)}\n`);
   }
 }
 
@@ -947,16 +1012,13 @@ async function main() {
       const postReadback = await withDeadline(readControlState(), READBACK_TIMEOUT_MS, 'post-settlement readback deadline exceeded');
       const postAssessment = terminalReadback(postReadback, evidence.engine.task_id);
       const postObservation = independentObservation('post_settlement');
-      evidence.independent.post_settlement.control = withoutRaw(postReadback);
-      evidence.independent.post_settlement.assessment = postAssessment;
-      evidence.independent.post_settlement.observation = postObservation;
+      postObservation.control = withoutRaw(postReadback);
+      postObservation.assessment = postAssessment;
       postSettlementCaptured = true;
     } catch (error) {
       recordFailure(`post-settlement readback failed: ${error.message}`);
-      evidence.independent.post_settlement = {
-        error: redact(error.message),
-        observation: independentObservation('post_settlement'),
-      };
+      const postObservation = independentObservation('post_settlement');
+      postObservation.error = scrubFreeform(error.message);
       postSettlementCaptured = true;
     }
   }
@@ -997,11 +1059,29 @@ async function main() {
   const passPredicate = !primaryError && evidence.failures.length === 0 && venuePostconditionsProven &&
     groupEvidenceComplete && cleanupComplete && !evidence.engine.identity_failure.failed;
   if (!passPredicate && !evidence.engine.boundary) recordFailure('one or more venue acceptance conditions were unsuccessful');
-  evidence.status = passPredicate ? 'PASS' : 'UNKNOWN';
+  let finalPass = passPredicate && evidence.failures.length === 0;
+  evidence.status = finalPass ? 'PASS' : 'UNKNOWN';
   writeLocalDiagnostics();
-  writeEvidence();
-  console.log(JSON.stringify({ status: evidence.status, task_id: evidence.engine.task_id, settlement: evidence.engine.settlement }));
-  process.exitCode = passPredicate ? 0 : 1;
+  finalPass = finalPass && evidence.failures.length === 0;
+  evidence.status = finalPass ? 'PASS' : 'UNKNOWN';
+  try {
+    writeEvidence();
+  } catch (error) {
+    recordFailure(`sanitized evidence write failed: ${error.message}`);
+    evidence.status = 'UNKNOWN';
+    finalPass = false;
+    const fallback = {
+      status: 'UNKNOWN',
+      failures: evidence.failures.slice(0, 64).map((failure) => scrubFreeform(failure)),
+    };
+    fs.writeFileSync(path.join(evidenceDir, 'venue-evidence.json'), `${JSON.stringify(fallback, null, 2)}\n`);
+  }
+  console.log(JSON.stringify({
+    status: evidence.status,
+    task_id: exportPath(evidence.engine.task_id, 'console.task_id'),
+    settlement: exportText(evidence.engine.settlement, 'console.settlement'),
+  }));
+  process.exitCode = evidence.status === 'PASS' && finalPass ? 0 : 1;
 }
 
 if (process.argv.includes('--self-test')) {
@@ -1016,6 +1096,7 @@ if (process.argv.includes('--self-test')) {
     ['secret-shaped', 'token=abcdefghijklmnop'],
     ['control-character', 'bad\u0000value'],
     ['path-traversal', '../escape'],
+    ['raw-path', '/tmp/raw-export-path'],
     ['oversized', 'x'.repeat(MAX_EXPORT_STRING_BYTES + 1)],
   ];
   for (const [label, value] of invalidValues) {
@@ -1032,7 +1113,96 @@ if (process.argv.includes('--self-test')) {
       selected_sha256: null, selected_ref_match: true, deployed_match: false,
     };
   }
-  assert(JSON.stringify(JSON.parse(buildExport())).length < MAX_EXPORT_BYTES, 'final evidence was not serializable and bounded');
+
+  const syntheticObservation = (phase, processPresent) => ({
+    captured_at: '2026-11-01T00:00:00.000Z',
+    phase,
+    daemon_pid: 123,
+    owned_process_group_id: '123',
+    process: { available: true, present: processPresent, observed_group_id: '123' },
+    process_group: {
+      available: true,
+      owned_group_id: '123',
+      selection: 'exact-pgid',
+      members: processPresent ? [{ pid: '123', ppid: '1', pgid: '123', stat: 'S' }] : [],
+      member_pids: processPresent ? ['123'] : [],
+      member_count: processPresent ? 1 : 0,
+      daemon_pid_member: processPresent,
+    },
+    listener: { available: true, present: processPresent },
+    control: {
+      captured_at: '2026-11-01T00:00:00.000Z',
+      health: { ok: true },
+      home_status: {},
+      resource_status: {},
+      app_status: {},
+    },
+    assessment: {
+      valid: !processPresent,
+      running: processPresent,
+      task_present: processPresent,
+      task_id_matches_readback: processPresent,
+      resource_running: processPresent,
+      app_running: processPresent,
+      home_app_stopped: !processPresent,
+      running_ids: processPresent ? [selectedStart] : [],
+    },
+  });
+  const assertJsonArtifact = (label, serialized) => {
+    const parsed = JSON.parse(serialized);
+    assert(JSON.stringify(parsed).length < MAX_EXPORT_BYTES, `${label} export was not bounded`);
+    const diagnostic = JSON.stringify(redactJson(evidence));
+    JSON.parse(diagnostic);
+    const forbiddenRawPaths = [candidateRoot, pinokiodRoot, ptermRoot, pinokioHome, selectedAppRoot, selectedStart];
+    for (const rawPath of forbiddenRawPaths) assert(!serialized.includes(rawPath), `${label} retained raw path ${rawPath}`);
+    assert(!SECRET_SHAPED.test(serialized), `${label} retained a secret-shaped value`);
+    return parsed;
+  };
+
+  evidence.status = 'PASS';
+  evidence.failures = [];
+  evidence.venue.selected_root = selectedAppRoot;
+  evidence.daemon = {
+    pid: 123,
+    process_group: '123',
+    version: { pinokiod: true },
+    home: { path: pinokioHome },
+    health: { ok: true },
+  };
+  evidence.engine.task_id = selectedStart;
+  evidence.engine.task_id_provenance = {
+    source: 'self-test',
+    observed_at: '2026-11-01T00:00:00.000Z',
+    requested_uri: selectedStart,
+  };
+  evidence.engine.final_packet = {
+    observed: true,
+    type: 'disconnect',
+    id: selectedStart,
+    bound_to_task_id: true,
+    observed_at: '2026-11-01T00:00:00.000Z',
+  };
+  evidence.engine.packets = [{ observed_at: '2026-11-01T00:00:00.000Z', type: 'disconnect', id: selectedStart }];
+  evidence.engine.readbacks = [{
+    phase: 'terminal-poll',
+    matched_task_id: false,
+    running_ids: [],
+    assessment: syntheticObservation('terminal-poll', false).assessment,
+  }];
+  evidence.independent.pre_settlement = syntheticObservation('pre_settlement', true);
+  evidence.independent.post_settlement = syntheticObservation('post_settlement', false);
+  evidence.independent.post_cleanup = syntheticObservation('post_cleanup', false);
+  const normalExport = buildExport();
+  const normalParsed = assertJsonArtifact('normal', normalExport);
+  assert(normalParsed.status === 'PASS', 'normal artifact did not retain PASS status');
+
+  evidence.status = 'UNKNOWN';
+  evidence.failures = ['failure at /var/tmp/venue token=abcdefghijklmnop'];
+  evidence.independent.post_settlement.error = '/var/tmp/venue/token=abcdefghijklmnop';
+  const failureExport = buildExport();
+  const failureParsed = assertJsonArtifact('failure', failureExport);
+  assert(failureParsed.status === 'UNKNOWN', 'failure artifact did not retain UNKNOWN status');
+  assert(!Object.hasOwn(evidence.independent.post_settlement, 'observation'), 'snapshot retained a circular observation wrapper');
   assert(parseProcessRows('1 2 7 S daemon\n8 9 8 S other').filter((row) => row.pgid === '7').length === 1,
     'exact-PGID process selection regression failed');
   console.log('genuine Pinokio venue self-tests: PASS');
