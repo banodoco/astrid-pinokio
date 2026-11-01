@@ -73,16 +73,26 @@ test('R-21 venue verifier rejects a successful-looking wrapper with a nonzero in
   assert.throws(() => verifyReceipt(value), /zero inner PTerm exit/);
 });
 
-test('R-21 dispatch binding rejects a mutable or wrong-lane request', () => {
+test('R-21 dispatch binding accepts only the exact product dispatch or self-serve venue ref', () => {
   const environment = {
-    GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-R8',
+    GITHUB_EVENT_NAME: 'push',
+    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-R10',
     GITHUB_SHA: 'a'.repeat(40),
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R8',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-R10',
     GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1',
   };
   const bound = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment);
   assert.equal(bound.endpoint, ENDPOINT);
   assert.throws(() => validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'main' }, environment), /immutable 40-character SHA/);
   assert.throws(() => validateDispatch({ request_id: 'R-20', confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment), /request_id/);
+  assert.throws(() => validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, {
+    ...environment, GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-R9',
+  }), /GitHub ref/);
+  const manual = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, {
+    ...environment,
+    GITHUB_EVENT_NAME: 'workflow_dispatch',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-R10',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R10',
+  });
+  assert.equal(manual.workflow.event, 'workflow_dispatch');
 });

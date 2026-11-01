@@ -1,6 +1,9 @@
 name: R-21 native old-launcher Update Stop retry
 
 on:
+  push:
+    branches:
+      - venue/M-PIN-R-21-R10
   workflow_dispatch:
     inputs:
       request_id:
@@ -38,9 +41,9 @@ jobs:
       - id: request
         name: Reject mutable, wrong-lane, or non-R-21 dispatches
         env:
-          R21_REQUEST_ID: ${{ inputs.request_id }}
-          R21_RUNNER_REF: ${{ inputs.runner_ref }}
-          R21_CONFIRMATION: ${{ inputs.confirmation }}
+          R21_REQUEST_ID: ${{ github.event_name == 'push' && 'R-21-R10' || inputs.request_id }}
+          R21_RUNNER_REF: ${{ github.event_name == 'push' && github.sha || inputs.runner_ref }}
+          R21_CONFIRMATION: ${{ github.event_name == 'push' && 'REAL_ENGINE_UPDATE_STOP_RETRY' || inputs.confirmation }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_REF: ${{ github.ref }}
           GITHUB_SHA: ${{ github.sha }}

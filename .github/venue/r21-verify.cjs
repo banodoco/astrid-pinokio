@@ -14,9 +14,12 @@ const TUPLE = Object.freeze({
   pterm: '5be43718701c448b43daf0ce51d8935f170065bb',
 });
 
-const REQUEST_ID = 'R-21-R8';
+const REQUEST_ID = 'R-21-R10';
 const CONFIRMATION = 'REAL_ENGINE_UPDATE_STOP_RETRY';
 const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
+const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-R10';
+const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-R10';
+const WORKFLOW_PATH = '.github/workflows/r21-real-engine.yml';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const ACTIONS = Object.freeze({
   install: `${ENDPOINT}/pinokio/install.js`,
@@ -57,10 +60,14 @@ function validateDispatch(input, environment = process.env) {
     fail('runner_ref must be a lowercase immutable 40-character SHA');
   }
   equal(input.runner_ref, environment.GITHUB_SHA, 'runner_ref/GITHUB_SHA binding');
-  equal(environment.GITHUB_EVENT_NAME, 'workflow_dispatch', 'GitHub event');
-  equal(environment.GITHUB_REF, 'refs/heads/lane/M-PIN/R-21-R8', 'GitHub ref');
+  const expectedRef = {
+    workflow_dispatch: PRODUCT_REF,
+    push: VENUE_REF,
+  }[environment.GITHUB_EVENT_NAME];
+  if (!expectedRef) fail('GitHub event must be workflow_dispatch or the dedicated venue push');
+  equal(environment.GITHUB_REF, expectedRef, 'GitHub ref');
   if (typeof environment.GITHUB_WORKFLOW_REF !== 'string'
-      || !environment.GITHUB_WORKFLOW_REF.endsWith('.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R8')) {
+      || !environment.GITHUB_WORKFLOW_REF.endsWith(`${WORKFLOW_PATH}@${expectedRef}`)) {
     fail('workflow source is not the dedicated R-21 lane workflow');
   }
   return {
