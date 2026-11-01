@@ -2,7 +2,7 @@ name: Native observer adapter checks
 
 on:
   push:
-    branches: [lane/M-PIN/R-25-ADAPTER-CI, lane/M-PIN/R-25-ADAPTER-CI-R1, lane/M-PIN/R-25-ADAPTER-SDK-PROBE-R1]
+    branches: [lane/M-PIN/R-25-ADAPTER-CI, lane/M-PIN/R-25-ADAPTER-CI-R1, lane/M-PIN/R-25-ADAPTER-SDK-PROBE-R1, lane/M-PIN/R-25-WIN-ADAPTER-TEST-CI-R1]
 
 permissions:
   contents: read
