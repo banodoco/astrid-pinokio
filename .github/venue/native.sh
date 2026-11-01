@@ -20,6 +20,7 @@ probe() {
     printf '%s npm-ci=failed\n' "$name" >> "$out/host.txt"
     # Keep only standardized npm error codes, not arbitrary installation logs.
     (grep -Eo 'npm error code [A-Z0-9_]+' "$RUNNER_TEMP/$name-install.log" | sort -u >> "$out/host.txt") || true
+    node .github/venue/npm-diagnostic.cjs "$RUNNER_TEMP/$name-install.log" >> "$out/host.txt"
     return 1
   fi
 }
