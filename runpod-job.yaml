@@ -1,5 +1,5 @@
 repos:
-  astrid-pinokio: f6cf07671c63d797c4e5f44f94265ab9a0bf3e35
+  astrid-pinokio: eb63f0fd621415ed487de6e16cb49848d0bb5320
 gpu: false
 max_minutes: 60
 setup:
