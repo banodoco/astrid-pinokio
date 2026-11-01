@@ -98,4 +98,5 @@ jobs:
         env:
           SETUP_EXIT: ${{ steps.execute.outputs.setup_exit }}
           JOURNEY_EXIT: ${{ steps.execute.outputs.journey_exit }}
-        run: test "$SETUP_EXIT" = 0 && test "$JOURNEY_EXIT" = 0 && node -e 'process.exit(require(process.env.RUNNER_TEMP + "/r21-result/verdict.json").status === "ACCEPTED" ? 0 : 1)'
+        run: |
+          test "$SETUP_EXIT" = 0 && test "$JOURNEY_EXIT" = 0 && node -e 'process.exit(require(process.env.RUNNER_TEMP + "/r21-result/verdict.json").status === "ACCEPTED" ? 0 : 1)'
