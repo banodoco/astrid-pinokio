@@ -1,0 +1,33 @@
+name: R-25 macOS observer adapter check
+
+on:
+  push:
+    branches: [lane/M-PIN/R-25-R2-SUB1]
+
+permissions:
+  contents: read
+
+jobs:
+  macos-adapter:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Compile bounded macOS observer
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk="$(xcrun --sdk macosx --show-sdk-path)"
+          test -d "$sdk/System/Library/Frameworks/EndpointSecurity.framework"
+          /usr/bin/clang -isysroot "$sdk" -O2 -Wall -Wextra -fblocks \
+            .github/venue/adapters/macos-observer.c \
+            -framework EndpointSecurity -lbsm \
+            -o .github/venue/adapters/macos-observer
+      - name: Run focused macOS adapter tests
+        run: node --test tests/macos-observer.test.mjs
+      - name: Remove temporary native binary
+        if: always()
+        run: rm -f .github/venue/adapters/macos-observer
