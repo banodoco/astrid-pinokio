@@ -36,6 +36,17 @@ export function evaluateWindowsCapture(capture) {
   };
 }
 
+// Exactly one result frame may follow the optional ready frame; EOF alone is not closure.
+export function decodeWindowsOutput(output, exitCode) {
+  if (exitCode !== 0) return unknown('source-unavailable-or-child-failed');
+  if (typeof output !== 'string' || Buffer.byteLength(output, 'utf8') > 262144) return unknown('output-limit');
+  const lines = output.split('\n');
+  const readySeen = lines[0] === '{"ready":true}';
+  const valid = readySeen ? lines.length === 3 && lines[2] === '' : lines.length === 2 && lines[1] === '';
+  if (!valid) return unknown('terminal-missing-or-extra-data');
+  try { return evaluateWindowsCapture(JSON.parse(lines[readySeen ? 1 : 0])); } catch { return unknown('malformed'); }
+}
+
 // A fixed executable and fixed provider are used; callers cannot supply a source,
 // executable, platform, authority, or a serialized session. The native helper has
 // its own 30-second watchdog. A killed child leaves cleanup explicitly unknown.
@@ -62,11 +73,7 @@ export function openWindowsObservation() {
     });
     child.on('close', code => {
       if (finished) return;
-      if (code !== 0) { finish(unknown('source-unavailable-or-child-failed')); return; }
-      const lines = output.split('\n');
-      const valid = readySeen ? lines.length === 3 && lines[0] === '{"ready":true}' && lines[2] === '' : lines.length === 2 && lines[1] === '';
-      if (!valid) { finish(unknown('terminal-missing-or-extra-data')); return; }
-      try { finish(evaluateWindowsCapture(JSON.parse(lines[readySeen ? 1 : 0]))); } catch { finish(unknown('malformed')); }
+      finish(decodeWindowsOutput(output, code));
     });
   } catch { finish(unknown('source-unavailable')); }
   return Object.freeze({ ready, result, stop() { if (!stopRequested && !finished) { stopRequested = true; child?.stdin.end('x'); } } });

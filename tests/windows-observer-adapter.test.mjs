@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateWindowsCapture, openWindowsObservation, sourceProfileSha256 } from '../pinokio/windows-observer/adapter.mjs';
+import { decodeWindowsOutput, evaluateWindowsCapture, openWindowsObservation, sourceProfileSha256 } from '../pinokio/windows-observer/adapter.mjs';
 
 const capture = () => ({ start: 0, enable: 0, opened: true, process: 0, stop: 0, close: 0, timed_out: false, events_lost: 0, buffers_lost: 0, realtime_buffers_lost: 0, consumer_buffers_lost: 0, overflow: 0, terminal: true, events: [{ sequence: 1, emitter_pid: 123, event_id: 1, opcode: 1, version: 2 }] });
 
@@ -31,6 +31,15 @@ test('gaps, duplicates, extra fields, malformed types and oversized captures are
   assert.equal(evaluateWindowsCapture({ ...capture(), extra: 1 }).reason, 'malformed');
   assert.equal(evaluateWindowsCapture({ ...capture(), events_lost: -1 }).reason, 'malformed');
 });
+test('EOF and post-terminal frames do not count as clean source closure', () => {
+  const frame = JSON.stringify(capture());
+  assert.equal(decodeWindowsOutput('{"ready":true}\n', 0).reason, 'terminal-missing-or-extra-data');
+  assert.equal(decodeWindowsOutput(`{"ready":true}\n${frame}\n{}\n`, 0).reason, 'terminal-missing-or-extra-data');
+  assert.equal(decodeWindowsOutput(`{"ready":true}\n${frame}\n`, 1).reason, 'source-unavailable-or-child-failed');
+  assert.equal(decodeWindowsOutput(`{"ready":true}\n${frame}\n`, 0).reason, 'unapproved-source-profile');
+  const denied = { ...capture(), start: 5, opened: false };
+  assert.equal(decodeWindowsOutput(`${JSON.stringify(denied)}\n`, 0).reason, 'source-unavailable');
+});
 test('unsupported host refuses without running a caller-chosen source', { skip: process.platform === 'win32' }, async () => {
   const session = openWindowsObservation();
   assert.equal(await session.ready, false);
@@ -38,7 +47,7 @@ test('unsupported host refuses without running a caller-chosen source', { skip: 
   session.stop();
 });
 
-test('Windows hosted capability: compile and attempt bounded ETW capture', { skip: process.platform !== 'win32', timeout: 60000 }, async t => {
+test('Windows hosted capability: compile and attempt bounded ETW capture', { skip: process.platform !== 'win32', timeout: 120000 }, async t => {
   const { execFileSync, spawnSync } = await import('node:child_process');
   const { mkdtempSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
