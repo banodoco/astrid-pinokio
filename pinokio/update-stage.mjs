@@ -1,5 +1,3 @@
-// Candidate preparation only. Do not wire this into Update until promotion and
-// interrupted-update recovery can preserve checkout artifacts.
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, open, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -13,15 +11,22 @@ async function command(command, args, options) {
 }
 
 async function buildWithSession(options) {
-  const { runSession } = await import('./session.mjs');
-  await runSession(options);
+  const { runSession, commands } = await import('./session.mjs');
+  if (!options.running) return runSession(options);
+  // The selected, healthy Runtime is already owned by Start. The app's build
+  // command attaches read-only to its discovery; it must not stop that owner.
+  const specs = commands(options.root, options.editor, 'local', options.installed);
+  for (const spec of [specs.dependencies, specs.build]) {
+    await command(spec.command, spec.args, { cwd: options.editor,
+      env: { ...options.installed.env, ASTRID_APP_LOOPBACK_ORIGIN: 'off' }, timeout: 1_200_000 });
+  }
 }
 
 // Fetch into a separate clone, leaving the installed checkout and its refs alone.
 // The normal build session owns Runtime startup, build subprocesses and shutdown;
 // plain `npm run build` does not provide the Runtime discovery the app requires.
 export async function prepareCandidate({ editor, ref, remote, stagingRoot, root, installed,
-  run = command, build = buildWithSession }) {
+  run = command, build = buildWithSession, running = false }) {
   const git = async (cwd, ...args) => (await run('git', args, { cwd })).stdout.trim();
   const snapshot = async () => ({
     sha: await git(editor, 'rev-parse', '--verify', 'HEAD^{commit}'),
@@ -70,7 +75,7 @@ export async function prepareCandidate({ editor, ref, remote, stagingRoot, root,
     if (!Number.isSafeInteger(release) || release < 0) throw new Error('Candidate release is invalid.');
     const env = { ...installed.env, VITE_APP_BUILD: target, RAILWAY_GIT_COMMIT_SHA: target };
     await record('building', { target });
-    await build({ action: 'build', mode: 'local', root, editor: candidate, installed: { ...installed, env } });
+    await build({ action: 'build', mode: 'local', root, editor: candidate, installed: { ...installed, env }, running });
     // Build scripts are arbitrary code. A matching build.json alone does not
     // prove that the checkout or installer manifest still matches the target.
     if (await git(candidate, 'rev-parse', '--verify', 'HEAD^{commit}') !== target
@@ -90,7 +95,7 @@ export async function prepareCandidate({ editor, ref, remote, stagingRoot, root,
       })().catch((error) => { cleanupPromise = undefined; throw error; });
       return cleanupPromise;
     };
-    return { parent, candidate, oldSha: old.sha, targetSha: target, ref, release, cleanup };
+    return { parent, candidate, oldSha: old.sha, targetSha: target, ref, release, snapshot, old, cleanup };
   } catch (error) {
     let uncertainCheckout = false;
     // Do not describe a failed build as a clean recovery if another actor
@@ -123,5 +128,20 @@ export async function prepareCandidate({ editor, ref, remote, stagingRoot, root,
       throw new AggregateError([error, cleanup], `Candidate staging failed and cleanup failed; inspect ${parent || lock}.`);
     }
     throw error;
+  }
+}
+
+// Move only the verified target into the existing checkout after the session
+// has stopped. Keep the old ignored artifacts in the candidate until complete.
+export async function promoteCandidate({ editor, prepared, run = command }) {
+  const { rename } = await import('node:fs/promises');
+  const git = async (...args) => run('git', args, { cwd: editor });
+  await git('fetch', '--no-tags', '--no-write-fetch-head', '--', prepared.candidate, prepared.targetSha);
+  await git('merge', '--ff-only', prepared.targetSha);
+  for (const name of ['dist', 'node_modules']) {
+    const destination = path.join(editor, name);
+    try { await rename(destination, path.join(prepared.parent, `previous-${name}`)); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    await rename(path.join(prepared.candidate, name), destination);
   }
 }
