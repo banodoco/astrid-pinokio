@@ -356,6 +356,8 @@ async function invokeAction(name, app, appDirectory, environment, home, getDaemo
         } else {
           await launchShell(step, { ...environment, ASTRID_PINOKIO_APP_DIR: appDirectory });
         }
+      } else if (step.method === 'script.start') {
+        await invokeAction('start', app, appDirectory, environment, home, getDaemon, stopDaemon);
       } else if (step.method === 'local.set') {
         log(`Pinokio published ${JSON.stringify(step.params)}`);
       } else if (typeof step.method === 'function') {
@@ -524,9 +526,7 @@ async function runFullyLocal() {
     await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
 
     await invokeAction('update', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    assert.equal(await freePort(5180), true, 'fully local Update unexpectedly started the editor');
-    await invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    const restartedPage = await step('local editor after separate Start', () => runTool('curl', ['--max-time', '30', '--silent', '--show-error', '--write-out', '\n%{http_code}',
+    const restartedPage = await step('local editor after Update restart', () => runTool('curl', ['--max-time', '30', '--silent', '--show-error', '--write-out', '\n%{http_code}',
       'http://127.0.0.1:5180/tools/video-editor'], environment));
     assert.equal(Number(restartedPage.trim().split(/\r?\n/).at(-1)), 200, 'local editor did not become ready after Start');
     await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
@@ -534,7 +534,7 @@ async function runFullyLocal() {
     await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
     assert.deepEqual(cacheAstridPaths(cacheDirectory), [],
       `Astrid-owned files were created under Pinokio cache: ${cacheAstridPaths(cacheDirectory).join(', ')}`);
-    log('PASS: fully local install, Update, separate Start, hosted door off, and Stop');
+    log('PASS: fully local install, Update restart, hosted door off, and Stop');
   } finally {
     if (daemon) await step('cleanup Start process', stop);
     fs.rmSync(pinokioHome, { recursive: true, force: true });
