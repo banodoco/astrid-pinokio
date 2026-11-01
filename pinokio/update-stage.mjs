@@ -1,7 +1,7 @@
 // Candidate preparation only. Do not wire this into Update until promotion and
 // interrupted-update recovery can preserve checkout artifacts.
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
@@ -38,12 +38,26 @@ export async function prepareCandidate({ editor, ref, remote, stagingRoot, root,
     throw error;
   }
   let parent;
+  let old;
+  // Append-only, synced evidence stays with the fence after abrupt process loss.
+  // A partial last line is evidence of interruption, not permission to recover.
+  const journal = path.join(lock, 'journal.jsonl');
+  const record = async (phase, fields = {}) => {
+    const file = await open(journal, 'a', 0o600);
+    try {
+      await file.writeFile(`${JSON.stringify({ schema: 1, phase, ...fields })}\n`);
+      await file.sync();
+    } finally { await file.close(); }
+  };
   try {
-    const old = await snapshot();
+    await record('acquired', { editor, ref, remote, pid: process.pid });
+    old = await snapshot();
     if (!oid.test(old.sha) || old.branch !== ref || old.status) {
       throw new Error('Editor checkout is dirty or on a different branch; preserve changes and retry.');
     }
+    await record('snapshot', old);
     parent = await mkdtemp(path.join(stagingRoot, 'astrid-update-'));
+    await record('staging', { parent });
     const candidate = path.join(parent, 'checkout');
     await run('git', ['clone', '--no-hardlinks', '--no-checkout', '--', editor, candidate], { cwd: parent });
     await git(candidate, 'fetch', '--no-tags', '--', remote, `refs/heads/${ref}`);
@@ -55,6 +69,7 @@ export async function prepareCandidate({ editor, ref, remote, stagingRoot, root,
     const release = manifest.release === undefined ? 0 : manifest.release;
     if (!Number.isSafeInteger(release) || release < 0) throw new Error('Candidate release is invalid.');
     const env = { ...installed.env, VITE_APP_BUILD: target, RAILWAY_GIT_COMMIT_SHA: target };
+    await record('building', { target });
     await build({ action: 'build', mode: 'local', root, editor: candidate, installed: { ...installed, env } });
     // Build scripts are arbitrary code. A matching build.json alone does not
     // prove that the checkout or installer manifest still matches the target.
@@ -66,6 +81,7 @@ export async function prepareCandidate({ editor, ref, remote, stagingRoot, root,
     if (identity.app !== target || identity.release !== release) throw new Error('Candidate build identity does not match its checkout and manifest.');
     const current = await snapshot();
     if (JSON.stringify(current) !== JSON.stringify(old)) throw new Error('Editor checkout changed during staging; preserving it.');
+    await record('prepared', { target, release });
     let cleanupPromise;
     const cleanup = () => {
       cleanupPromise ??= (async () => {
@@ -76,6 +92,30 @@ export async function prepareCandidate({ editor, ref, remote, stagingRoot, root,
     };
     return { parent, candidate, oldSha: old.sha, targetSha: target, ref, release, cleanup };
   } catch (error) {
+    let uncertainCheckout = false;
+    // Do not describe a failed build as a clean recovery if another actor
+    // changed the original checkout while staging was in progress.
+    if (old) {
+      try {
+        const current = await snapshot();
+        if (JSON.stringify(current) !== JSON.stringify(old)) {
+          uncertainCheckout = true;
+          error = new AggregateError([error], `Editor checkout changed during staging; preserve it. Original failure: ${error.message}`);
+        }
+      } catch (verification) {
+        uncertainCheckout = true;
+        error = new AggregateError([error, verification], `Cannot verify the original editor checkout after staging; inspect it before retrying. Original failure: ${error.message}`);
+      }
+    }
+    if (uncertainCheckout) {
+      // Preserve the candidate and fence as evidence, and forbid another
+      // staging attempt until an operator has inspected the checkout.
+      try { await record('checkout-uncertain', { message: error.message }); }
+      catch (journalError) {
+        throw new AggregateError([error, journalError], `Checkout and staging evidence need inspection at ${lock}.`);
+      }
+      throw new Error(`${error.message} Staging evidence and lock retained at ${lock}.`, { cause: error });
+    }
     try {
       if (parent) await rm(parent, { recursive: true, force: true });
       await rm(lock, { recursive: true, force: true });

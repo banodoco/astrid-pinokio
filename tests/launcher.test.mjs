@@ -1097,11 +1097,23 @@ test('isolated update preparation preserves the checkout and reports build and r
   git(seed, 'config', 'user.email', 'fixture@example.invalid');
   fs.mkdirSync(path.join(seed, 'public'));
   fs.writeFileSync(path.join(seed, 'public/install-manifest.json'), '{"release":1}');
+  fs.writeFileSync(path.join(seed, '.gitignore'), 'dist/\nnode_modules/\n');
   git(seed, 'add', '.'); git(seed, 'commit', '-m', 'old');
   git(seed, 'remote', 'add', 'origin', remote); git(seed, 'push', '-u', 'origin', 'main');
   git(parent, 'clone', remote, editor);
   const original = git(editor, 'rev-parse', 'HEAD');
   const remoteTracking = git(editor, 'rev-parse', 'origin/main');
+  fs.mkdirSync(path.join(editor, 'dist'));
+  fs.mkdirSync(path.join(editor, 'node_modules'));
+  fs.writeFileSync(path.join(editor, 'dist', 'old-build'), 'old build bytes');
+  fs.writeFileSync(path.join(editor, 'node_modules', 'old-dependency'), 'old dependency bytes');
+  const assertOriginal = () => {
+    assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
+    assert.equal(git(editor, 'branch', '--show-current'), 'main');
+    assert.equal(git(editor, 'rev-parse', 'origin/main'), remoteTracking);
+    assert.equal(fs.readFileSync(path.join(editor, 'dist', 'old-build'), 'utf8'), 'old build bytes');
+    assert.equal(fs.readFileSync(path.join(editor, 'node_modules', 'old-dependency'), 'utf8'), 'old dependency bytes');
+  };
   fs.writeFileSync(path.join(seed, 'public/install-manifest.json'), '{"release":2}');
   git(seed, 'add', '.'); git(seed, 'commit', '-m', 'new'); git(seed, 'push', 'origin', 'main');
   const target = git(seed, 'rev-parse', 'HEAD');
@@ -1125,7 +1137,7 @@ test('isolated update preparation preserves the checkout and reports build and r
   };
   await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: failureBuild }), /controlled build failure/);
   assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
-  assert.equal(git(editor, 'rev-parse', 'origin/main'), remoteTracking);
+  assertOriginal();
   assert.equal(fs.readFileSync(selection, 'utf8'), 'old-runtime\n');
   assert.deepEqual(fs.readFileSync(data), Buffer.from([0, 1, 2, 255]));
   assert.deepEqual(fs.readdirSync(stage), []);
@@ -1134,7 +1146,30 @@ test('isolated update preparation preserves the checkout and reports build and r
     fs.mkdirSync(path.join(options.editor, 'dist'));
     fs.writeFileSync(path.join(options.editor, 'dist/build.json'), JSON.stringify({ app: target, release: 2 }));
   };
+  const moduleUrl = new URL('../pinokio/update-stage.mjs', import.meta.url).href;
+  const interrupted = `import { prepareCandidate } from ${JSON.stringify(moduleUrl)};
+    await prepareCandidate({ editor: process.env.FIXTURE_EDITOR, ref: 'main', remote: process.env.FIXTURE_REMOTE,
+      stagingRoot: process.env.FIXTURE_STAGE, root: process.env.FIXTURE_ROOT, installed: { env: {} },
+      build: async () => process.exit(42) });`;
+  assert.throws(() => execFileSync(process.execPath, ['--input-type=module', '-e', interrupted], {
+    env: { ...process.env, FIXTURE_EDITOR: editor, FIXTURE_REMOTE: remote, FIXTURE_STAGE: stage, FIXTURE_ROOT: root },
+    stdio: 'pipe',
+  }), (error) => error.status === 42);
+  const interruptedLock = path.join(stage, 'astrid-update.lock');
+  const evidence = fs.readFileSync(path.join(interruptedLock, 'journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(evidence.map((entry) => entry.phase), ['acquired', 'snapshot', 'staging', 'building']);
+  assert.equal(evidence[1].sha, original);
+  assert.equal(evidence[3].target, target);
+  assertOriginal();
+  assert.equal(fs.readFileSync(selection, 'utf8'), 'old-runtime\n');
+  assert.deepEqual(fs.readFileSync(data), Buffer.from([0, 1, 2, 255]));
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: successBuild }), /needs inspection/);
+  fs.rmSync(evidence[2].parent, { recursive: true });
+  fs.rmSync(interruptedLock, { recursive: true });
   const prepared = await prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: successBuild });
+  const preparedEvidence = fs.readFileSync(path.join(stage, 'astrid-update.lock', 'journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(preparedEvidence.at(-1).phase, 'prepared');
+  assert.equal(preparedEvidence.at(-1).target, target);
   assert.equal(prepared.targetSha, target);
   assert.equal(prepared.oldSha, original);
   assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
@@ -1163,12 +1198,26 @@ test('isolated update preparation preserves the checkout and reports build and r
   assert.equal(fs.readFileSync(selection, 'utf8'), 'old-runtime\n');
   assert.deepEqual(fs.readFileSync(data), Buffer.from([0, 1, 2, 255]));
   assert.deepEqual(fs.readdirSync(stage), []);
+  const failureRaceBuild = async () => {
+    fs.writeFileSync(path.join(editor, 'failure-race'), 'keep');
+    throw new Error('controlled failure with checkout race');
+  };
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: failureRaceBuild }),
+    /Editor checkout changed during staging.*controlled failure with checkout race/);
+  assert.equal(fs.readFileSync(path.join(editor, 'failure-race'), 'utf8'), 'keep');
+  const raceLock = path.join(stage, 'astrid-update.lock');
+  const raceEvidence = fs.readFileSync(path.join(raceLock, 'journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(raceEvidence.at(-1).phase, 'checkout-uncertain');
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: successBuild }), /needs inspection/);
+  fs.rmSync(raceEvidence.find((entry) => entry.phase === 'staging').parent, { recursive: true });
+  fs.rmSync(raceLock, { recursive: true });
+  fs.rmSync(path.join(editor, 'failure-race'));
   const raceBuild = async (options) => {
     await successBuild(options);
     fs.writeFileSync(path.join(editor, 'user-change'), 'keep');
   };
   await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: raceBuild }), /changed during staging/);
   assert.equal(fs.readFileSync(path.join(editor, 'user-change'), 'utf8'), 'keep');
-  assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
-  assert.deepEqual(fs.readdirSync(stage), []);
+  assertOriginal();
+  assert.ok(fs.existsSync(path.join(stage, 'astrid-update.lock', 'journal.jsonl')));
 });
