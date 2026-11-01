@@ -7,6 +7,16 @@ import path from 'node:path';
 const PREFLIGHT_CODE_SHA256 = '28eb075c4225b72ed883cfa53b86461e7febd2f043866393f056e8156739e03b';
 const occupiedSlots = new WeakSet();
 const FAULT_EXTERNAL_AWAIT = Object.freeze(['R-15', 'R-21', 'R-36']);
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${canonical(key)}:${canonical(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value).replace(/[\u007f-\uffff]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
 
 export function installPreflightOutputFault(slot, { timeoutMs = 5000 } = {}) {
   if (process.platform !== 'linux' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('Invalid Linux fault configuration.');
@@ -124,14 +134,48 @@ export async function withPreflightOutputFault(slot, action, options) {
  * runner cannot bind the Runtime/controller, approved profiles, or protected
  * collection session, so the diagnostic stays unknown/closed.
  */
-export async function observePreflightOutputFault(slot, action, options) {
+export async function observePreflightOutputFault(slot, action, options = {}) {
   if (typeof action !== 'function') throw new TypeError('A faulted action callback is required.');
+  const { sequence = 1, ...faultOptions } = options ?? {};
+  if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence > 4093) {
+    throw new TypeError('Invalid Linux fault observation sequence.');
+  }
   const observations = [];
+  const files = [];
   const record = (kind, result, details = {}) => {
-    observations.push(Object.freeze({
-      id: `fault-${String(observations.length + 1).padStart(6, '0')}`,
-      kind, result, ...details,
-    }));
+    const eventSequence = sequence + observations.length;
+    const id = `obs-${String(eventSequence).padStart(6, '0')}`;
+    // This is an allowlisted raw fragment for a future protected collector,
+    // not an R-30 export. In particular, exception text and child output are
+    // intentionally absent because either can contain caller-controlled data.
+    const bytes = Buffer.from(canonical({
+      kind,
+      version: 1,
+      phase: 'linux-preflight-output-fault',
+      collectedAt: new Date().toISOString(),
+      source: 'linux-preflight-output-fault',
+      sourceProfileSha256: null,
+      sourceInstance: null,
+      sourceSequence: eventSequence,
+      requestId: null,
+      operationId: null,
+      controllerIncarnation: null,
+      identity: 'unauthenticated',
+      result,
+      ...details,
+      limitations: [
+        'development-only-local-seam',
+        'not-a-real-runtime-busy-condition',
+        'not-a-protected-controller-transport',
+        'not-a-source-backed-remote-fence',
+        'not-an-r30-export-or-qualification-receipt',
+      ],
+    }), 'ascii');
+    const digest = sha256(bytes);
+    const file = `fault/${id}.json`;
+    observations.push(Object.freeze({ id, kind, file, sha256: digest, sequence: eventSequence,
+      result, ...details, bytes }));
+    files.push(Object.freeze({ path: file, role: kind, sha256: digest, size: bytes.length }));
   };
 
   record('fault-before', 'unknown', { reason: 'R-36 collector and approved Runtime binding are absent' });
@@ -139,7 +183,7 @@ export async function observePreflightOutputFault(slot, action, options) {
   let observedResult = 'not-run';
   let finalization = { state: 'not-run', issues: ['fault-not-installed'] };
   try {
-    seam = installPreflightOutputFault(slot, options);
+    seam = installPreflightOutputFault(slot, faultOptions);
     record('fault-installed', 'unknown', { reason: 'local seam installed; identity is not authenticated' });
     try {
       await action();
@@ -171,12 +215,16 @@ export async function observePreflightOutputFault(slot, action, options) {
 
   return Object.freeze({
     kind: 'pinokio-linux-fault-diagnostic',
-    state: 'unknown',
+    // R-23 requires known contradictions and cleanup failures to remain
+    // failures. This is a producer result only; it still grants no protected
+    // qualification without the external R-15/R-21/R-36 bindings.
+    state: observedResult === 'fail' || finalization.state === 'fail' ? 'fail' : observedResult,
     qualification: 'closed',
     externalAwait: Object.freeze([...FAULT_EXTERNAL_AWAIT]),
     observed: observedResult,
     finalization: Object.freeze({ state: finalization.state, issues: Object.freeze([...finalization.issues]) }),
     observations: Object.freeze(observations),
+    files: Object.freeze(files),
   });
 }
 
