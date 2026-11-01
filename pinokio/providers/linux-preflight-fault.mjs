@@ -6,6 +6,7 @@ import path from 'node:path';
 
 const PREFLIGHT_CODE_SHA256 = '28eb075c4225b72ed883cfa53b86461e7febd2f043866393f056e8156739e03b';
 const occupiedSlots = new WeakSet();
+const FAULT_EXTERNAL_AWAIT = Object.freeze(['R-15', 'R-21', 'R-36']);
 
 export function installPreflightOutputFault(slot, { timeoutMs = 5000 } = {}) {
   if (process.platform !== 'linux' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('Invalid Linux fault configuration.');
@@ -116,3 +117,67 @@ export async function withPreflightOutputFault(slot, action, options) {
     }
   }
 }
+
+/**
+ * Exercise the bounded preflight-output seam and return producer facts for a
+ * future R-36 collector. This is deliberately not an R-30 export: the local
+ * runner cannot bind the Runtime/controller, approved profiles, or protected
+ * collection session, so the diagnostic stays unknown/closed.
+ */
+export async function observePreflightOutputFault(slot, action, options) {
+  if (typeof action !== 'function') throw new TypeError('A faulted action callback is required.');
+  const observations = [];
+  const record = (kind, result, details = {}) => {
+    observations.push(Object.freeze({
+      id: `fault-${String(observations.length + 1).padStart(6, '0')}`,
+      kind, result, ...details,
+    }));
+  };
+
+  record('fault-before', 'unknown', { reason: 'R-36 collector and approved Runtime binding are absent' });
+  let seam;
+  let observedResult = 'not-run';
+  let finalization = { state: 'not-run', issues: ['fault-not-installed'] };
+  try {
+    seam = installPreflightOutputFault(slot, options);
+    record('fault-installed', 'unknown', { reason: 'local seam installed; identity is not authenticated' });
+    try {
+      await action();
+      // A successful action means this diagnostic did not observe the
+      // expected refusal/uncertainty. Keep the top-level result unknown: this
+      // local contradiction is not a qualification verdict.
+      observedResult = 'fail';
+      record('fault-observed', observedResult, { reason: 'action completed without refusal or uncertainty' });
+    } catch {
+      // The callback's error may be a product refusal or an unavailable
+      // response; without the upstream binding they are intentionally not
+      // distinguished here.
+      observedResult = 'unknown';
+      record('fault-observed', observedResult, { reason: 'action returned refusal or unavailable response' });
+    }
+  } catch {
+    record('fault-installed', 'not-run', { reason: 'seam installation failed' });
+  } finally {
+    if (seam) {
+      finalization = await seam.finalize();
+      record('fault-after', finalization.state === 'fail' ? 'fail' : 'unknown', {
+        issues: Object.freeze([...finalization.issues]),
+        reason: finalization.state === 'fail' ? 'seam cleanup failed' : 'local seam restored; external cleanup is unobserved',
+      });
+    } else {
+      record('fault-after', 'not-run', { reason: 'seam was not installed' });
+    }
+  }
+
+  return Object.freeze({
+    kind: 'pinokio-linux-fault-diagnostic',
+    state: 'unknown',
+    qualification: 'closed',
+    externalAwait: Object.freeze([...FAULT_EXTERNAL_AWAIT]),
+    observed: observedResult,
+    finalization: Object.freeze({ state: finalization.state, issues: Object.freeze([...finalization.issues]) }),
+    observations: Object.freeze(observations),
+  });
+}
+
+export { FAULT_EXTERNAL_AWAIT };

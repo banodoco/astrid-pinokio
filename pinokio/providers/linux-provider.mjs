@@ -2,7 +2,7 @@
 // only; this facade deliberately has no qualification, removal, or retry API.
 import { observeLinuxReset } from './linux-action-settlement.mjs';
 import { captureLinuxCustodyCheckpoint } from './linux-custody-observations.mjs';
-import { installPreflightOutputFault, withPreflightOutputFault } from './linux-preflight-fault.mjs';
+import { FAULT_EXTERNAL_AWAIT, installPreflightOutputFault, observePreflightOutputFault, withPreflightOutputFault } from './linux-preflight-fault.mjs';
 import { EXTERNAL_AWAIT, JOURNEY_AWAITS, runNativeResetDiagnostic } from './linux-native-evidence-harness.mjs';
 
 const INTERFACE_SHA256 = '2f685c8aec21bef116f95645920717e4b12ef33c1ca820fe6185eb01ffea115d';
@@ -84,7 +84,8 @@ export function createLinuxProviderSurface() {
     state: 'unbound',
     qualification: 'closed',
     settlement: Object.freeze({ observeReset: observeLinuxReset, state: 'unknown' }),
-    fault: Object.freeze({ installPreflightOutputFault, withPreflightOutputFault, state: 'unknown' }),
+    fault: Object.freeze({ installPreflightOutputFault, observePreflightOutputFault, withPreflightOutputFault,
+      state: 'unknown', qualification: 'closed', externalAwait: FAULT_EXTERNAL_AWAIT }),
     custody: Object.freeze({ captureCheckpoint: captureLinuxCustodyCheckpoint, state: 'unknown' }),
     realEngine: Object.freeze({
       runNativeResetDiagnostic,
@@ -92,8 +93,7 @@ export function createLinuxProviderSurface() {
       qualification: 'closed',
       externalAwait: Object.freeze([EXTERNAL_AWAIT['R-06'], EXTERNAL_AWAIT['R-15'], EXTERNAL_AWAIT['R-36']]),
       fault: Object.freeze({
-        installPreflightOutputFault,
-        withPreflightOutputFault,
+        installPreflightOutputFault, observePreflightOutputFault, withPreflightOutputFault,
         state: 'not-run',
         qualification: 'closed',
         externalAwait: Object.freeze([EXTERNAL_AWAIT['R-15'], EXTERNAL_AWAIT['R-21'], EXTERNAL_AWAIT['R-36']]),
