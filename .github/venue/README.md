@@ -65,3 +65,15 @@ appropriate privileges: [ETW](https://learn.microsoft.com/en-us/windows/win32/et
 Those API capabilities alone do not establish end-to-end completeness, or the
 required terminal barrier and custody facts. R-24 and R-36 bindings remain
 prerequisites; all six M4-6 slots remain unexecuted.
+
+## Windows observer adapter diagnostic
+
+`pinokio/windows-observer/adapter.mjs` owns a fixed ETW helper path and fixed
+provider configuration. The helper emits only bounded process-event headers;
+the adapter rejects missing or extra frames, gaps, loss counters, incomplete
+consumer shutdown and cleanup failures. Even a complete capture is returned as
+`status: unknown` with `authority: none` because this is not an approved source
+profile or custody binding. The focused Windows test compiles the helper with
+the hosted Visual C++ toolchain when running on Windows, attempts the bounded
+capture, and retains only allowlisted compiler diagnostics. It does not execute
+an Astrid action, establish native custody, or qualify an M4-6 slot.

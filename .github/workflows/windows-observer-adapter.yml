@@ -1,0 +1,23 @@
+name: Windows observer adapter check
+
+on:
+  push:
+    branches:
+      - wip/M-PIN/R-25-R2-WINDOWS-ADAPTER
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-adapter:
+    name: Windows ETW adapter diagnostics
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Run focused adapter test and bounded build diagnostics
+        run: node --test tests/windows-observer-adapter.test.mjs

@@ -5,6 +5,8 @@
 #include <objbase.h>
 #include <evntrace.h>
 #include <evntcons.h>
+#include <fcntl.h>
+#include <io.h>
 #include <cstdio>
 #include <vector>
 
@@ -30,6 +32,9 @@ static ULONG WINAPI onBuffer(PEVENT_TRACE_LOGFILEW log) {
 static DWORD WINAPI processEvents(void*) { processStatus = ProcessTrace(&consumer, 1, nullptr, nullptr); return 0; }
 static DWORD WINAPI readStop(void*) { char c; DWORD n; ReadFile(GetStdHandle(STD_INPUT_HANDLE), &c, 1, &n, nullptr); SetEvent(stopSignal); return 0; }
 int wmain() {
+  // MSVCRT otherwise translates each protocol LF to CRLF in text mode. Keep
+  // framing deterministic; the JS side still accepts CRLF from wrappers.
+  if (_setmode(_fileno(stdout), _O_BINARY) == -1) return 2;
   events.reserve(1024);
   GUID id; if (CoCreateGuid(&id) != S_OK) return 2;
   wchar_t name[80]; swprintf_s(name, L"r25-win-%08lx-%04x-%04x-%02x%02x%02x%02x%02x%02x%02x%02x", id.Data1, id.Data2, id.Data3, id.Data4[0], id.Data4[1], id.Data4[2], id.Data4[3], id.Data4[4], id.Data4[5], id.Data4[6], id.Data4[7]);

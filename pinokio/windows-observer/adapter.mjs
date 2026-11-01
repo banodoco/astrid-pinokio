@@ -8,6 +8,8 @@ export const sourceProfileSha256 = createHash('sha256').update(PROFILE).digest('
 const executable = fileURLToPath(new URL('./etw-observer.exe', import.meta.url));
 const summaryKeys = ['start', 'enable', 'opened', 'process', 'stop', 'close', 'timed_out', 'events_lost', 'buffers_lost', 'realtime_buffers_lost', 'consumer_buffers_lost', 'overflow', 'terminal', 'events'];
 const eventKeys = ['sequence', 'emitter_pid', 'event_id', 'opcode', 'version'];
+const readyFrame = '{"ready":true}';
+const maxOutputBytes = 262144;
 const uint = value => Number.isSafeInteger(value) && value >= 0 && value <= 0xffffffff;
 const keysEqual = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every(k => Object.hasOwn(value, k));
 const unknown = reason => ({ status: 'unknown', reason, authority: 'none', source_profile: PROFILE, source_profile_sha256: sourceProfileSha256, observations: [], continuity: null, cleanup: 'unknown' });
@@ -39,9 +41,11 @@ export function evaluateWindowsCapture(capture) {
 // Exactly one result frame may follow the optional ready frame; EOF alone is not closure.
 export function decodeWindowsOutput(output, exitCode) {
   if (exitCode !== 0) return unknown('source-unavailable-or-child-failed');
-  if (typeof output !== 'string' || Buffer.byteLength(output, 'utf8') > 262144) return unknown('output-limit');
-  const lines = output.split('\n');
-  const readySeen = lines[0] === '{"ready":true}';
+  if (typeof output !== 'string' || Buffer.byteLength(output, 'utf8') > maxOutputBytes) return unknown('output-limit');
+  // The helper writes binary LF frames. Accepting CRLF as well keeps the
+  // protocol diagnostic-only when a Windows wrapper has translated stdout.
+  const lines = output.split(/\r?\n/);
+  const readySeen = lines[0] === readyFrame;
   const valid = readySeen ? lines.length === 3 && lines[2] === '' : lines.length === 2 && lines[1] === '';
   if (!valid) return unknown('terminal-missing-or-extra-data');
   try { return evaluateWindowsCapture(JSON.parse(lines[readySeen ? 1 : 0])); } catch { return unknown('malformed'); }
@@ -68,8 +72,8 @@ export function openWindowsObservation() {
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', chunk => {
       output += chunk;
-      if (Buffer.byteLength(output, 'utf8') > 262144) { child.kill(); finish(unknown('output-limit')); return; }
-      if (!readySeen && output.startsWith('{"ready":true}\n')) { readySeen = true; resolveReady(true); }
+      if (Buffer.byteLength(output, 'utf8') > maxOutputBytes) { child.kill(); finish(unknown('output-limit')); return; }
+      if (!readySeen && (output.startsWith(`${readyFrame}\n`) || output.startsWith(`${readyFrame}\r\n`))) { readySeen = true; resolveReady(true); }
     });
     child.on('close', code => {
       if (finished) return;

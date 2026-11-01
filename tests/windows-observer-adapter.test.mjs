@@ -40,6 +40,11 @@ test('EOF and post-terminal frames do not count as clean source closure', () => 
   const denied = { ...capture(), start: 5, opened: false };
   assert.equal(decodeWindowsOutput(`${JSON.stringify(denied)}\n`, 0).reason, 'source-unavailable');
 });
+test('CRLF wrapper framing is decoded without weakening the frame count', () => {
+  const frame = JSON.stringify(capture());
+  assert.equal(decodeWindowsOutput(`{"ready":true}\r\n${frame}\r\n`, 0).reason, 'unapproved-source-profile');
+  assert.equal(decodeWindowsOutput(`{"ready":true}\r\n${frame}\r\n{}\r\n`, 0).reason, 'terminal-missing-or-extra-data');
+});
 test('unsupported host refuses without running a caller-chosen source', { skip: process.platform === 'win32' }, async () => {
   const session = openWindowsObservation();
   assert.equal(await session.ready, false);
