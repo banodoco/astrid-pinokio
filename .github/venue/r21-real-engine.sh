@@ -52,12 +52,12 @@ node .github/venue/r21-inputs.cjs --output "$request"
 git init --quiet "$agent_source"
 git -C "$agent_source" remote add origin https://github.com/banodoco/astrid-agent.git
 git -C "$agent_source" fetch --quiet --filter=blob:none origin \
-  af5ae8afdb9829beb2bba4f811dbe97765bd72b2 \
+  020877f12ea490308a9e5f9564c8f4a4bf77ede1 \
   c722bc77020add08405e700300efb533011ffc2b
-test "$(git -C "$agent_source" rev-parse af5ae8afdb9829beb2bba4f811dbe97765bd72b2^{commit})" = 'af5ae8afdb9829beb2bba4f811dbe97765bd72b2'
+test "$(git -C "$agent_source" rev-parse 020877f12ea490308a9e5f9564c8f4a4bf77ede1^{commit})" = '020877f12ea490308a9e5f9564c8f4a4bf77ede1'
 git -C "$agent_source" merge-base --is-ancestor \
   c722bc77020add08405e700300efb533011ffc2b \
-  af5ae8afdb9829beb2bba4f811dbe97765bd72b2
+  020877f12ea490308a9e5f9564c8f4a4bf77ede1
 
 stage='retain-historical-launcher'
 # Create a private, immutable local origin at the old launcher revision.  The
@@ -71,8 +71,8 @@ git clone --quiet --branch r21-old --single-branch --no-local "$source_root" "$a
 test "$(git -C "$app_root" rev-parse HEAD)" = 'bbba620e3d89eeff8021417f365e6ea584203105'
 # The retained launcher normally reads this supported setting from its tracked
 # environment file.  The immutable app SHA makes both fetched bootstrap and
-# manifest resolve to the published RC-0 App input.
-sed -i 's/^ASTRID_APP_REF=.*/ASTRID_APP_REF=a55bec9ff384b5bbfee5535962880084ab2adb1b/' "$app_root/_ENVIRONMENT"
+# manifest resolve to the current published R-21 App input.
+sed -i 's/^ASTRID_APP_REF=.*/ASTRID_APP_REF=9d3ccda1e81383082258943207745086da2aabe4/' "$app_root/_ENVIRONMENT"
 
 stage='verify-published-app-manifest'
 # This is the same immutable raw URL the historical launcher will execute.
@@ -80,13 +80,13 @@ stage='verify-published-app-manifest'
 # setup output as R-21 evidence.
 manifest="$RUNNER_TEMP/r21-published-install-manifest.json"
 curl --fail --silent --show-error --location \
-  https://raw.githubusercontent.com/banodoco/astrid-app/a55bec9ff384b5bbfee5535962880084ab2adb1b/public/install-manifest.json \
+  https://raw.githubusercontent.com/banodoco/astrid-app/9d3ccda1e81383082258943207745086da2aabe4/public/install-manifest.json \
   --output "$manifest"
 node - "$manifest" <<'NODE'
 const fs = require('node:fs');
 const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const expected = {
-  agent: 'af5ae8afdb9829beb2bba4f811dbe97765bd72b2',
+  agent: '020877f12ea490308a9e5f9564c8f4a4bf77ede1',
   runtime: '47e5949465cb6f3afdfd1cb8a0e90009fd9d4020',
 };
 for (const [name, sha] of Object.entries(expected)) {

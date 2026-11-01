@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // R-17 remains an external installer input.  This check deliberately reads
 // its supplied checkout instead of copying or implementing installer logic in
 // the Pinokio launcher.  A release job supplies the checkout explicitly.
-const candidate = '017472bf3e26ad8567accce88991942d094c71c8';
+const candidate = '020877f12ea490308a9e5f9564c8f4a4bf77ede1';
 const refusal = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const checkout = process.env.ASTRID_R17_CANDIDATE_CHECKOUT;
 

@@ -37,6 +37,15 @@ function receipt() {
 }
 
 test('R-21 venue verifier accepts only a complete native old-launcher receipt', () => {
+  assert.deepEqual(TUPLE, {
+    runtime: '47e5949465cb6f3afdfd1cb8a0e90009fd9d4020',
+    agent: '020877f12ea490308a9e5f9564c8f4a4bf77ede1',
+    app: '9d3ccda1e81383082258943207745086da2aabe4',
+    pinokio: '89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4',
+    old_launcher: 'bbba620e3d89eeff8021417f365e6ea584203105',
+    pinokiod: 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf',
+    pterm: '5be43718701c448b43daf0ce51d8935f170065bb',
+  });
   assert.deepEqual(verifyReceipt(receipt()), { accepted: true, request_id: REQUEST_ID });
 });
 
@@ -67,9 +76,9 @@ test('R-21 venue verifier rejects a successful-looking wrapper with a nonzero in
 test('R-21 dispatch binding rejects a mutable or wrong-lane request', () => {
   const environment = {
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-R7',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-R8',
     GITHUB_SHA: 'a'.repeat(40),
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R7',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R8',
     GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1',
   };
   const bound = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment);

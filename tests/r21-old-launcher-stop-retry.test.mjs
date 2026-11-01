@@ -12,7 +12,7 @@ import { test } from 'node:test';
 // Pinokio engine, an R-17 publication, or independently observed readiness.
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const oldLauncher = 'bbba620e3d89eeff8021417f365e6ea584203105';
-const r17Candidate = '017472bf3e26ad8567accce88991942d094c71c8';
+const publishedAgent = '020877f12ea490308a9e5f9564c8f4a4bf77ede1';
 const r17Refusal = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const nodeRequire = createRequire(import.meta.url);
 const candidateRepository = process.env.ASTRID_AGENT_REPOSITORY
@@ -26,7 +26,7 @@ const source = (revision, file) => revision === 'worktree'
   : execFileSync('git', ['show', `${revision}:${file}`], { cwd: repo, encoding: 'utf8' });
 
 function candidateSource(file) {
-  return execFileSync('git', ['show', `${r17Candidate}:${file}`], {
+  return execFileSync('git', ['show', `${publishedAgent}:${file}`], {
     cwd: candidateRepository, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
@@ -142,7 +142,7 @@ async function replayOldFirstClick(action, events) {
     }
     if (message.includes('--managed-by')) {
       events.push('candidate-refusal');
-      return { status: 'refused', message: r17Refusal, candidate: r17Candidate };
+      return { status: 'refused', message: r17Refusal, candidate: publishedAgent };
     }
     throw new Error(`Unmodelled old-launcher step: ${step.method}`);
   }
@@ -195,7 +195,7 @@ function boundedCollection({ handoff, firstClick, stop, retry, observation }) {
   };
 }
 
-test('R-17 candidate contract binds refusal ordering and stopped-path proofs before collection', {
+test('published R-17 contract binds refusal ordering and stopped-path proofs before collection', {
   skip: fs.existsSync(path.join(candidateRepository, '.git'))
     ? false : 'R-17 Agent checkout is not available in this environment',
 }, () => {
@@ -212,7 +212,7 @@ test('R-21 component harness: old first click refuses, current Stop succeeds, an
   const firstAction = await oldUpdate();
   const first = await replayOldFirstClick(firstAction, events);
 
-  assert.deepEqual(first, { status: 'refused', message: r17Refusal, candidate: r17Candidate });
+  assert.deepEqual(first, { status: 'refused', message: r17Refusal, candidate: publishedAgent });
   assert.deepEqual(events, ['old-launcher-pull', 'candidate-refusal']);
   assert.equal(kernel.api.running[uri], true, 'the candidate refusal does not invent a launcher-side Stop');
 
@@ -231,7 +231,7 @@ test('R-21 component harness: old first click refuses, current Stop succeeds, an
   assert.deepEqual(events, ['preflight', 'fresh-launcher-pull', 'fresh-installer-dispatch']);
 
   const completeFixture = boundedCollection({
-    handoff: { published: false, candidate: r17Candidate }, firstClick: first, stop: stopped, retry,
+    handoff: { published: false, candidate: publishedAgent }, firstClick: first, stop: stopped, retry,
     observation: {
       source: 'fixture', runtimeReady: true, applicationReady: true, terminal: 'idle',
       protectedState: { before: 'fixture-state-sha256', after: 'fixture-state-sha256' },
@@ -242,7 +242,7 @@ test('R-21 component harness: old first click refuses, current Stop succeeds, an
   });
 
   const incomplete = boundedCollection({
-    handoff: { published: false, candidate: r17Candidate }, firstClick: first, stop: stopped, retry,
+    handoff: { published: false, candidate: publishedAgent }, firstClick: first, stop: stopped, retry,
     observation: { source: 'fixture', runtimeReady: true, applicationReady: false, terminal: 'running', protectedState: { before: 'a', after: 'b' } },
   });
   assert.deepEqual(incomplete.missing, [

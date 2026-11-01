@@ -6,15 +6,15 @@
 
 const TUPLE = Object.freeze({
   runtime: '47e5949465cb6f3afdfd1cb8a0e90009fd9d4020',
-  agent: 'af5ae8afdb9829beb2bba4f811dbe97765bd72b2',
-  app: 'a55bec9ff384b5bbfee5535962880084ab2adb1b',
+  agent: '020877f12ea490308a9e5f9564c8f4a4bf77ede1',
+  app: '9d3ccda1e81383082258943207745086da2aabe4',
   pinokio: '89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4',
   old_launcher: 'bbba620e3d89eeff8021417f365e6ea584203105',
   pinokiod: 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf',
   pterm: '5be43718701c448b43daf0ce51d8935f170065bb',
 });
 
-const REQUEST_ID = 'R-21-R7';
+const REQUEST_ID = 'R-21-R8';
 const CONFIRMATION = 'REAL_ENGINE_UPDATE_STOP_RETRY';
 const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
@@ -58,9 +58,9 @@ function validateDispatch(input, environment = process.env) {
   }
   equal(input.runner_ref, environment.GITHUB_SHA, 'runner_ref/GITHUB_SHA binding');
   equal(environment.GITHUB_EVENT_NAME, 'workflow_dispatch', 'GitHub event');
-  equal(environment.GITHUB_REF, 'refs/heads/lane/M-PIN/R-21-R7', 'GitHub ref');
+  equal(environment.GITHUB_REF, 'refs/heads/lane/M-PIN/R-21-R8', 'GitHub ref');
   if (typeof environment.GITHUB_WORKFLOW_REF !== 'string'
-      || !environment.GITHUB_WORKFLOW_REF.endsWith('.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R7')) {
+      || !environment.GITHUB_WORKFLOW_REF.endsWith('.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R8')) {
     fail('workflow source is not the dedicated R-21 lane workflow');
   }
   return {
