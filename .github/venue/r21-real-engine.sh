@@ -64,9 +64,11 @@ stage='retain-historical-launcher'
 # historical Update action still performs its real `git pull --ff-only`, but
 # it cannot drift to an unreviewed remote head between the first and retry
 # clicks.  No installer behavior is changed.
-git clone --quiet --filter=blob:none --no-checkout https://github.com/banodoco/astrid-pinokio.git "$source_root"
-git -C "$source_root" fetch --quiet origin bbba620e3d89eeff8021417f365e6ea584203105
-git -C "$source_root" branch -f r21-old bbba620e3d89eeff8021417f365e6ea584203105
+git init --quiet "$source_root"
+git -C "$source_root" remote add origin https://github.com/banodoco/astrid-pinokio.git
+# A complete shallow tree avoids lazy object fetches during local upload-pack.
+git -C "$source_root" fetch --quiet --depth=1 origin bbba620e3d89eeff8021417f365e6ea584203105
+git -C "$source_root" branch -f r21-old FETCH_HEAD
 git clone --quiet --branch r21-old --single-branch --no-local "$source_root" "$app_root"
 test "$(git -C "$app_root" rev-parse HEAD)" = 'bbba620e3d89eeff8021417f365e6ea584203105'
 # The retained launcher normally reads this supported setting from its tracked
