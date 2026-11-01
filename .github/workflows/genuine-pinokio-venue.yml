@@ -3,7 +3,7 @@ name: Genuine Pinokio venue (non-release)
 on:
   push:
     branches:
-      - task/m4-6-genuine-pinokio-venue
+      - task/m4-6-genuine-pinokio-venue-root-v5
   workflow_dispatch:
 
 permissions:
@@ -30,7 +30,7 @@ jobs:
       VENUE_DIAGNOSTIC_DIR: ${{ runner.temp }}/m4-6-pinokio/local-diagnostics
     steps:
       - name: Checkout clean Pinokio candidate
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9afca # v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}

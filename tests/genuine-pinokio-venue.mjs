@@ -114,11 +114,11 @@ function redact(value, maxLength = 6000) {
 
 function scrubFreeform(value, maxLength = MAX_EXPORT_STRING_BYTES) {
   let text = redact(value, maxLength + 1)
-    .replace(SECRET_SHAPED, '[REDACTED_SECRET]')
-    .replace(CONTROL_CHARACTER, '�')
-    .replace(PATH_TRAVERSAL, '$PATH');
+    .replace(new RegExp(SECRET_SHAPED.source, 'gi'), '[REDACTED_SECRET]')
+    .replace(new RegExp(CONTROL_CHARACTER.source, 'g'), '�')
+    .replace(new RegExp(PATH_TRAVERSAL.source, 'g'), '$PATH');
   if (ABSOLUTE_PATH.test(text) || WINDOWS_ABSOLUTE_PATH.test(text)) {
-    text = text.replace(ABSOLUTE_PATH, '$ABSOLUTE_PATH').replace(WINDOWS_ABSOLUTE_PATH, '$ABSOLUTE_PATH');
+    text = text.replace(new RegExp(ABSOLUTE_PATH.source, 'g'), '$ABSOLUTE_PATH').replace(new RegExp(WINDOWS_ABSOLUTE_PATH.source, 'g'), '$ABSOLUTE_PATH');
   }
   return text;
 }
@@ -219,7 +219,7 @@ function exportControlSummary(control) {
   if (!control) return null;
   return {
     captured_at: exportText(control.captured_at, 'observation.control.captured_at'),
-    health_ok: control.health?.ok === true,
+    health_ok: control.health?.success === true,
     home_status_present: Boolean(control.home_status),
     resource_status_present: Boolean(control.resource_status),
     app_status_present: Boolean(control.app_status),
@@ -294,9 +294,9 @@ function buildExport() {
     daemon: {
       pid: evidence.daemon.pid ?? null,
       process_group: exportText(evidence.daemon.process_group, 'daemon.process_group'),
-      version: evidence.daemon.version ? { pinokiod: Boolean(evidence.daemon.version.pinokiod) } : null,
+      version: evidence.daemon.version ? { pinokiod: exportText(evidence.daemon.version.pinokiod, 'daemon.version.pinokiod') } : null,
       home: evidence.daemon.home ? { path: exportPath(evidence.daemon.home.path, 'daemon.home.path') } : null,
-      health: evidence.daemon.health ? { ok: evidence.daemon.health.ok === true } : null,
+      health: evidence.daemon.health ? { ok: evidence.daemon.health.success === true } : null,
     },
     engine: {
       requested_uri: exportPath(selectedStart, 'engine.requested_uri'),
@@ -975,7 +975,7 @@ async function main() {
     verifyDeployedActionBytes();
     writeEvidence();
 
-    const daemonEntry = path.join(pinokiodRoot, 'script', 'index');
+    const daemonEntry = path.join(pinokiodRoot, 'script', 'index.js');
     if (!fs.existsSync(daemonEntry)) fail(`pinned pinokiod entry is missing: ${redact(daemonEntry)}`);
     fs.writeFileSync(daemonLog, '');
     fs.writeFileSync(actionPacketFile, '');
