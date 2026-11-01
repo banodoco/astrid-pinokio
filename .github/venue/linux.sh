@@ -4,6 +4,11 @@ mode="${R20_LINUX_MODE:-docker}"
 case "$mode" in docker|native) ;; *) printf 'unsupported R20_LINUX_MODE\n' >&2; exit 2 ;; esac
 out="$RUNNER_TEMP/r20-evidence"
 venue_home="$RUNNER_TEMP/r20-home"
+# Never mix evidence or action state with a previous attempt.
+if [ -e "$out" ] || [ -e "$venue_home" ]; then
+  printf 'venue directories already exist; use a fresh RUNNER_TEMP\n' >&2
+  exit 1
+fi
 mkdir -p "$out" "$venue_home/api/astrid"
 # Only tracked candidate files enter the disposable Pinokio home.
 git archive HEAD | tar -x -C "$venue_home/api/astrid"

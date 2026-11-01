@@ -29,3 +29,15 @@ exit ${failObserver ? 1 : 0}`);
     assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('native Linux refuses stale evidence or a reused Pinokio home', () => {
+  for (const name of ['r20-evidence', 'r20-home']) {
+    const root = mkdtempSync(path.join(tmpdir(), 'r20-native-stale-'));
+    try {
+      mkdirSync(path.join(root, name));
+      const result = spawnSync('bash', ['.github/venue/linux.sh'], { cwd: repo, encoding: 'utf8', env: { ...process.env, RUNNER_TEMP: root, R20_LINUX_MODE: 'native' } });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /venue directories already exist/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
