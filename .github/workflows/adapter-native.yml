@@ -1,0 +1,68 @@
+name: Native observer adapter checks
+
+on:
+  push:
+    branches: [lane/M-PIN/R-25-ADAPTER-CI]
+
+permissions:
+  contents: read
+
+jobs:
+  macos-adapter:
+    name: macOS adapter build and focused test
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Compile native adapter
+        run: |
+          mkdir -p "$RUNNER_TEMP/macos-adapter"
+          clang -O2 -Wall -Wextra -fblocks .github/venue/adapters/macos-observer.c -framework EndpointSecurity -lbsm -o "$RUNNER_TEMP/macos-adapter/macos-observer"
+          shasum -a 256 "$RUNNER_TEMP/macos-adapter/macos-observer" | tee "$RUNNER_TEMP/macos-adapter/SHA256SUMS"
+      - name: Run focused adapter test
+        run: node --test tests/macos-observer.test.mjs
+      - name: Upload native build and hash
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-observer-build
+          path: ${{ runner.temp }}/macos-adapter/
+          if-no-files-found: error
+
+  windows-adapter:
+    name: Windows adapter build and focused test
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Compile native adapter
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'Visual Studio C++ toolchain is required' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $out = Join-Path $env:RUNNER_TEMP 'windows-adapter'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          $source = Join-Path $env:GITHUB_WORKSPACE 'pinokio\windows-observer\etw-observer.cpp'
+          $exe = Join-Path $out 'etw-observer.exe'
+          $obj = Join-Path $out 'observer.obj'
+          cmd /d /s /c "`"call `"$setup`" >nul && cl /nologo /EHsc /W4 /O2 /Fo`"$obj`" /Fe`"$exe`" `"$source`" /link advapi32.lib ole32.lib`""
+          if ($LASTEXITCODE -ne 0) { throw "Native build failed: $LASTEXITCODE" }
+          $hash = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLowerInvariant()
+          "$hash  etw-observer.exe" | Set-Content -Encoding utf8 (Join-Path $out 'SHA256SUMS')
+          Get-Content (Join-Path $out 'SHA256SUMS')
+          Remove-Item $obj
+      - name: Run focused adapter test
+        run: node --test tests/windows-observer-adapter.test.mjs
+      - name: Upload native build and hash
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-observer-build
+          path: ${{ runner.temp }}/windows-adapter/
+          if-no-files-found: error
