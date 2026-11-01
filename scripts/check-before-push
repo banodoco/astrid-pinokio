@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Fast pre-push safety checks. Full cross-platform unit and smoke coverage
+# remains in CI; this command checks only changed files and tests.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+usage() { echo "usage: $0 [remote-name remote-url] < local-ref local-sha remote-ref remote-sha" >&2; }
+
+changed_files() {
+  if [ "$#" -eq 2 ]; then
+    while read -r _local_ref local_sha _remote_ref remote_sha; do
+      [ -n "${local_sha:-}" ] || continue
+      if [[ "$remote_sha" =~ ^0+$ ]]; then git diff-tree --root --no-commit-id --name-only -r "$local_sha"
+      else git diff --name-only "$remote_sha" "$local_sha"; fi
+    done
+    return
+  fi
+  if git rev-parse --verify --quiet origin/main >/dev/null; then git diff --name-only origin/main...HEAD; fi
+  git diff --name-only HEAD
+  git ls-files --others --exclude-standard
+}
+find_tool() { local name=$1; if [ -x "node_modules/.bin/$name" ]; then printf '%s\n' "node_modules/.bin/$name"; else command -v "$name" || true; fi; }
+
+run_changed_checks() {
+  mapfile -t changed < <(changed_files "$@" | sed '/^$/d' | sort -u)
+  if [ "${#changed[@]}" -eq 0 ]; then echo "pre-push: no changed files; full suites remain in CI"; return 0; fi
+  mapfile -t format_files < <(printf '%s\n' "${changed[@]}" | awk '/\.(cjs|js|json|md|mjs|yaml|yml)$/')
+  if [ "${#format_files[@]}" -gt 0 ]; then
+    prettier_bin=$(find_tool prettier)
+    [ -n "$prettier_bin" ] || { echo "pre-push: changed JavaScript/config files require Prettier for syntax/format checks" >&2; return 2; }
+    "$prettier_bin" --check --ignore-unknown "${format_files[@]}"
+  fi
+  mapfile -t node_files < <(printf '%s\n' "${changed[@]}" | awk '/\.(cjs|js|mjs)$/')
+  if [ "${#node_files[@]}" -gt 0 ]; then
+    node_bin=${NODE_BIN:-}; [ -n "$node_bin" ] || node_bin=$(command -v node || true)
+    [ -n "$node_bin" ] || { echo "pre-push: changed JavaScript files require Node for syntax checks" >&2; return 2; }
+    for file in "${node_files[@]}"; do [ -f "$file" ] && "$node_bin" --check "$file"; done
+  fi
+  mapfile -t python_files < <(printf '%s\n' "${changed[@]}" | awk '/\.py$/')
+  if [ "${#python_files[@]}" -gt 0 ]; then
+    py=${PYTHON_BIN:-python3}
+    PYTHONDONTWRITEBYTECODE=1 "$py" - "${python_files[@]}" <<'PY'
+import ast, pathlib, sys
+for name in sys.argv[1:]:
+    path = pathlib.Path(name)
+    if not path.is_file(): continue
+    try: ast.parse(path.read_text(encoding="utf-8"), filename=name)
+    except (OSError, SyntaxError) as error:
+        print(f"Python syntax check failed: {name}: {error}", file=sys.stderr); raise SystemExit(1)
+PY
+  fi
+  mapfile -t test_files < <(printf '%s\n' "${changed[@]}" | awk '/^tests\/[^/]+\.test\.mjs$/')
+  if [ "${#test_files[@]}" -gt 0 ]; then
+    node_bin=${NODE_BIN:-}; [ -n "$node_bin" ] || node_bin=$(command -v node || true)
+    [ -n "$node_bin" ] || { echo "pre-push: targeted tests require Node" >&2; return 2; }
+    timeout --signal=TERM 7 "$node_bin" --test --test-concurrency=1 "${test_files[@]}"
+  fi
+  echo "pre-push: checked ${#changed[@]} changed file(s); full suites remain in CI"
+}
+
+case "${1:-}" in
+  -h|--help) usage ;;
+  "") run_changed_checks ;;
+  *) [ "$#" -eq 2 ] || { usage; exit 2; }; run_changed_checks "$@" ;;
+esac
