@@ -7,8 +7,8 @@ setup:
     set -x
     set -uo pipefail
     PRODUCT_EXPECTED=c50e5c3fd3e6e2423a4e62ea67b2513ff8228932
-    REQUEST_REF=lane/M-PIN/R-20-NATIVE-R6-runpod
-    TASK_TMP="$PWD/r20-native-r6-tmp"
+    REQUEST_REF=lane/M-PIN/R-20-NATIVE-R7-runpod
+    TASK_TMP="$PWD/r20-native-r7-tmp"
     SETUP_RECEIPT="$TASK_TMP/r20-setup-receipt"
     SETUP_STATUS=0; FIRST_STAGE=none; FIRST_TOOL=none; FIRST_OPERATION=none; FIRST_REASON=none; FIRST_STAGE_EXIT=0
     record_failure() {
@@ -64,24 +64,26 @@ setup:
     printf 'pterm_version='; stage pterm-version node package-version version-read-failed node -p "require('$TASK_TMP/pterm/package.json').version"
     stage pterm-install npm npm-ci npm-ci-failed npm ci --omit=dev --prefix "$TASK_TMP/pterm"
     SETUP_INNER_EXIT=0; test "$SETUP_STATUS" -eq 0 || SETUP_INNER_EXIT=125
-    printf 'setup_status=%s\nexpected_product_sha=%s\nactual_product_sha=%s\nrequest_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\npinokiod_sha=%s\npterm_sha=%s\nfirst_stage=%s\nfirst_tool=%s\nfirst_operation=%s\nfirst_reason=%s\nfirst_stage_exit=%s\nsetup_inner_exit=%s\n' "$SETUP_STATUS" "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$PINOKIOD_ACTUAL" "$PTERM_ACTUAL" "$FIRST_STAGE" "$FIRST_TOOL" "$FIRST_OPERATION" "$FIRST_REASON" "$FIRST_STAGE_EXIT" "$SETUP_INNER_EXIT" > "$TASK_TMP/setup-state.env"
-    printf '{"schema":"r20-native-r6-setup-v1","status":"%s","first_stage":"%s","tool":"%s","operation_class":"%s","reason":"%s","first_stage_exit":%s,"authoritative_inner_exit":%s}\n' "$(test "$SETUP_STATUS" -eq 0 && printf passed || printf failed)" "$FIRST_STAGE" "$FIRST_TOOL" "$FIRST_OPERATION" "$FIRST_REASON" "$FIRST_STAGE_EXIT" "$SETUP_INNER_EXIT" > "$SETUP_RECEIPT/setup-classification.json"
+    printf 'SETUP_STATE_SCHEMA=r20-native-r7-state-v1\nSETUP_STATUS=%s\nexpected_product_sha=%s\nactual_product_sha=%s\nrequest_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\nPINOKIOD_ACTUAL=%s\nPTERM_ACTUAL=%s\nFIRST_STAGE=%s\nFIRST_TOOL=%s\nFIRST_OPERATION=%s\nFIRST_REASON=%s\nFIRST_STAGE_EXIT=%s\nsetup_inner_exit=%s\n' "$SETUP_STATUS" "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$PINOKIOD_ACTUAL" "$PTERM_ACTUAL" "$FIRST_STAGE" "$FIRST_TOOL" "$FIRST_OPERATION" "$FIRST_REASON" "$FIRST_STAGE_EXIT" "$SETUP_INNER_EXIT" > "$TASK_TMP/setup-state.env"
+    printf '{"schema":"r20-native-r7-setup-v1","status":"%s","first_stage":"%s","tool":"%s","operation_class":"%s","reason":"%s","first_stage_exit":%s,"authoritative_inner_exit":%s}\n' "$(test "$SETUP_STATUS" -eq 0 && printf passed || printf failed)" "$FIRST_STAGE" "$FIRST_TOOL" "$FIRST_OPERATION" "$FIRST_REASON" "$FIRST_STAGE_EXIT" "$SETUP_INNER_EXIT" > "$SETUP_RECEIPT/setup-classification.json"
     (cd "$SETUP_RECEIPT" && rm -f SHA256SUMS && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort | xargs -r sha256sum > SHA256SUMS)
 run:
   - |
     set -x
     set -uo pipefail
     PRODUCT_EXPECTED=c50e5c3fd3e6e2423a4e62ea67b2513ff8228932
-    REQUEST_REF=lane/M-PIN/R-20-NATIVE-R6-runpod
-    TASK_TMP="$PWD/r20-native-r6-tmp"
+    REQUEST_REF=lane/M-PIN/R-20-NATIVE-R7-runpod
+    TASK_TMP="$PWD/r20-native-r7-tmp"
     SETUP_RECEIPT="$TASK_TMP/r20-setup-receipt"
     RUN_ID="$(printf '%s' "${GITHUB_RUN_ID:-runpod}" | tr -c 'A-Za-z0-9._:-' '_')"; ATTEMPT="$(printf '%s' "${GITHUB_RUN_ATTEMPT:-1}" | tr -c 'A-Za-z0-9._:-' '_')"; JOB_ID="$(printf '%s' "${RUNPOD_JOB_ID:-unavailable}" | tr -c 'A-Za-z0-9._:-' '_')"
-    RECEIPT="/workspace/out/r20-native-r6-c50e5c3fd3e6-${ATTEMPT}"; mkdir -p "$RECEIPT"
+    RECEIPT="/workspace/out/r20-native-r7-c50e5c3fd3e6-${ATTEMPT}"; mkdir -p "$RECEIPT"
     PRODUCT_ACTUAL=unavailable; if PRODUCT_ACTUAL="$(git rev-parse HEAD)"; then :; else PRODUCT_ACTUAL=unavailable; fi
     REQUEST_ACTUAL=unavailable; if REQUEST_ACTUAL="$(git ls-remote https://github.com/banodoco/astrid-pinokio.git "refs/heads/$REQUEST_REF" | awk 'NR == 1 { print $1 }')"; then test -n "$REQUEST_ACTUAL" || REQUEST_ACTUAL=unavailable; fi
     REQUEST_EXPECTED="${R20_REQUEST_SHA:-$REQUEST_ACTUAL}"
-    SETUP_STATUS=1; PINOKIOD_ACTUAL=unavailable; PTERM_ACTUAL=unavailable; FIRST_STAGE=unavailable; FIRST_TOOL=unavailable; FIRST_OPERATION=unavailable; FIRST_REASON=unavailable; FIRST_STAGE_EXIT=125
+    SETUP_STATE_SCHEMA=unavailable; SETUP_STATUS=1; PINOKIOD_ACTUAL=unavailable; PTERM_ACTUAL=unavailable; FIRST_STAGE=unavailable; FIRST_TOOL=unavailable; FIRST_OPERATION=unavailable; FIRST_REASON=unavailable; FIRST_STAGE_EXIT=125
     if test -f "$TASK_TMP/setup-state.env"; then . "$TASK_TMP/setup-state.env"; fi
+    CANONICAL_STATE_LOADED=false; if test "$SETUP_STATE_SCHEMA" = r20-native-r7-state-v1; then CANONICAL_STATE_LOADED=true; fi
+    printf 'canonical_setup_state_loaded=%s\n' "$CANONICAL_STATE_LOADED" > "$RECEIPT/setup-state-loaded.txt"
     printf 'expected_product_sha=%s\nactual_product_sha=%s\nexpected_request_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\nrun_id=%s\nattempt=%s\njob_id=%s\ntries=0\n' "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID" > "$RECEIPT/request-identity.txt"
     printf 'expected_product_sha=%s\nactual_product_sha=%s\nexpected_request_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\nrun_id=%s\nattempt=%s\njob_id=%s\ntries=0\n' "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID"
     if command -v node >/dev/null 2>&1; then printf 'node='; node --version; else printf 'node=unavailable\n'; fi
@@ -108,12 +110,12 @@ run:
     test -z "$MISSING" || printf '%b' "$MISSING" > "$RECEIPT/MISSING-ACTION-PACKETS.txt"
     STATUS=failed; if test "$INNER" -eq 0 && test -z "$MISSING" && test "$ACTION_MANIFEST_VALID" -eq 1; then STATUS=passed; fi
     printf 'inner_exit=%s\nfocused_test_exit=%s\n' "$INNER" "$FOCUSED_EXIT" > "$RECEIPT/inner-exit.txt"
-    printf '{"schema":"r20-native-r6-phase-v1","phase":"%s","reason":"%s","product_sha":"%s","request_ref":"%s","expected_request_sha":"%s","actual_request_sha":"%s","run_id":"%s","attempt":"%s","job_id":"%s","tries":0,"first_stage":"%s","tool":"%s","operation_class":"%s","reason_token":"%s","first_stage_exit":%s,"inner_exit":%s,"focused_test_exit":%s}\n' "$PHASE" "$REASON" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID" "$FIRST_STAGE" "$FIRST_TOOL" "$FIRST_OPERATION" "$FIRST_REASON" "$FIRST_STAGE_EXIT" "$INNER" "$FOCUSED_EXIT" > "$RECEIPT/phase.json"
-    printf '{"schema":"r20-native-r6-result-v1","status":"%s","product":{"expected":"%s","actual":"%s"},"request":{"ref":"%s","expected":"%s","actual":"%s"},"run_id":"%s","attempt":"%s","job_id":"%s","tries":0,"phase":"%s","inner_exit":%s,"focused_test_exit":%s,"running_after":%s,"action_manifest_valid":%s}\n' "$STATUS" "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID" "$PHASE" "$INNER" "$FOCUSED_EXIT" "$(test "$STATUS" = passed && printf false || printf null)" "$(test "$ACTION_MANIFEST_VALID" -eq 1 && printf true || printf false)" > "$RECEIPT/result.json"
-    printf 'R-20-NATIVE-R6 status=%s phase=%s inner_exit=%s\n' "$STATUS" "$PHASE" "$INNER" > "$RECEIPT/SUMMARY.txt"
+    printf '{"schema":"r20-native-r7-phase-v1","phase":"%s","reason":"%s","product_sha":"%s","request_ref":"%s","expected_request_sha":"%s","actual_request_sha":"%s","run_id":"%s","attempt":"%s","job_id":"%s","tries":0,"first_stage":"%s","tool":"%s","operation_class":"%s","reason_token":"%s","first_stage_exit":%s,"inner_exit":%s,"focused_test_exit":%s}\n' "$PHASE" "$REASON" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID" "$FIRST_STAGE" "$FIRST_TOOL" "$FIRST_OPERATION" "$FIRST_REASON" "$FIRST_STAGE_EXIT" "$INNER" "$FOCUSED_EXIT" > "$RECEIPT/phase.json"
+    printf '{"schema":"r20-native-r7-result-v1","status":"%s","product":{"expected":"%s","actual":"%s"},"request":{"ref":"%s","expected":"%s","actual":"%s"},"run_id":"%s","attempt":"%s","job_id":"%s","tries":0,"phase":"%s","inner_exit":%s,"focused_test_exit":%s,"running_after":%s,"action_manifest_valid":%s}\n' "$STATUS" "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID" "$PHASE" "$INNER" "$FOCUSED_EXIT" "$(test "$STATUS" = passed && printf false || printf null)" "$(test "$ACTION_MANIFEST_VALID" -eq 1 && printf true || printf false)" > "$RECEIPT/result.json"
+    printf 'R-20-NATIVE-R7 status=%s phase=%s inner_exit=%s\n' "$STATUS" "$PHASE" "$INNER" > "$RECEIPT/SUMMARY.txt"
     (cd "$RECEIPT" && rm -f SHA256SUMS && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort | xargs -r sha256sum > SHA256SUMS)
     exit "$INNER"
 artifacts:
   - /workspace/out/job.log
   - /workspace/out/exit-codes.txt
-  - /workspace/out/r20-native-r6-c50e5c3fd3e6-*/**
+  - /workspace/out/r20-native-r7-c50e5c3fd3e6-*/**
