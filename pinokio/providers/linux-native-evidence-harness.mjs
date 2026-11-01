@@ -71,12 +71,15 @@ export async function runNativeResetDiagnostic({ WebSocket, endpoint, uri, daemo
   let settlement;
   try {
     settlement = await observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, timeoutMs,
-      startAction, subscriptionDelayMs });
+      startAction, subscriptionDelayMs, sequence: 2, reserveSequences: 1 });
   } catch (error) {
     settlement = { state: 'unknown', issues: ['settlement-observer-unavailable'], payloads: [],
       error: error instanceof Error ? error.message : 'unknown-error' };
   }
-  const final = await captureLinuxCustodyCheckpoint({ phase: 'final', pids, sequence: 2 });
+  // The raw producers share one diagnostic stream. Their IDs are locally
+  // contiguous but remain merely collector inputs, never proof of continuity.
+  const final = await captureLinuxCustodyCheckpoint({ phase: 'final', pids,
+    sequence: 2 + settlement.payloads.length });
   return Object.freeze({
     kind: 'pinokio-linux-native-diagnostic',
     state: 'unknown',

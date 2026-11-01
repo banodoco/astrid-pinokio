@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { FAULT_EXTERNAL_AWAIT, observePreflightOutputFault } from '../pinokio/providers/linux-preflight-fault.mjs';
+import path from 'node:path';
+import library from '../pinokio/lib.js';
+import { FAULT_EXTERNAL_AWAIT, observePreflightBusyRefusal, observePreflightOutputFault } from '../pinokio/providers/linux-preflight-fault.mjs';
 import { createLinuxProviderSurface } from '../pinokio/providers/linux-provider.mjs';
 
 test('fault observation records the R-23 lifecycle without claiming qualification', { skip: process.platform !== 'linux' }, async () => {
@@ -74,9 +76,49 @@ test('a failed seam restoration is a producer failure without becoming a qualifi
   assert.deepEqual(result.observations.map(({ sequence }) => sequence), [77, 78, 79, 80]);
 });
 
+test('busy probe retains only a bounded structured refusal and never installs a synthetic busy seam', async () => {
+  const appDirectory = '/tmp/r24-busy-observation';
+  const calls = [];
+  const app = library.createApp({ platform: 'linux', appDirectory, lifecycle: {
+    preflightStop: async () => {
+    const error = new Error('do not retain caller-controlled busy text');
+    error.details = { task_count: 1, blockers: [{ task_id: 'task-7', kind: 'render', state: 'running' }], secret: 'omit' };
+    throw error;
+    },
+    requestGracefulStop: async () => calls.push('controller'),
+    waitForInstallerLock: async () => calls.push('lock'),
+  } });
+  const kernel = { api: { running: { [path.join(appDirectory, 'pinokio', 'start.js')]: true },
+    stop: async () => calls.push('native-stop') } };
+  const result = await observePreflightBusyRefusal(() => app.stopOwnedStart({}, undefined, kernel), { sequence: 9 });
+  assert.equal(result.state, 'unknown');
+  assert.equal(result.qualification, 'closed');
+  assert.equal(result.observed, 'busy-refusal');
+  assert.deepEqual(result.observations.map(({ kind, result: state }) => [kind, state]), [
+    ['fault-before', 'unknown'], ['fault-installed', 'not-run'], ['fault-observed', 'unknown'], ['fault-after', 'unknown'],
+  ]);
+  const observed = JSON.parse(result.observations[2].bytes.toString('utf8'));
+  assert.deepEqual(observed.busy, { taskCount: 1, blockers: [{ taskId: 'task-7', kind: 'render', state: 'running' }] });
+  assert.ok(!result.observations.some(({ bytes }) => bytes.toString('utf8').includes('caller-controlled')));
+  assert.ok(!result.observations.some(({ bytes }) => bytes.toString('utf8').includes('secret')));
+  assert.deepEqual(result.observations.map(({ sequence }) => sequence), [9, 10, 11, 12]);
+  assert.deepEqual(calls, []);
+});
+
+test('busy probe fails a completed action and does not promote an unclassified refusal', async () => {
+  const completed = await observePreflightBusyRefusal(async () => {});
+  assert.equal(completed.state, 'fail');
+  assert.equal(completed.observed, 'fail');
+  const unclassified = await observePreflightBusyRefusal(async () => { throw new Error('untrusted text'); });
+  assert.equal(unclassified.state, 'unknown');
+  assert.equal(unclassified.observed, 'unknown');
+  assert.ok(!unclassified.observations.some(({ bytes }) => bytes.toString('utf8').includes('untrusted text')));
+});
+
 test('the Linux facade exposes the bounded fault observer and keeps it closed', () => {
   const provider = createLinuxProviderSurface();
   assert.equal(provider.fault.observePreflightOutputFault, observePreflightOutputFault);
+  assert.equal(provider.fault.observePreflightBusyRefusal, observePreflightBusyRefusal);
   assert.equal(provider.fault.state, 'unknown');
   assert.equal(provider.fault.qualification, 'closed');
   assert.deepEqual(provider.fault.externalAwait, FAULT_EXTERNAL_AWAIT);

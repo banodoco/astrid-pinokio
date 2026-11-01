@@ -54,7 +54,10 @@ test('native evidence harness observes a PTerm-dispatched real-engine-shaped str
   assert.ok(!result.settlement.issues.includes('idle-not-observed'));
   assert.match(result.custody.initial.observation.sha256, /^[0-9a-f]{64}$/);
   assert.equal(result.custody.initial.observation.file, 'observations/obs-000001.json');
-  assert.equal(result.custody.final.observation.file, 'observations/obs-000002.json');
+  const finalSequence = result.settlement.payloads.length + 2;
+  assert.equal(result.custody.final.observation.file, `observations/obs-${String(finalSequence).padStart(6, '0')}.json`);
+  assert.deepEqual(result.settlement.payloads.map(({ sequence }) => sequence),
+    result.settlement.payloads.map((_, index) => index + 2));
   assert.equal(result.fullyLocalRestoration.state, 'not-run');
   assert.deepEqual(result.fullyLocalRestoration.source.files.map((file) => file.path),
     ['start.js', 'stop.js', 'update.js', 'update-stage.mjs', 'lib.js', 'lifecycle.mjs', 'session.mjs']);

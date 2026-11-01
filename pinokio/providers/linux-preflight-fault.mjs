@@ -228,4 +228,103 @@ export async function observePreflightOutputFault(slot, action, options = {}) {
   });
 }
 
+function projectBusyDetails(error) {
+  const details = error?.details;
+  if (!details || typeof details !== 'object' || Array.isArray(details) ||
+      !Number.isSafeInteger(details.task_count) || details.task_count < 1 || details.task_count > 256 ||
+      !Array.isArray(details.blockers) || details.blockers.length < 1 || details.blockers.length > 256) return null;
+  const blockers = [];
+  for (const blocker of details.blockers) {
+    if (!blocker || typeof blocker !== 'object' || Array.isArray(blocker)) return null;
+    const taskId = blocker.task_id;
+    const kind = blocker.kind;
+    const state = blocker.state;
+    if (![taskId, kind, state].every((value) => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(value))) {
+      return null;
+    }
+    blockers.push({ taskId, kind, state });
+  }
+  return { taskCount: details.task_count, blockers };
+}
+
+/**
+ * Retain an allowlisted preflight busy refusal from an actual caller-supplied
+ * product path. This deliberately has no "busy injection": a scripted busy
+ * reply would violate R-23. The observed task still lacks R-21 identity and
+ * R-36 collection authority, so even a well-formed refusal remains unknown.
+ */
+export async function observePreflightBusyRefusal(action, { sequence = 1 } = {}) {
+  if (typeof action !== 'function') throw new TypeError('A busy preflight action callback is required.');
+  if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence > 4093) {
+    throw new TypeError('Invalid Linux busy observation sequence.');
+  }
+  const observations = [];
+  const files = [];
+  const record = (kind, result, details = {}) => {
+    const eventSequence = sequence + observations.length;
+    const id = `obs-${String(eventSequence).padStart(6, '0')}`;
+    const bytes = Buffer.from(canonical({
+      kind,
+      version: 1,
+      phase: 'linux-preflight-busy-probe',
+      collectedAt: new Date().toISOString(),
+      source: 'linux-preflight-busy-probe',
+      sourceProfileSha256: null,
+      sourceInstance: null,
+      sourceSequence: eventSequence,
+      requestId: null,
+      operationId: null,
+      controllerIncarnation: null,
+      identity: 'unauthenticated',
+      result,
+      ...details,
+      limitations: [
+        'development-only-local-probe',
+        'does-not-create-a-runtime-busy-task',
+        'not-a-protected-controller-transport',
+        'no-automatic-retry',
+        'not-an-r30-export-or-qualification-receipt',
+      ],
+    }), 'ascii');
+    const digest = sha256(bytes);
+    const file = `fault/${id}.json`;
+    observations.push(Object.freeze({ id, kind, file, sha256: digest, sequence: eventSequence,
+      result, ...details, bytes }));
+    files.push(Object.freeze({ path: file, role: kind, sha256: digest, size: bytes.length }));
+  };
+
+  record('fault-before', 'unknown', { reason: 'R-21 task identity and R-36 collection binding are absent' });
+  // The seam is intentionally absent. An adapter must never replace a real
+  // Runtime task with a caller-crafted busy error merely to satisfy this probe.
+  record('fault-installed', 'not-run', { reason: 'synthetic busy injection is prohibited' });
+  let state = 'unknown';
+  let observed = 'unknown';
+  try {
+    await action();
+    state = 'fail';
+    observed = 'fail';
+    record('fault-observed', 'fail', { reason: 'busy preflight action completed without a refusal' });
+  } catch (error) {
+    const busy = projectBusyDetails(error);
+    if (busy) {
+      observed = 'busy-refusal';
+      record('fault-observed', 'unknown', { busy, reason: 'structured busy refusal observed without trusted task binding' });
+    } else {
+      record('fault-observed', 'unknown', { reason: 'unclassified preflight refusal observed' });
+    }
+  }
+  record('fault-after', state === 'fail' ? 'fail' : 'unknown', {
+    reason: 'no injection was installed; no retry or remote fence was attempted',
+  });
+  return Object.freeze({
+    kind: 'pinokio-linux-busy-diagnostic',
+    state,
+    qualification: 'closed',
+    externalAwait: Object.freeze([...FAULT_EXTERNAL_AWAIT]),
+    observed,
+    observations: Object.freeze(observations),
+    files: Object.freeze(files),
+  });
+}
+
 export { FAULT_EXTERNAL_AWAIT };

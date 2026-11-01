@@ -8,6 +8,19 @@ const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const MAX_EVENTS = 4096;
 const MAX_FRAME = 1024 * 1024;
 
+// The individual payloads are raw diagnostic files, but they still need stable
+// bytes so a later protected collector can recompute their file digests.  This
+// is the R30-CJSON-1 subset used by the other Linux producers; it does not turn
+// the returned values into an R-30 export.
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${canonical(key)}:${canonical(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value).replace(/[\u007f-\uffff]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
 // This is a deliberately allowlisted projection, not a raw socket transcript:
 // stream output, RPC arguments, shell state and arbitrary result fields may
 // contain credentials. Preserve exact request bytes and the selected facts only.
@@ -39,7 +52,7 @@ function checkpoint(record) {
  * not acknowledge admission or provide a unique execution ID. Always unknown.
  */
 export async function observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, timeoutMs = 120000,
-  startAction, subscriptionDelayMs = 3000 }) {
+  startAction, subscriptionDelayMs = 3000, sequence = 1, reserveSequences = 0 }) {
   if (process.platform !== 'linux') throw new Error('Linux required');
   let address;
   try { address = new URL(endpoint); } catch {}
@@ -51,13 +64,23 @@ export async function observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, t
       !Number.isSafeInteger(daemonPid) || daemonPid < 1 ||
       !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000 ||
       (startAction !== undefined && typeof startAction !== 'function') ||
-      !Number.isSafeInteger(subscriptionDelayMs) || subscriptionDelayMs < 0 || subscriptionDelayMs > 10000) {
+      !Number.isSafeInteger(subscriptionDelayMs) || subscriptionDelayMs < 0 || subscriptionDelayMs > 10000 ||
+      !Number.isSafeInteger(sequence) || sequence < 1 || sequence > MAX_EVENTS ||
+      !Number.isSafeInteger(reserveSequences) || reserveSequences < 0 || sequence + reserveSequences > MAX_EVENTS) {
     throw new TypeError('invalid Reset observation parameters');
   }
   const records = [];
   const issues = new Set(['engine-execution-id-unavailable', 'subscription-and-source-continuity-unverified',
     'profile-and-provenance-unbound', 'installer-journal-and-readiness-unobserved']);
-  const record = (kind, value) => records.push({ kind, collected_at: new Date().toISOString(), ...value });
+  const maxRecords = MAX_EVENTS - sequence + 1 - reserveSequences;
+  const record = (kind, value) => {
+    if (records.length >= maxRecords) {
+      issues.add('observation-limit');
+      return false;
+    }
+    records.push({ kind, collected_at: new Date().toISOString(), ...value });
+    return true;
+  };
   try { record('process-before', { process: checkpoint(await captureProcess(daemonPid)) }); }
   catch {
     // An absent daemon process must not trigger a mutating request.
@@ -119,7 +142,7 @@ export async function observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, t
       try {
         const bytes = Buffer.from(event.data);
         observedBytes += bytes.length;
-        if (bytes.length > MAX_FRAME || observedBytes > 16 * 1024 * 1024 || records.length >= MAX_EVENTS - 8) throw new Error('limit');
+        if (bytes.length > MAX_FRAME || observedBytes > 16 * 1024 * 1024 || records.length >= maxRecords) throw new Error('limit');
         const packet = JSON.parse(bytes.toString('utf8'));
         if (!packet || typeof packet !== 'object' || Array.isArray(packet) || typeof packet.type !== 'string') throw new Error('packet');
         const selected = project(packet);
@@ -185,10 +208,17 @@ export async function observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, t
   // collector after profiles, binding and provenance are approved. These are
   // diagnostic payload bytes, not schema-valid qualification evidence.
   const payloads = records.map((item, index) => {
-    const sequence = index + 1;
-    const bytes = Buffer.from(JSON.stringify({ ...item, source_sequence: sequence }) + '\n');
-    return { id: `obs-${String(sequence).padStart(6, '0')}`, kind: item.kind,
-      sequence, file: `settlement/${String(sequence).padStart(6, '0')}.json`, sha256: sha256(bytes), bytes };
+    const observationSequence = sequence + index;
+    const bytes = Buffer.from(canonical({ ...item, source_sequence: observationSequence }), 'ascii');
+    const id = `obs-${String(observationSequence).padStart(6, '0')}`;
+    const file = `settlement/${id}.json`;
+    const digest = sha256(bytes);
+    return Object.freeze({ id, kind: item.kind, sequence: observationSequence, file, sha256: digest, bytes });
   });
-  return { state: 'unknown', issues: [...issues], payloads };
+  const observations = Object.freeze(payloads.map(({ id, kind, file, sha256: digest, sequence: itemSequence }) =>
+    Object.freeze({ id, kind, file, sha256: digest, sequence: itemSequence })));
+  const files = Object.freeze(payloads.map(({ kind, file, sha256: digest, bytes }) =>
+    Object.freeze({ path: file, role: kind, sha256: digest, size: bytes.length })));
+  return Object.freeze({ state: 'unknown', issues: Object.freeze([...issues]), payloads: Object.freeze(payloads),
+    observations, files });
 }

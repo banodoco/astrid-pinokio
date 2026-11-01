@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { captureLinuxCustodyCheckpoint } from '../pinokio/providers/linux-custody-observations.mjs';
+import { captureLinuxCustodyCheckpoint, openLinuxCustodyCheckpointSession } from '../pinokio/providers/linux-custody-observations.mjs';
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const decode = (result) => JSON.parse(result.bytes.toString('utf8'));
@@ -72,4 +72,38 @@ test('rejects malformed capture requests and cannot accept caller snapshots as o
   const payload = decode(await captureLinuxCustodyCheckpoint({ phase: 'initial', pids: { controller: { pid: process.pid, authenticated: true }, runtime: '1' } }));
   assert.deepEqual(payload.sources.map((source) => source.state), ['unavailable', 'unavailable', 'unavailable']);
   assert.equal(payload.identity, 'unauthenticated');
+});
+
+test('checkpoint session retains two bounded censuses without asserting continuous custody', { skip: process.platform !== 'linux' }, async (t) => {
+  const controller = await child(t);
+  const runtime = await child(t);
+  const session = await openLinuxCustodyCheckpointSession({
+    pids: { controller: controller.pid, runtime: runtime.pid, editor: process.pid }, sequence: 31,
+  });
+  assert.equal(session.kind, 'pinokio-linux-custody-checkpoint-session');
+  assert.equal(session.state, 'observing');
+  assert.equal(session.qualification, 'closed');
+  const [result, repeat] = await Promise.all([session.finalize(), session.finalize()]);
+  assert.equal(result, repeat);
+  assert.equal(result.state, 'unknown');
+  assert.equal(result.continuity, 'unknown');
+  assert.equal(result.relation, 'stable-checkpoints');
+  assert.deepEqual(result.issues, ['custody-continuity-unavailable']);
+  assert.deepEqual(result.externalAwait, ['R-36']);
+  assert.deepEqual(result.observations.map(({ id, sequence }) => ({ id, sequence })), [
+    { id: 'obs-000031', sequence: 31 }, { id: 'obs-000032', sequence: 32 },
+  ]);
+  assert.deepEqual(result.files.map(({ role }) => role), ['custody-census', 'custody-census']);
+  assert.ok(result.limitations.includes('no-removal-or-retry-authority'));
+  assert.ok(Object.isFrozen(session));
+  assert.ok(Object.isFrozen(result));
+});
+
+test('checkpoint session cannot be reused after a local abort', { skip: process.platform !== 'linux' }, async () => {
+  const session = await openLinuxCustodyCheckpointSession({ pids: { controller: process.pid }, sequence: 40 });
+  const aborted = session.abort();
+  assert.equal(aborted.state, 'unknown');
+  assert.deepEqual(aborted.issues, ['diagnostic-session-aborted']);
+  await assert.rejects(session.finalize(), /closed/);
+  await assert.rejects(openLinuxCustodyCheckpointSession({ pids: {}, sequence: 4096 }), /sequence/);
 });

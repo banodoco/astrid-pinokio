@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { observeLinuxReset } from '../pinokio/providers/linux-action-settlement.mjs';
 
 const uri = '/tmp/pinokio/api/astrid/pinokio/reset.js';
@@ -57,6 +58,25 @@ test('dispatches the exact Reset request and retains ordered bounded source fact
   }
 });
 
+test('returns canonical settlement artifacts with matching collector references', async () => {
+  const v = venue(packets);
+  const result = await observeLinuxReset({ WebSocket: v.Socket, endpoint: 'ws://127.0.0.1:42000', uri,
+    daemonPid: process.pid, timeoutMs: 25, sequence: 23 });
+  assert.equal(result.observations[0].sequence, 23);
+  assert.deepEqual(result.observations.map(({ id, kind, file, sha256, sequence }) => ({ id, kind, file, sha256, sequence })),
+    result.payloads.map(({ id, kind, file, sha256, sequence }) => ({ id, kind, file, sha256, sequence })));
+  assert.deepEqual(result.files.map(({ path, role, sha256, size }) => ({ path, role, sha256, size })),
+    result.payloads.map(({ file, kind, sha256, bytes }) => ({ path: file, role: kind, sha256, size: bytes.length })));
+  for (const payload of result.payloads) {
+    const canonical = spawnSync('python3', ['-c', 'import json,sys; value=json.load(sys.stdin); sys.stdout.write(json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=True,allow_nan=False))'], { input: payload.bytes });
+    assert.equal(canonical.status, 0, canonical.stderr.toString());
+    assert.deepEqual(canonical.stdout, payload.bytes);
+  }
+  assert.ok(Object.isFrozen(result));
+  assert.ok(Object.isFrozen(result.observations));
+  assert.ok(Object.isFrozen(result.files));
+});
+
 test('missing, duplicate, foreign, post-terminal and unverifiable events remain unknown', async () => {
   const cases = [
     [packets.filter(p => p.type !== 'event'), 'terminal-unavailable'],
@@ -83,7 +103,9 @@ test('idle false is source-specific and cannot be inferred from a bad or missing
 
 test('rejects non-Reset actions and missing daemon identity before dispatch', async () => {
   const v = venue(packets);
-  for (const params of [{ uri: '/tmp/pinokio/update.js', daemonPid: process.pid }, { uri, daemonPid: 0 }, { uri: '/tmp/../pinokio/reset.js', daemonPid: process.pid }]) {
+  for (const params of [{ uri: '/tmp/pinokio/update.js', daemonPid: process.pid }, { uri, daemonPid: 0 },
+    { uri: '/tmp/../pinokio/reset.js', daemonPid: process.pid }, { uri, daemonPid: process.pid, sequence: 0 },
+    { uri, daemonPid: process.pid, sequence: 4096, reserveSequences: 1 }]) {
     await assert.rejects(observeLinuxReset({ WebSocket: v.Socket, endpoint: 'ws://127.0.0.1', ...params }), /invalid/);
   }
   assert.deepEqual(v.sent, []);

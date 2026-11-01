@@ -8,6 +8,7 @@ const MAX_PROC_BYTES = 16384;
 const MAX_EXE_BYTES = 128 * 1024 * 1024;
 const ROLES = ['controller', 'runtime', 'editor'];
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const CUSTODY_EXTERNAL_AWAIT = Object.freeze(['R-36']);
 
 // Payload keys are fixed ASCII; escaping UTF-16 units matches Python's
 // ensure_ascii=True for the process-supplied executable path as well.
@@ -157,3 +158,108 @@ export async function captureLinuxCustodyCheckpoint({ phase, pids = {}, sequence
   return { observation: { id, kind: 'custody-census', file, sha256, sequence },
     file: { path: file, role: 'custody-census', sha256, size: bytes.length }, bytes };
 }
+
+function publicReference({ observation, file, bytes }) {
+  return Object.freeze({
+    observation: Object.freeze({ ...observation }),
+    file: Object.freeze({ ...file }),
+    // Copy the raw bytes so a caller cannot mutate the copy retained by the
+    // diagnostic controller between its initial and final checkpoint.
+    bytes: Buffer.from(bytes),
+  });
+}
+
+function identities(reference) {
+  const payload = JSON.parse(reference.bytes.toString('utf8'));
+  return new Map(payload.sources.map((source) => [source.role, source]));
+}
+
+function compareCheckpoints(initial, final) {
+  const before = identities(initial);
+  const after = identities(final);
+  let unavailable = false;
+  for (const role of ROLES) {
+    const left = before.get(role);
+    const right = after.get(role);
+    if (left?.state !== 'observed' || right?.state !== 'observed') {
+      unavailable = true;
+      continue;
+    }
+    // A changed birth, parent, principal, executable object or selected PID is
+    // a known contradiction. Equal snapshots are deliberately not continuity.
+    for (const field of ['pid', 'parentPid', 'startTimeTicks', 'executablePath', 'executableSha256']) {
+      if (left[field] !== right[field]) return 'changed';
+    }
+    if (JSON.stringify(left.principal) !== JSON.stringify(right.principal)) return 'changed';
+  }
+  return unavailable ? 'unavailable' : 'stable-checkpoints';
+}
+
+/**
+ * Hold two bounded `/proc` censuses around a caller's diagnostic interval.
+ * This is intentionally not `open_authenticated_session`: no caller receives
+ * custody, removal, retry, or qualification authority, and it never asserts
+ * continuous observation between the two checkpoints.
+ */
+export async function openLinuxCustodyCheckpointSession({ pids = {}, sequence = 1 } = {}) {
+  if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence >= 4096) {
+    throw new TypeError('invalid checkpoint-session sequence');
+  }
+  if (!pids || typeof pids !== 'object' || Array.isArray(pids)) throw new TypeError('invalid checkpoint-session pids');
+  const selectedPids = { ...pids };
+  const initial = await captureLinuxCustodyCheckpoint({ phase: 'initial', pids: selectedPids, sequence });
+  let terminal;
+  let finalizing;
+  let closed = false;
+
+  const finalize = async () => {
+    if (terminal) return terminal;
+    if (finalizing) return finalizing;
+    if (closed) throw new Error('custody checkpoint session is closed');
+    closed = true;
+    finalizing = (async () => {
+      const final = await captureLinuxCustodyCheckpoint({ phase: 'final', pids: selectedPids, sequence: sequence + 1 });
+      const relation = compareCheckpoints(initial, final);
+      const issues = relation === 'changed' ? ['custody-identity-changed']
+        : relation === 'unavailable' ? ['custody-checkpoint-unavailable'] : ['custody-continuity-unavailable'];
+      terminal = Object.freeze({
+        kind: 'pinokio-linux-custody-checkpoint-session',
+        state: relation === 'changed' ? 'fail' : 'unknown',
+        qualification: 'closed',
+        externalAwait: CUSTODY_EXTERNAL_AWAIT,
+        continuity: 'unknown',
+        relation,
+        issues: Object.freeze(issues),
+        initial: publicReference(initial),
+        final: publicReference(final),
+        observations: Object.freeze([initial.observation, final.observation].map((item) => Object.freeze({ ...item }))),
+        files: Object.freeze([initial.file, final.file].map((item) => Object.freeze({ ...item }))),
+        limitations: Object.freeze(['unauthenticated-diagnostic-session', 'checkpoint-only',
+          'no-loss-detecting-source', 'no-removal-or-retry-authority']),
+      });
+      return terminal;
+    })();
+    return finalizing;
+  };
+
+  return Object.freeze({
+    kind: 'pinokio-linux-custody-checkpoint-session',
+    state: 'observing',
+    qualification: 'closed',
+    initial: publicReference(initial),
+    // A local abort only closes this helper. It does not signal, stop, or
+    // otherwise affect any selected process.
+    abort() {
+      if (terminal) return terminal;
+      if (finalizing) return finalizing;
+      closed = true;
+      return Object.freeze({ kind: 'pinokio-linux-custody-checkpoint-session', state: 'unknown',
+        qualification: 'closed', externalAwait: CUSTODY_EXTERNAL_AWAIT,
+        issues: Object.freeze(['diagnostic-session-aborted']),
+        limitations: Object.freeze(['no-final-census', 'no-removal-or-retry-authority']) });
+    },
+    finalize,
+  });
+}
+
+export { CUSTODY_EXTERNAL_AWAIT };

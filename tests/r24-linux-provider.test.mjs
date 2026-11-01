@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { observeLinuxReset } from '../pinokio/providers/linux-action-settlement.mjs';
-import { captureLinuxCustodyCheckpoint } from '../pinokio/providers/linux-custody-observations.mjs';
-import { installPreflightOutputFault, withPreflightOutputFault } from '../pinokio/providers/linux-preflight-fault.mjs';
+import { captureLinuxCustodyCheckpoint, openLinuxCustodyCheckpointSession } from '../pinokio/providers/linux-custody-observations.mjs';
+import { installPreflightOutputFault, observePreflightBusyRefusal, withPreflightOutputFault } from '../pinokio/providers/linux-preflight-fault.mjs';
 import { INTERFACE_SHA256, createLinuxProviderSurface } from '../pinokio/providers/linux-provider.mjs';
 
 test('Linux provider exposes the bounded producers without promoting their outputs to authority', () => {
@@ -15,12 +15,15 @@ test('Linux provider exposes the bounded producers without promoting their outpu
   assert.equal(provider.settlement.state, 'unknown');
   assert.equal(provider.settlement.observeReset, observeLinuxReset);
   assert.equal(provider.fault.installPreflightOutputFault, installPreflightOutputFault);
+  assert.equal(provider.fault.observePreflightBusyRefusal, observePreflightBusyRefusal);
   assert.equal(provider.fault.withPreflightOutputFault, withPreflightOutputFault);
   assert.equal(provider.custody.captureCheckpoint, captureLinuxCustodyCheckpoint);
+  assert.equal(provider.custody.openCheckpointSession, openLinuxCustodyCheckpointSession);
   assert.equal(provider.realEngine.state, 'not-run');
   assert.equal(provider.realEngine.qualification, 'closed');
   assert.deepEqual(provider.realEngine.externalAwait.map((entry) => entry.id), ['R-06', 'R-15', 'R-36']);
   assert.equal(provider.realEngine.fault.installPreflightOutputFault, installPreflightOutputFault);
+  assert.equal(provider.realEngine.fault.observePreflightBusyRefusal, observePreflightBusyRefusal);
   assert.equal(provider.realEngine.fault.withPreflightOutputFault, withPreflightOutputFault);
   assert.equal(provider.realEngine.fault.state, 'not-run');
   assert.throws(() => provider.requireTrustedQualification(), /R-36 trusted collector\/verifier/);
