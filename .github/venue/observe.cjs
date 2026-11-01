@@ -5,7 +5,7 @@ const { spawn } = require('node:child_process');
 const { WebSocket } = require(path.join(process.env.RUNNER_TEMP, 'pterm/node_modules/unws'));
 const verify = require('./verify.cjs');
 const out = path.join(process.env.RUNNER_TEMP, 'r20-evidence');
-const uri = '/data/pinokio/api/astrid/pinokio/reset.js';
+const uri = process.env.R20_ACTION_URI || '/data/pinokio/api/astrid/pinokio/reset.js';
 const ref = 'pinokio://127.0.0.1:42000/api/astrid';
 const packets = [];
 let child;
@@ -22,7 +22,8 @@ async function main() {
     socket.addEventListener('message', event => {
       const packet = JSON.parse(String(event.data));
       // Retain only fields needed to verify this known action, never arbitrary output.
-      packets.push({ type: packet.type, index: packet.index, total: packet.total, data: packet.type === 'result' ? packet.data : packet.type === 'event' ? packet.data : undefined });
+      const data = packet.type === 'result' ? { stopped: packet.data?.stopped, lockFree: packet.data?.lockFree, reset: packet.data?.reset, dataKept: packet.data?.dataKept } : packet.type === 'event' && packet.data === 'stop' ? 'stop' : undefined;
+      packets.push({ type: packet.type, index: packet.index, total: packet.total, data });
       if (packet.type === 'error') reject(new Error('daemon reported action error'));
       if (packet.type === 'disconnect') resolve();
     });
