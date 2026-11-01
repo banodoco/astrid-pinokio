@@ -12,6 +12,14 @@ for (const failObserver of [false, true]) test(`native Linux uses its own action
     const bin = path.join(root, 'bin');
     const runner = path.join(root, 'runner');
     mkdirSync(bin); mkdirSync(path.join(runner, 'pinokiod'), { recursive: true }); mkdirSync(path.join(runner, 'pterm'));
+    const toShellPath = (value) => {
+      if (process.platform !== 'win32') return value;
+      const converted = spawnSync('bash', ['-c', 'cygpath -u "$1"', '--', value], { encoding: 'utf8' });
+      assert.equal(converted.status, 0, converted.stderr);
+      return converted.stdout.trim();
+    };
+    const shellRoot = toShellPath(root);
+    const shellRunner = toShellPath(runner);
     const script = (name, body) => writeFileSync(path.join(bin, name), '#!/usr/bin/env bash\n' + body + '\n', { mode: 0o755 });
     const git = spawnSync('bash', ['-c', 'command -v git'], { encoding: 'utf8' });
     assert.equal(git.status, 0, git.stderr);
@@ -22,9 +30,9 @@ for (const failObserver of [false, true]) test(`native Linux uses its own action
 if [ "$1" = script/index.js ]; then echo "$$" > "$TEST_ROOT/daemon-pid"; exec sleep 60; fi
 printf '%s' "$R20_ACTION_URI" > "$TEST_ROOT/action-uri"
 exit ${failObserver ? 1 : 0}`);
-    const result = spawnSync('bash', ['.github/venue/linux.sh'], { cwd: repo, encoding: 'utf8', timeout: 10000, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_ROOT: root, REAL_GIT: git.stdout.trim(), RUNNER_TEMP: runner, R20_LINUX_MODE: 'native', GITHUB_RUN_ID: 'test', GITHUB_RUN_ATTEMPT: '1' } });
+    const result = spawnSync('bash', ['.github/venue/linux.sh'], { cwd: repo, encoding: 'utf8', timeout: 10000, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_ROOT: shellRoot, REAL_GIT: git.stdout.trim(), RUNNER_TEMP: shellRunner, R20_LINUX_MODE: 'native', GITHUB_RUN_ID: 'test', GITHUB_RUN_ATTEMPT: '1' } });
     assert.equal(result.status, failObserver ? 1 : 0, result.stderr);
-    assert.equal(readFileSync(path.join(root, 'action-uri'), 'utf8'), `${runner}/r20-home/api/astrid/pinokio/reset.js`);
+    assert.equal(readFileSync(path.join(root, 'action-uri'), 'utf8'), `${shellRunner}/r20-home/api/astrid/pinokio/reset.js`);
     assert.throws(() => readFileSync(path.join(root, 'docker-called')));
     assert.match(readFileSync(path.join(runner, 'r20-evidence', 'SHA256SUMS'), 'utf8'), /identity\.txt/);
     const pid = Number(readFileSync(path.join(root, 'daemon-pid'), 'utf8'));

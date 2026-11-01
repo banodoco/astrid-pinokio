@@ -401,7 +401,7 @@ async function setup() {
   makeFfmpegGuard(guardDirectory);
   prepareCheckout(repository, appDirectory);
   // Exercise branch selection through the launcher file in the disposable clone.
-  fs.writeFileSync(path.join(appDirectory, '_ENVIRONMENT'), 'ASTRID_APP_REF=feat/pinokio\n');
+  fs.writeFileSync(path.join(appDirectory, '_ENVIRONMENT'), 'ASTRID_APP_REF=int/r1\n');
 
   const environment = makeEnvironment(pinokioHome, process.platform);
   assert.ok(environment && typeof environment === 'object', 'Pinokio env fixture must return an environment object');
@@ -435,7 +435,7 @@ async function setup() {
   environment.ASTRID_PINOKIO_APP_DIR = appDirectory;
   environment.ASTRID_RUNTIME_DOOR_PORT = '17340';
   const app = library.createApp({ platform: process.platform, appDirectory, environment });
-  assert.equal(app.appRef(), 'feat/pinokio', 'Install must select the manifest ref from _ENVIRONMENT');
+  assert.equal(app.appRef(), 'int/r1', 'Install must select the manifest ref from _ENVIRONMENT');
   const servicesBefore = await fakeServices(pinokioHome, userHome, environment);
   return { pinokioHome, userHome, appDirectory, cacheDirectory, binDirectory, environment, app, servicesBefore };
 }
