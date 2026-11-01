@@ -1387,3 +1387,65 @@ test('Update preflight failure, separate Stop and rebuilt retry preserve orderin
     }
   }
 });
+
+test('candidate R-17 refusal leaves the first backend click fenced until a separate Stop rebuilds its retry plan', async () => {
+  // The string is the observed candidate installer contract at Agent
+  // 017472bf. This fixture checks launcher ordering only: the candidate has
+  // not yet been published as an R-17 handoff, and no fixture result is a
+  // real-engine Update success.
+  const r17Refusal = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
+  const events = [];
+  const base = fakeApp('linux', '', 'backend');
+  const filesystem = {
+    readFileSync(file) {
+      if (file.endsWith('install-mode.json')) return JSON.stringify({ schema_version: 1, mode: 'backend' });
+      throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+    },
+    existsSync: (file) => file === base.PROGRAMS_DIR,
+  };
+  const app = library.createApp({ platform: 'linux', appDirectory: base.APP_DIR, environment: {}, filesystem,
+    lifecycle: {
+      preflightStop: async () => { events.push('preflight'); return { safe: true }; },
+      requestGracefulStop: async () => { events.push('graceful-stop'); },
+      waitForInstallerLock: async () => { events.push('lock'); },
+    },
+  });
+  const uri = app.paths.join(app.APP_DIR, 'pinokio', 'start.js');
+  const kernel = { api: { running: { [uri]: true }, stop: async () => {
+    events.push('kernel-stop'); delete kernel.api.running[uri];
+  } } };
+  const update = load('pinokio/update.js', app);
+  const dispatch = async (action, installer) => {
+    for (const step of action.run) {
+      if (typeof step.method === 'function') {
+        await step.method({}, () => {}, kernel);
+      } else if (step.params.message.includes('pull --ff-only')) {
+        events.push('launcher-pull');
+      } else if (step.params.message.includes('--managed-by')) {
+        events.push('installer'); await installer();
+      } else {
+        assert.fail(`unexpected backend Update step: ${step.method}`);
+      }
+    }
+  };
+
+  const first = await update();
+  assert.equal(first.run[0].method, app.preflightStop);
+  await assert.rejects(dispatch(first, async () => { throw new Error(r17Refusal); }), (error) => {
+    assert.equal(error.message, r17Refusal);
+    return true;
+  });
+  assert.deepEqual(events, ['preflight', 'launcher-pull', 'installer']);
+  assert.equal(kernel.api.running[uri], true, 'the refusal must not stop the old Start owner');
+
+  events.length = 0;
+  await load('pinokio/stop.js', app).run[0].method({}, () => {}, kernel);
+  assert.deepEqual(events, ['preflight', 'graceful-stop', 'kernel-stop', 'lock']);
+  assert.equal(kernel.api.running[uri], undefined);
+
+  events.length = 0;
+  const retry = await update();
+  assert.notEqual(retry, first, 'a separate click must build a fresh action array');
+  await dispatch(retry, async () => {});
+  assert.deepEqual(events, ['preflight', 'launcher-pull', 'installer']);
+});
