@@ -1,0 +1,115 @@
+name: Installed Pinokio idle diagnostic (non-release)
+
+on:
+  push:
+    branches:
+      - task/m4-6-installed-idle-diagnostic
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installed-idle:
+    if: github.ref == 'refs/heads/task/m4-6-installed-idle-diagnostic'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DIAG_ROOT: /tmp/astrid-idle-${{ github.run_id }}-${{ github.run_attempt }}
+      DIAG_USER: astrid${{ github.run_id }}${{ github.run_attempt }}
+      DIAG_REF: /tmp/astrid-idle-reference-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout isolated diagnostic candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.19.4
+      - name: Create exclusive disposable account and source copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DIAG_ROOT" =~ ^/tmp/astrid-idle-[0-9]+-[0-9]+$ ]]
+          [[ "$DIAG_USER" =~ ^astrid[0-9]+$ ]]
+          ! getent passwd "$DIAG_USER"
+          test ! -e "$DIAG_ROOT"
+          [[ "$DIAG_REF" =~ ^/tmp/astrid-idle-reference-[0-9]+-[0-9]+$ ]]
+          test ! -e "$DIAG_REF"
+          sudo useradd --user-group --no-create-home --home-dir "$DIAG_ROOT/home" --shell /usr/sbin/nologin "$DIAG_USER"
+          DIAG_UID=$(id -u "$DIAG_USER")
+          test "$DIAG_UID" -gt 1000
+          test ! -e "$RUNNER_TEMP/installed-idle-custody.json"
+          printf '{"user":"%s","root":"%s","uid":%s}\n' "$DIAG_USER" "$DIAG_ROOT" "$DIAG_UID" | sudo tee "$RUNNER_TEMP/installed-idle-custody.json" > /dev/null
+          sudo chmod 600 "$RUNNER_TEMP/installed-idle-custody.json"
+          sudo install -d -m 700 -o "$DIAG_USER" -g "$DIAG_USER" "$DIAG_ROOT" "$DIAG_ROOT/home"
+          sudo install -d -m 755 -o root -g root "$DIAG_REF"
+          sudo cp -a "$GITHUB_WORKSPACE" "$DIAG_REF/repo"
+          sudo chown -R root:root "$DIAG_REF/repo"
+          sudo chmod -R a+rX,go-w "$DIAG_REF/repo"
+          test "$(id -u "$DIAG_USER")" -gt 1000
+          printf 'NODE_DIR=%s\n' "$(dirname "$(command -v node)")" >> "$GITHUB_ENV"
+      - name: Bootstrap pinned engine as disposable user
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u "$DIAG_USER" env -i HOME="$DIAG_ROOT/home" USER="$DIAG_USER" LOGNAME="$DIAG_USER" \
+            PATH="$NODE_DIR:/usr/share/miniconda/condabin:/usr/share/miniconda/bin:/usr/local/bin:/usr/bin:/bin" \
+            SHELL=/bin/bash LANG=C.UTF-8 bash "$DIAG_REF/repo/tests/installed-idle-bootstrap.sh" \
+            > "$RUNNER_TEMP/installed-idle-bootstrap-private.log" 2>&1
+      - name: Freeze pinned engine sources outside disposable home
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo python3 -I "$DIAG_REF/repo/tests/installed-idle-cleanup.py" --census "$(id -u "$DIAG_USER")"
+          for name in pinokiod pterm; do
+            test -d "$DIAG_ROOT/home/$name"
+            test ! -L "$DIAG_ROOT/home/$name"
+          done
+          sudo install -d -m 755 -o root -g root "$DIAG_REF/engines"
+          sudo mv "$DIAG_ROOT/home/pinokiod" "$DIAG_ROOT/home/pterm" "$DIAG_REF/engines/"
+          sudo chown -R root:root "$DIAG_REF/engines"
+          sudo chmod -R a+rX,go-w "$DIAG_REF/engines"
+          test -f "$DIAG_REF/engines/pinokiod/script/pinokio.json"
+          test ! -L "$DIAG_REF/engines/pinokiod/script/pinokio.json"
+          sudo chown "$DIAG_USER:$DIAG_USER" "$DIAG_REF/engines/pinokiod/script/pinokio.json"
+          sudo chmod 600 "$DIAG_REF/engines/pinokiod/script/pinokio.json"
+      - name: Run genuine install, Start and idle Stop
+        timeout-minutes: 33
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 32m sudo -u "$DIAG_USER" env -i \
+            HOME="$DIAG_ROOT/home" USER="$DIAG_USER" LOGNAME="$DIAG_USER" \
+            PATH="$NODE_DIR:/usr/share/miniconda/condabin:/usr/share/miniconda/bin:/usr/local/bin:/usr/bin:/bin" \
+            SHELL=/bin/bash LANG=C.UTF-8 PINOKIO_HOME="$DIAG_ROOT/home/pinokio" \
+            ASTRID_APP_REF=ad43f06092e1cb7c4155bbb1a9138c847dd4b7ed \
+            DIAG_ROOT="$DIAG_ROOT" DIAG_SOURCE="$DIAG_REF/repo" \
+            node "$DIAG_REF/repo/tests/installed-idle-collector.mjs"
+      - name: Tear down only the disposable UID and inspect listeners
+        if: always()
+        shell: bash
+        run: |
+          sudo python3 tests/installed-idle-cleanup.py "$DIAG_USER" "$DIAG_ROOT" "$RUNNER_TEMP/installed-idle-custody.json" "$RUNNER_TEMP/installed-idle-collector.json" "$RUNNER_TEMP/installed-idle-cleanup.json"
+      - name: Produce allowlisted evidence
+        id: evidence
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          node tests/installed-idle-finalize.mjs "$RUNNER_TEMP/installed-idle-collector.json" "$RUNNER_TEMP/installed-idle-cleanup.json" "$RUNNER_TEMP/installed-idle-evidence.json"
+      - name: Upload sanitized evidence only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installed-idle-diagnostic-evidence
+          path: ${{ runner.temp }}/installed-idle-evidence.json
+          if-no-files-found: error
+      - name: Fail unless every qualification observation passed
+        if: always()
+        shell: bash
+        run: |
+          test '${{ steps.evidence.outcome }}' = success
