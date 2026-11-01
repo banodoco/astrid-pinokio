@@ -1,0 +1,57 @@
+name: R-25 OS observation adapter checks
+
+on:
+  push:
+    branches: [lane/M-PIN/R-25-R2]
+
+permissions:
+  contents: read
+
+jobs:
+  macos-adapter:
+    name: macOS observer build boundary and parser
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Compile only into bounded diagnostic
+        shell: bash
+        run: |
+          set -u
+          scratch="$RUNNER_TEMP/r25-macos-observer"
+          mkdir -p "$scratch"
+          sdk="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+          framework=false
+          compiled=false
+          digest=
+          if [ -n "$sdk" ] && [ -d "$sdk/System/Library/Frameworks/EndpointSecurity.framework" ]; then
+            framework=true
+            if /usr/bin/clang -isysroot "$sdk" -O2 -Wall -Wextra -fblocks .github/venue/adapters/macos-observer.c -framework EndpointSecurity -lbsm -o "$scratch/macos-observer" >"$scratch/build.log" 2>&1; then
+              compiled=true
+              digest="$(shasum -a 256 "$scratch/macos-observer" | awk '{print $1}')"
+            fi
+          fi
+          node -e "process.stdout.write(JSON.stringify({status:'unknown',authority:'none',sdk_available:process.argv[1] === 'true',framework_present:process.argv[2] === 'true',adapter_compiled:process.argv[3] === 'true',binary_sha256:process.argv[4] || null}) + '\\n')" "$([ -n "$sdk" ] && printf true || printf false)" "$framework" "$compiled" "$digest"
+          rm -f "$scratch/build.log" "$scratch/macos-observer"
+      - name: Run focused parser test
+        run: node --test tests/macos-observer.test.mjs
+
+  windows-adapter:
+    name: Windows ETW build boundary and parser
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Compile and run bounded adapter capability test
+        shell: pwsh
+        run: node --test tests/windows-observer-adapter.test.mjs
