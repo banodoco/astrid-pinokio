@@ -45,14 +45,16 @@ test('dispatches the exact Reset request and retains ordered bounded source fact
   assert.ok(!result.issues.includes('idle-not-observed'));
   assert.equal(result.records.find(r => r.kind === 'engine-request').request_utf8, JSON.stringify(result.sent[0]));
   assert.deepEqual(result.records.filter(r => r.packet).map(r => r.packet.type), packets.map(p => p.type));
-  assert.equal(result.records.filter(r => r.kind === 'engine-terminal').length, 1);
+  assert.equal(result.records.filter(r => r.kind === 'engine-terminal').length, 0);
+  assert.equal(result.records.filter(r => r.kind === 'engine-event' && r.packet?.data === 'stop').length, 1);
   assert.equal(result.records.find(r => r.kind === 'idle-observation').running, false);
   assert.equal(result.records.find(r => r.kind === 'process-before').process.pid, process.pid);
   assert.equal(result.records.find(r => r.kind === 'process-after').process.pid, process.pid);
   for (const [i, payload] of result.payloads.entries()) {
     assert.equal(payload.sequence, i + 1);
     assert.equal(payload.sha256, createHash('sha256').update(payload.bytes).digest('hex'));
-    assert.equal(JSON.parse(payload.bytes).source_sequence, i + 1);
+    assert.equal(JSON.parse(payload.bytes).capture_sequence, i + 1);
+    assert.equal(Object.hasOwn(JSON.parse(payload.bytes), 'source_sequence'), false);
     assert.ok(!payload.bytes.toString().includes('never-retain'));
   }
 });

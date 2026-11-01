@@ -97,7 +97,7 @@ export async function observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, t
         if (terminalCount && packet.type !== 'disconnect') issues.add('event-after-terminal');
         if (packet.type === 'event' && packet.data === 'stop') terminalCount++;
         if (packet.type === 'error') issues.add('engine-error-event');
-        record(packet.type === 'event' && packet.data === 'stop' ? 'engine-terminal' : 'engine-event',
+        record('engine-event',
           { source: 'pinokiod-websocket', packet: selected, projection: 'r20-reset-allowlist', frame_sha256: sha256(bytes) });
         if (packet.type === 'disconnect') { disconnectCount++; sawDisconnect = true; finishAction(); }
       } catch { issues.add('invalid-or-overlimit-action-frame'); finishAction(); }
@@ -148,7 +148,9 @@ export async function observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, t
   // diagnostic payload bytes, not schema-valid qualification evidence.
   const payloads = records.map((item, index) => {
     const sequence = index + 1;
-    const bytes = Buffer.from(JSON.stringify({ ...item, source_sequence: sequence }) + '\n');
+    // This number orders local captures only. The socket supplies no source
+    // sequence and therefore cannot prove that events were not lost.
+    const bytes = Buffer.from(JSON.stringify({ ...item, capture_sequence: sequence }) + '\n');
     return { id: `obs-${String(sequence).padStart(6, '0')}`, kind: item.kind,
       sequence, file: `settlement/${String(sequence).padStart(6, '0')}.json`, sha256: sha256(bytes), bytes };
   });
