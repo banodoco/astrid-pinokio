@@ -1079,3 +1079,76 @@ test('uninstall rechecks captured roots and current selection and preserves unre
     assert.equal(fs.readFileSync(unrelated, 'utf8'), 'keep');
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
+
+test('isolated update preparation preserves the checkout and reports build and race failures', async (t) => {
+  const { execFileSync } = await import('node:child_process');
+  const { prepareCandidate } = await import('../pinokio/update-stage.mjs');
+  const parent = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'pinokio-stage-test-'));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const remote = path.join(parent, 'remote.git');
+  const seed = path.join(parent, 'seed');
+  const editor = path.join(parent, 'editor');
+  const stage = path.join(parent, 'stage');
+  fs.mkdirSync(stage);
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git(parent, 'init', '--bare', '--initial-branch=main', remote);
+  git(parent, 'init', '--initial-branch=main', seed);
+  git(seed, 'config', 'user.name', 'Fixture');
+  git(seed, 'config', 'user.email', 'fixture@example.invalid');
+  fs.mkdirSync(path.join(seed, 'public'));
+  fs.writeFileSync(path.join(seed, 'public/install-manifest.json'), '{"release":1}');
+  git(seed, 'add', '.'); git(seed, 'commit', '-m', 'old');
+  git(seed, 'remote', 'add', 'origin', remote); git(seed, 'push', '-u', 'origin', 'main');
+  git(parent, 'clone', remote, editor);
+  const original = git(editor, 'rev-parse', 'HEAD');
+  const remoteTracking = git(editor, 'rev-parse', 'origin/main');
+  fs.writeFileSync(path.join(seed, 'public/install-manifest.json'), '{"release":2}');
+  git(seed, 'add', '.'); git(seed, 'commit', '-m', 'new'); git(seed, 'push', 'origin', 'main');
+  const target = git(seed, 'rev-parse', 'HEAD');
+  const selection = path.join(parent, 'current');
+  const data = path.join(parent, 'project');
+  fs.writeFileSync(selection, 'old-runtime\n'); fs.writeFileSync(data, Buffer.from([0, 1, 2, 255]));
+  const installed = { node: 'fixture-node', npx: 'npx', npm: 'npm', env: {} };
+  const run = async (command, args, options) => {
+    if (command === 'git') return { stdout: git(options.cwd, ...args) };
+    if (args.includes('build')) throw new Error('controlled build failure');
+    return { stdout: '' };
+  };
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, installed, run }), /controlled build failure/);
+  assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
+  assert.equal(git(editor, 'rev-parse', 'origin/main'), remoteTracking);
+  assert.equal(fs.readFileSync(selection, 'utf8'), 'old-runtime\n');
+  assert.deepEqual(fs.readFileSync(data), Buffer.from([0, 1, 2, 255]));
+  assert.deepEqual(fs.readdirSync(stage), []);
+  const successRun = async (command, args, options) => {
+    if (command === 'git') return { stdout: git(options.cwd, ...args) };
+    if (args.includes('build')) {
+      fs.mkdirSync(path.join(options.cwd, 'dist'));
+      fs.writeFileSync(path.join(options.cwd, 'dist/build.json'), JSON.stringify({ app: target, release: 2 }));
+    }
+    return { stdout: '' };
+  };
+  const prepared = await prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, installed, run: successRun });
+  assert.equal(prepared.targetSha, target);
+  assert.equal(prepared.oldSha, original);
+  assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
+  fs.rmSync(prepared.parent, { recursive: true, force: true });
+  const mismatchRun = async (command, args, options) => {
+    const result = await successRun(command, args, options);
+    if (command !== 'git' && args.includes('build')) {
+      fs.writeFileSync(path.join(options.cwd, 'dist/build.json'), JSON.stringify({ app: target, release: 999 }));
+    }
+    return result;
+  };
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, installed, run: mismatchRun }), /build identity/);
+  assert.deepEqual(fs.readdirSync(stage), []);
+  const raceRun = async (command, args, options) => {
+    const result = await successRun(command, args, options);
+    if (command !== 'git' && args.includes('build')) fs.writeFileSync(path.join(editor, 'user-change'), 'keep');
+    return result;
+  };
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, installed, run: raceRun }), /changed during staging/);
+  assert.equal(fs.readFileSync(path.join(editor, 'user-change'), 'utf8'), 'keep');
+  assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
+  assert.deepEqual(fs.readdirSync(stage), []);
+});
