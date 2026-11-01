@@ -44,7 +44,7 @@ function runStreamed(spawnChild, command, args, { onOutput, timeout, maxBuffer, 
 // The factory keeps platform command generation testable without executing a
 // shell, querying the real ports, or writing into a real installation.
 function createApp({ platform = process.platform, appDirectory = path.resolve(__dirname, '..'),
-  environment = process.env, filesystem = fs, probe = probeDoor, lifecycle, execute, spawnProcess = spawn, getTemp } = {}) {
+  environment = process.env, filesystem = fs, probe = probeDoor, lifecycle, execute, spawnProcess = spawn, getTemp, localUpdateOperations = {} } = {}) {
   const isWindows = platform === 'win32';
   const paths = isWindows ? path.win32 : path.posix;
   const APP_DIR = appDirectory;
@@ -302,7 +302,7 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     try {
       const session = await import('./session.mjs');
       const installed = session.installation(BACKEND_ROOT, { platform, filesystem, environment, appDirectory: APP_DIR });
-      return await session.localSessionReady({ root: BACKEND_ROOT, editor: EDITOR_DIR, platform, installed });
+      return await session.localSessionReady({ root: BACKEND_ROOT, editor: EDITOR_DIR, platform, installed, requireDoor: false });
     } catch { return false; }
   }
   async function backendSessionReady(doorHealth) {
@@ -446,6 +446,50 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
       throw error;
     }
   }
+  async function updateLocal(req, ondata, kernel) {
+    const stage = await import('./update-stage.mjs');
+    const session = await import('./session.mjs');
+    const installed = localUpdateOperations.installation
+      ? await localUpdateOperations.installation()
+      : session.installation(BACKEND_ROOT, { platform, filesystem, environment, appDirectory: APP_DIR, getTemp });
+    const active = Boolean(kernel.api.running?.[paths.join(APP_DIR, 'pinokio', 'start.js')]) || hasOwnedSupervisor();
+    // Fully-local sessions may deliberately have the hosted Door disabled.
+    const ready = localUpdateOperations.ready || (() => session.localSessionReady({
+      root: BACKEND_ROOT, editor: EDITOR_DIR, platform, installed, requireDoor: false }));
+    if (active && !await ready()) throw new Error('The current editor session is not ready; wait for it or stop it before Update.');
+    const env = environmentPolicy.buildEnvironment({ appDirectory: APP_DIR, platform, environment, getTemp });
+    const { execFile } = require('node:child_process');
+    const { promisify } = require('node:util');
+    const run = localUpdateOperations.run || ((cmd, args, options) => promisify(execFile)(cmd, args,
+      { ...options, env: environment, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, windowsHide: true }));
+    const prepared = await (localUpdateOperations.prepare || stage.prepareCandidate)({ editor: EDITOR_DIR,
+      ref: appRef() || 'main', remote: EDITOR_REPOSITORY, stagingRoot: PROGRAMS_DIR, root: BACKEND_ROOT,
+      installed, running: active, run, ...(localUpdateOperations.build ? { build: localUpdateOperations.build } : {}) });
+    let promoting = false;
+    let promoted = false;
+    try {
+      if (JSON.stringify(await prepared.snapshot()) !== JSON.stringify(prepared.old)) throw new Error('Editor checkout changed during staging; preserving it.');
+      await stopOwnedStart(req, ondata, kernel);
+      if (JSON.stringify(await prepared.snapshot()) !== JSON.stringify(prepared.old)) throw new Error('Editor checkout changed before promotion; preserving it.');
+      promoting = true;
+      await (localUpdateOperations.promote || stage.promoteCandidate)({ editor: EDITOR_DIR, prepared, run });
+      promoted = true;
+      const installer = bootstrapScript('update', paths.join(EDITOR_DIR, 'public', 'install-manifest.json'));
+      const args = isWindows ? ['-NoProfile', '-NonInteractive', '-Command', installer] : ['-c', installer];
+      const result = await (localUpdateOperations.installer || runUpdateChild)(shellName, args, {
+        cwd: APP_DIR, env, timeout: 1_200_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
+        onOutput: (raw) => ondata?.({ raw }),
+      });
+      if (result.error || result.status !== 0) throw new Error((result.stderr || result.stdout || result.error?.message || `exit ${result.status}`).trim());
+      ondata?.({ raw: 'Editor and Runtime update completed. Starting Astrid.\r\n' });
+    } catch (error) {
+      if (promoting) throw new Error(`${promoted ? 'Editor promoted, but the installer update failed' : 'Editor promotion failed'}; Astrid is stopped. ${error.message}${promoted ? ' Choose Update to recover or retry before starting.' : ` Inspect retained candidate at ${prepared.parent}.`}`, { cause: error });
+      throw error;
+    } finally {
+      if (!promoting || promoted) await prepared.cleanup();
+    }
+    return { updated: true };
+  }
   async function ensureDoorPortFree(_req, ondata) {
     const result = await probe();
     if (result.kind === 'free') return { free: true };
@@ -460,7 +504,7 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     shellStep, gitShellStep, launcherPullMessage, customStep, ensureProgramDirectory, readInstallMode, saveModeStep, removeProgramFiles,
     validateExistingEditorCheckout, cloneEditorMessage, pullEditorMessage, sessionMessage, sessionStep,
     pendingUpdateTransaction, hasPendingUpdate, recoverPendingUpdate, assertSafeRemoval, stopForRemoval, stopForUninstall, finishUninstall,
-    stopHook, stopOwnedStart, preflightStop, hasOwnedSupervisor, localSessionReady, backendSessionReady, ensureDoorPortFree, probeDoor: probe, modeOpenTarget, localSetOpenTarget,
+    stopHook, stopOwnedStart, updateLocal, preflightStop, hasOwnedSupervisor, localSessionReady, backendSessionReady, ensureDoorPortFree, probeDoor: probe, modeOpenTarget, localSetOpenTarget,
     runScript: (root, args) => (isWindows ? windows : posix).run(root, args),
     ...CONSTANTS };
 }

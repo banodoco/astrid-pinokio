@@ -9,12 +9,8 @@ module.exports = async () => {
   if (mode === 'local') {
     if (!app.validateExistingEditorCheckout()) throw new Error("Astrid's editor files are missing. Choose Reset, then install again.");
     return { run: [
-      app.customStep(app.stopOwnedStart),
-      app.gitShellStep(app.launcherPullMessage()),
-      app.customStep(app.ensureDoorPortFree),
-      app.gitShellStep(app.pullEditorMessage()),
-      app.shellStep(app.bootstrapScript('update', app.paths.join(app.EDITOR_DIR, 'public', 'install-manifest.json'))),
-      app.sessionStep('build', 'local'),
+      app.customStep(app.updateLocal),
+      { method: 'script.start', params: { uri: 'start.js' } },
     ] };
   }
   // Backend C2 stages its candidate before invoking the final C1 stop fence.

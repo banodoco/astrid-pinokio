@@ -51,8 +51,7 @@ for (const platform of ['darwin', 'linux', 'win32']) {
         const map = {
           install: [expected.install], 'install-local': fullLocal,
           'add-local': [expected.pull, expected.localUpdate, expected.build],
-          update: [app.shellStep(app.launcherPullMessage()).params.message,
-            ...(mode === 'local' ? [expected.pull, expected.localUpdate, expected.build] : [expected.install])],
+          update: mode === 'local' ? [] : [app.shellStep(app.launcherPullMessage()).params.message, expected.install],
           start: [expected[mode]], stop: [], reset: [], uninstall: [expected.uninstall],
           'uninstall-delete-data': [expected.delete],
         };
@@ -208,6 +207,8 @@ test('fully-local menu Open requires matching selected, Door and editor identiti
   const request = async (url) => url.includes('runtime-config')
     ? { ok: true, json: async () => ({ schemaVersion: 1, runtimeInstanceId: 'instance', realmId: 'realm' }) }
     : { ok: true };
+  assert.equal(await localSessionReady({ root: '/runtime', editor: '/editor', installed, run, request, requireDoor: false,
+    probeDoor: async () => ({ kind: 'free' }) }), true, 'Update accepts a healthy local preview with its hosted Door disabled');
   for (const response of ['matching', 'origin_required', 'runtime_identity_mismatch', 'runtime_unavailable']) {
     const door = response === 'matching'
       ? { kind: 'astrid', health: { status: 'ok', protocol: 'workspace.v1', identity, runtime_instance_id: 'instance' } }
@@ -229,26 +230,16 @@ test('Update keeps the local route and uses the shared transaction for hosted mo
   for (const platform of ['darwin', 'linux', 'win32']) for (const mode of ['backend', 'local']) {
     const app = fakeApp(platform, 'feat/pinokio', mode);
     const script = await load('pinokio/update.js', app)({}, {});
-    assert.equal(script.run[0].method, mode === 'local' ? app.stopOwnedStart : app.preflightStop);
-    const pull = script.run[1];
-    assert.equal(pull.method, 'shell.run');
-    assert.equal(pull.params.path, app.APP_DIR);
-    const pullMessage = shellMessage(pull, platform);
-    assert.match(pullMessage, /pull --ff-only/);
-    assert.match(pullMessage, /update the Pinokio launcher\./);
-    assert.match(pullMessage, /undo those edits, then choose Update again\./);
-    assert.ok(pull.params.on.some((event) => event.event === '/ASTRID_PINOKIO_FAILURE/' && event.break));
-    const astridUpdate = script.run.length - 1;
-    assert.equal(script.run[astridUpdate].method, 'shell.run');
-    assert.ok(astridUpdate > 1, `Astrid update follows the launcher pull (${platform}, ${mode})`);
-    assert.ok(shellMessage(script.run[mode === 'local' ? astridUpdate - 1 : astridUpdate], platform).includes('--root'));
     if (mode === 'local') {
-      assert.match(shellMessage(script.run[astridUpdate - 1], platform), /--update(?:\s|')/);
-      assert.match(shellMessage(script.run[astridUpdate - 1], platform), /install-manifest\.json/);
-      assert.match(shellMessage(script.run[astridUpdate], platform), /session\.mjs/);
-    } else assert.doesNotMatch(shellMessage(script.run[astridUpdate], platform), /--update-app|--update(?:\s|')/);
+      assert.equal(script.run[0].method, app.updateLocal);
+      assert.equal(script.run[1].method, 'script.start');
+      assert.equal(script.run[1].params.uri, 'start.js');
+    } else {
+      assert.equal(script.run[0].method, app.preflightStop);
+      assert.match(shellMessage(script.run[1], platform), /pull --ff-only/);
+      assert.ok(shellMessage(script.run[2], platform).includes('--root'));
+    }
   }
-  assert.equal(library.LAUNCHER_PULL_FAILURE, "Couldn't update the Pinokio launcher. If you edited its files, undo those edits, then choose Update again.");
 });
 
 test('hosted Update refuses at read-only preflight before the launcher pull', async () => {
@@ -412,30 +403,13 @@ test('C1 report joins an in-flight down refusal before draining the session', as
   assert.equal(h.active.size, 0);
 });
 
-test('local Update stops the owned session before editor pull and installer mutation', async () => {
-  const base = fakeApp('linux', '', 'local');
-  const app = library.createApp({ platform: 'linux', appDirectory: base.APP_DIR, environment: {},
-    filesystem: { readFileSync: (file) => { if (file.endsWith('install-mode.json')) return JSON.stringify({ schema_version: 1, mode: 'local' }); throw Object.assign(new Error('absent'), { code: 'ENOENT' }); }, existsSync: () => true },
-    lifecycle: { preflightStop: async () => { throw new Error('Astrid is busy (1 tasks running). Try again when they finish.'); } } });
-  app.validateExistingEditorCheckout = () => true;
-  const script = await load('pinokio/update.js', app)({}, {});
-  const executed = [];
-  await assert.rejects(async () => {
-    for (const step of script.run) {
-      if (typeof step.method === 'function') await step.method({}, () => {}, { api: { running: {} } });
-      else executed.push(step);
-    }
-  }, /Astrid is busy \(1 tasks running\)/);
-  assert.deepEqual(executed, []);
-  assert.equal(script.run[0].method, app.stopOwnedStart);
-});
 
 test('Stop and every maintenance caller preserve busy and unknown failures before mutation', async () => {
   for (const platform of ['darwin', 'linux', 'win32']) for (const mode of ['backend', 'local'])
     for (const stage of ['preflight', 'controller']) for (const reason of ['busy', 'transport', 'timeout', 'generic']) {
     for (const name of ['stop', 'update', 'install-local', 'reset', 'uninstall', 'uninstall-delete-data', ...(mode === 'backend' ? ['add-local'] : [])]) {
       // The final fence for both Update choices is inside the shared Python transaction.
-      if (name === 'update' && stage === 'controller') continue;
+      if (name === 'update' && (stage === 'controller' || mode === 'local')) continue;
       const base = fakeApp(platform, '', mode);
       const calls = [];
       const message = reason === 'busy' ? 'Astrid is busy (1 tasks running). Try again when they finish.\ntask-caller [render; running; age 4s]'
@@ -1078,4 +1052,235 @@ test('uninstall rechecks captured roots and current selection and preserves unre
     assert.throws(() => app.finishUninstall(roots), /unrecognized files/);
     assert.equal(fs.readFileSync(unrelated, 'utf8'), 'keep');
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test('isolated update preparation preserves the checkout and reports build and race failures', async (t) => {
+  const { execFileSync } = await import('node:child_process');
+  const { prepareCandidate } = await import('../pinokio/update-stage.mjs');
+  const parent = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'pinokio-stage-test-'));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const remote = path.join(parent, 'remote.git');
+  const seed = path.join(parent, 'seed');
+  const editor = path.join(parent, 'editor');
+  const stage = path.join(parent, 'stage');
+  fs.mkdirSync(stage);
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git(parent, 'init', '--bare', '--initial-branch=main', remote);
+  git(parent, 'init', '--initial-branch=main', seed);
+  git(seed, 'config', 'user.name', 'Fixture');
+  git(seed, 'config', 'user.email', 'fixture@example.invalid');
+  fs.mkdirSync(path.join(seed, 'public'));
+  fs.writeFileSync(path.join(seed, 'public/install-manifest.json'), '{"release":1}');
+  fs.writeFileSync(path.join(seed, '.gitignore'), 'dist/\nnode_modules/\n');
+  git(seed, 'add', '.'); git(seed, 'commit', '-m', 'old');
+  git(seed, 'remote', 'add', 'origin', remote); git(seed, 'push', '-u', 'origin', 'main');
+  git(parent, 'clone', remote, editor);
+  const original = git(editor, 'rev-parse', 'HEAD');
+  const remoteTracking = git(editor, 'rev-parse', 'origin/main');
+  fs.mkdirSync(path.join(editor, 'dist'));
+  fs.mkdirSync(path.join(editor, 'node_modules'));
+  fs.writeFileSync(path.join(editor, 'dist', 'old-build'), 'old build bytes');
+  fs.writeFileSync(path.join(editor, 'node_modules', 'old-dependency'), 'old dependency bytes');
+  const assertOriginal = () => {
+    assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
+    assert.equal(git(editor, 'branch', '--show-current'), 'main');
+    assert.equal(git(editor, 'rev-parse', 'origin/main'), remoteTracking);
+    assert.equal(fs.readFileSync(path.join(editor, 'dist', 'old-build'), 'utf8'), 'old build bytes');
+    assert.equal(fs.readFileSync(path.join(editor, 'node_modules', 'old-dependency'), 'utf8'), 'old dependency bytes');
+  };
+  fs.writeFileSync(path.join(seed, 'public/install-manifest.json'), '{"release":2}');
+  git(seed, 'add', '.'); git(seed, 'commit', '-m', 'new'); git(seed, 'push', 'origin', 'main');
+  const target = git(seed, 'rev-parse', 'HEAD');
+  const selection = path.join(parent, 'current');
+  const data = path.join(parent, 'project');
+  fs.writeFileSync(selection, 'old-runtime\n'); fs.writeFileSync(data, Buffer.from([0, 1, 2, 255]));
+  const installed = { node: 'fixture-node', npx: 'npx', npm: 'npm', env: {} };
+  const run = async (command, args, options) => {
+    if (command === 'git') return { stdout: git(options.cwd, ...args) };
+    assert.fail(`unexpected command: ${command}`);
+  };
+  const root = path.join(parent, 'runtime');
+  const failureBuild = async (options) => {
+    assert.equal(options.action, 'build');
+    assert.equal(options.mode, 'local');
+    assert.equal(options.root, root);
+    assert.notEqual(options.editor, editor);
+    assert.equal(options.installed.env.VITE_APP_BUILD, target);
+    assert.equal(options.installed.env.RAILWAY_GIT_COMMIT_SHA, target);
+    throw new Error('controlled build failure');
+  };
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: failureBuild }), /controlled build failure/);
+  assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
+  assertOriginal();
+  assert.equal(fs.readFileSync(selection, 'utf8'), 'old-runtime\n');
+  assert.deepEqual(fs.readFileSync(data), Buffer.from([0, 1, 2, 255]));
+  assert.deepEqual(fs.readdirSync(stage), []);
+  const successBuild = async (options) => {
+    assert.equal(options.installed.env.VITE_APP_BUILD, target);
+    fs.mkdirSync(path.join(options.editor, 'dist'));
+    fs.writeFileSync(path.join(options.editor, 'dist/build.json'), JSON.stringify({ app: target, release: 2 }));
+  };
+  const moduleUrl = new URL('../pinokio/update-stage.mjs', import.meta.url).href;
+  const interrupted = `import { prepareCandidate } from ${JSON.stringify(moduleUrl)};
+    await prepareCandidate({ editor: process.env.FIXTURE_EDITOR, ref: 'main', remote: process.env.FIXTURE_REMOTE,
+      stagingRoot: process.env.FIXTURE_STAGE, root: process.env.FIXTURE_ROOT, installed: { env: {} },
+      build: async () => process.exit(42) });`;
+  assert.throws(() => execFileSync(process.execPath, ['--input-type=module', '-e', interrupted], {
+    env: { ...process.env, FIXTURE_EDITOR: editor, FIXTURE_REMOTE: remote, FIXTURE_STAGE: stage, FIXTURE_ROOT: root },
+    stdio: 'pipe',
+  }), (error) => error.status === 42);
+  const interruptedLock = path.join(stage, 'astrid-update.lock');
+  const evidence = fs.readFileSync(path.join(interruptedLock, 'journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(evidence.map((entry) => entry.phase), ['acquired', 'snapshot', 'staging', 'building']);
+  assert.equal(evidence[1].sha, original);
+  assert.equal(evidence[3].target, target);
+  assertOriginal();
+  assert.equal(fs.readFileSync(selection, 'utf8'), 'old-runtime\n');
+  assert.deepEqual(fs.readFileSync(data), Buffer.from([0, 1, 2, 255]));
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: successBuild }), /needs inspection/);
+  fs.rmSync(evidence[2].parent, { recursive: true });
+  fs.rmSync(interruptedLock, { recursive: true });
+  const prepared = await prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: successBuild });
+  const preparedEvidence = fs.readFileSync(path.join(stage, 'astrid-update.lock', 'journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(preparedEvidence.at(-1).phase, 'prepared');
+  assert.equal(preparedEvidence.at(-1).target, target);
+  assert.equal(prepared.targetSha, target);
+  assert.equal(prepared.oldSha, original);
+  assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: successBuild }), /already in progress/);
+  await Promise.all([prepared.cleanup(), prepared.cleanup()]);
+  await prepared.cleanup();
+  assert.deepEqual(fs.readdirSync(stage), []);
+  const staleLock = path.join(stage, 'astrid-update.lock');
+  fs.mkdirSync(staleLock);
+  fs.writeFileSync(path.join(staleLock, 'owner-evidence'), 'preserve');
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: successBuild }), /needs inspection/);
+  assert.equal(fs.readFileSync(path.join(staleLock, 'owner-evidence'), 'utf8'), 'preserve');
+  fs.rmSync(staleLock, { recursive: true });
+  const mismatchBuild = async (options) => {
+    await successBuild(options);
+    fs.writeFileSync(path.join(options.editor, 'dist/build.json'), JSON.stringify({ app: target, release: 999 }));
+  };
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: mismatchBuild }), /build identity/);
+  assert.deepEqual(fs.readdirSync(stage), []);
+  const tamperedBuild = async (options) => {
+    await successBuild(options);
+    fs.writeFileSync(path.join(options.editor, 'public/install-manifest.json'), '{"release":3}');
+  };
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: tamperedBuild }), /Candidate checkout changed/);
+  assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
+  assert.equal(fs.readFileSync(selection, 'utf8'), 'old-runtime\n');
+  assert.deepEqual(fs.readFileSync(data), Buffer.from([0, 1, 2, 255]));
+  assert.deepEqual(fs.readdirSync(stage), []);
+  const failureRaceBuild = async () => {
+    fs.writeFileSync(path.join(editor, 'failure-race'), 'keep');
+    throw new Error('controlled failure with checkout race');
+  };
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: failureRaceBuild }),
+    /Editor checkout changed during staging.*controlled failure with checkout race/);
+  assert.equal(fs.readFileSync(path.join(editor, 'failure-race'), 'utf8'), 'keep');
+  const raceLock = path.join(stage, 'astrid-update.lock');
+  const raceEvidence = fs.readFileSync(path.join(raceLock, 'journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(raceEvidence.at(-1).phase, 'checkout-uncertain');
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: successBuild }), /needs inspection/);
+  fs.rmSync(raceEvidence.find((entry) => entry.phase === 'staging').parent, { recursive: true });
+  fs.rmSync(raceLock, { recursive: true });
+  fs.rmSync(path.join(editor, 'failure-race'));
+  const raceBuild = async (options) => {
+    await successBuild(options);
+    fs.writeFileSync(path.join(editor, 'user-change'), 'keep');
+  };
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: raceBuild }), /changed during staging/);
+  assert.equal(fs.readFileSync(path.join(editor, 'user-change'), 'utf8'), 'keep');
+  assertOriginal();
+  assert.ok(fs.existsSync(path.join(stage, 'astrid-update.lock', 'journal.jsonl')));
+});
+
+test('fully-local Update route stages failure, promotes success, and reports installer failure', async (t) => {
+  const { execFileSync } = await import('node:child_process');
+  const { buildWithSession } = await import('../pinokio/update-stage.mjs');
+  for (const outcome of ['build failure', 'success', 'installer failure']) {
+    const parent = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'pinokio-route-'));
+    t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+    const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const remote = path.join(parent, 'remote.git');
+    const seed = path.join(parent, 'seed');
+    const appDirectory = path.join(parent, 'home', 'api', 'astrid');
+    const programs = path.join(appDirectory, 'app');
+    const editor = path.join(programs, 'editor');
+    const runtime = path.join(programs, 'astrid');
+    const data = path.join(parent, 'data');
+    fs.mkdirSync(programs, { recursive: true }); fs.mkdirSync(runtime); fs.mkdirSync(data);
+    git(parent, 'init', '--bare', '--initial-branch=main', remote);
+    git(parent, 'clone', remote, seed);
+    git(seed, 'config', 'user.name', 'Fixture'); git(seed, 'config', 'user.email', 'fixture@example.invalid');
+    fs.mkdirSync(path.join(seed, 'public'));
+    fs.writeFileSync(path.join(seed, '.gitignore'), 'dist/\nnode_modules/\n');
+    fs.writeFileSync(path.join(seed, 'public/install-manifest.json'), '{"release":1}');
+    fs.mkdirSync(path.join(seed, 'scripts'));
+    fs.writeFileSync(path.join(seed, 'scripts', 'dev-local-workspace.mjs'), `import fs from 'node:fs';
+      if (process.env.FIXTURE_BUILD_FAIL === '1') { console.error('controlled build failure'); process.exit(7); }
+      fs.mkdirSync('dist'); fs.writeFileSync('dist/build.json', JSON.stringify({ app: process.env.VITE_APP_BUILD, release: 2 }));`);
+    const npx = path.join(parent, 'fixture-npx.cjs');
+    fs.writeFileSync(npx, "require('node:fs').mkdirSync('node_modules'); require('node:fs').writeFileSync('node_modules/new', 'candidate dependencies');");
+    git(seed, 'add', '.'); git(seed, 'commit', '-m', 'old'); git(seed, 'push', 'origin', 'main');
+    git(programs, 'clone', remote, editor);
+    const old = git(editor, 'rev-parse', 'HEAD');
+    fs.mkdirSync(path.join(editor, 'dist')); fs.mkdirSync(path.join(editor, 'node_modules'));
+    fs.writeFileSync(path.join(editor, 'dist', 'old'), 'ignored build');
+    fs.writeFileSync(path.join(editor, 'node_modules', 'old'), 'ignored dependency');
+    fs.writeFileSync(path.join(runtime, 'current'), 'selected-runtime\n');
+    fs.writeFileSync(path.join(data, 'project'), Buffer.from([0, 1, 2, 255]));
+    fs.writeFileSync(path.join(programs, 'install-mode.json'), '{"schema_version":1,"mode":"local"}');
+    fs.writeFileSync(path.join(seed, 'public/install-manifest.json'), '{"release":2}');
+    git(seed, 'add', '.'); git(seed, 'commit', '-m', 'new'); git(seed, 'push', 'origin', 'main');
+    const target = git(seed, 'rev-parse', 'HEAD');
+    const events = [];
+    let ready = true;
+    const app = library.createApp({ platform: 'linux', appDirectory, environment: process.env,
+      lifecycle: { preflightStop: async () => { events.push('preflight'); },
+        requestGracefulStop: async () => { events.push('stop'); ready = false; }, waitForInstallerLock: async () => {} },
+      localUpdateOperations: {
+        installation: async () => ({ node: process.execPath, npx, env: { ...process.env, FIXTURE_BUILD_FAIL: outcome === 'build failure' ? '1' : '0' } }), ready: async () => ready,
+        run: async (cmd, args, options) => {
+          assert.equal(cmd, 'git');
+          const mapped = args.map((arg) => arg === library.EDITOR_REPOSITORY ? remote : arg);
+          return { stdout: git(options.cwd, ...mapped) };
+        },
+        build: async (options) => {
+          events.push('build'); assert.equal(options.running, true); assert.equal(ready, true);
+          assert.notEqual(options.editor, editor);
+          await buildWithSession(options);
+        },
+        installer: async (_cmd, args) => {
+          events.push('installer'); assert.equal(git(editor, 'rev-parse', 'HEAD'), target);
+          assert.match(args.join(' '), /--update/); assert.match(args.join(' '), /install-manifest\.json/);
+          return { status: outcome === 'installer failure' ? 1 : 0, stderr: outcome === 'installer failure' ? 'controlled installer failure' : '' };
+        },
+      } });
+    app.validateExistingEditorCheckout = () => true;
+    const script = await load('pinokio/update.js', app)();
+    const uri = path.join(appDirectory, 'pinokio', 'start.js');
+    const kernel = { api: { running: { [uri]: true }, stop: async () => events.push('kernel-stop') } };
+    if (outcome === 'build failure') {
+      await assert.rejects(script.run[0].method({}, () => {}, kernel), /controlled build failure/);
+      assert.deepEqual(events, ['build']);
+      assert.equal(ready, true);
+      assert.equal(git(editor, 'rev-parse', 'HEAD'), old);
+      assert.equal(git(editor, 'branch', '--show-current'), 'main');
+      assert.equal(fs.readFileSync(path.join(editor, 'dist', 'old'), 'utf8'), 'ignored build');
+      assert.equal(fs.readFileSync(path.join(editor, 'node_modules', 'old'), 'utf8'), 'ignored dependency');
+    } else {
+      if (outcome === 'installer failure') await assert.rejects(script.run[0].method({}, () => {}, kernel), /Editor promoted, but the installer update failed.*controlled installer failure/);
+      else await script.run[0].method({}, () => {}, kernel);
+      assert.deepEqual(events, ['build', 'preflight', 'stop', 'kernel-stop', 'installer']);
+      assert.equal(git(editor, 'rev-parse', 'HEAD'), target);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(editor, 'dist', 'build.json'))).app, target);
+      assert.equal(fs.readFileSync(path.join(editor, 'node_modules', 'new'), 'utf8'), 'candidate dependencies');
+      assert.equal(script.run[1].method, 'script.start');
+    }
+    assert.equal(fs.readFileSync(path.join(runtime, 'current'), 'utf8'), 'selected-runtime\n');
+    assert.deepEqual(fs.readFileSync(path.join(data, 'project')), Buffer.from([0, 1, 2, 255]));
+    assert.deepEqual(fs.readdirSync(programs).filter((file) => file.startsWith('astrid-update')), []);
+  }
 });

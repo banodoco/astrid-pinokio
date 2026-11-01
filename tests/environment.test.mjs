@@ -183,7 +183,7 @@ for (const platform of ['darwin', 'linux', 'win32']) for (const mode of ['backen
       const factory = load(name, app);
       const script = typeof factory === 'function' ? await factory({}, {}) : factory;
       for (const step of [...script.run, ...(script.on?.stop ? [script.on.stop] : [])]) {
-        if (typeof step.method === 'function') await step.method({ input: { confirmation: 'DELETE' } }, () => {}, { api: { running: {}, stop: async () => {} } });
+        if (typeof step.method === 'function' && step.method !== app.updateLocal) await step.method({ input: { confirmation: 'DELETE' } }, () => {}, { api: { running: {}, stop: async () => {} } });
         else if (step.method === 'shell.run') {
           const [helper, appDirectory, message, explicit] = wrapperArguments(step.params.message, f.win);
           const pinokioEnvironment = step.params.env?.ASTRID_PINOKIO_ENVIRONMENT === '1';
