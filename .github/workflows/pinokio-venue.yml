@@ -39,6 +39,8 @@ permissions:
 
 jobs:
   linux-real-action:
+    # R-25 uses the RunPod broker for Linux; lane pushes exercise native hosts only.
+    if: ${{ !startsWith(github.ref, 'refs/heads/lane/M-PIN/R-25') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -87,6 +89,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
+      - name: Test native census adapters
+        run: node --test tests/native-census.test.mjs tests/venue-settlement.test.mjs
       - name: Probe native dependencies and launch
         shell: bash
         run: bash .github/venue/native.sh
