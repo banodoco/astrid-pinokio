@@ -21,10 +21,10 @@ export function installPreflightOutputFault(slot, { timeoutMs = 5000 } = {}) {
   const fault = (spec, options) => {
     if (!active || used) return Promise.reject(new Error('Fault seam is closed.'));
     used = true;
-    if (!path.isAbsolute(spec?.command || '') || !Array.isArray(spec.args) || spec.args.length !== 4 ||
+    if (typeof spec?.command !== 'string' || !path.isAbsolute(spec.command) || !Array.isArray(spec.args) || spec.args.length !== 4 ||
         spec.args[0] !== '-I' || spec.args[1] !== '-c' || typeof spec.args[2] !== 'string' ||
         createHash('sha256').update(spec.args[2]).digest('hex') !== PREFLIGHT_CODE_SHA256 ||
-        !path.isAbsolute(spec.args[3] || '') || options?.cwd !== spec.args[3] ||
+        typeof spec.args[3] !== 'string' || !path.isAbsolute(spec.args[3]) || options?.cwd !== spec.args[3] ||
         !Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1) {
       return Promise.reject(new Error('Unexpected preflight command; not dispatched.'));
     }
@@ -63,9 +63,6 @@ export function installPreflightOutputFault(slot, { timeoutMs = 5000 } = {}) {
         if (!current || current.value !== fault || current.writable !== descriptor.writable ||
             current.enumerable !== descriptor.enumerable || current.configurable !== descriptor.configurable) {
           issues.push('seam-identity-changed');
-        } else {
-          try { Object.defineProperty(slot, 'run', descriptor); }
-          catch { issues.push('seam-removal-failed'); }
         }
         if (pending) {
           // No signal to the Runtime or a process group: only our exact child.
@@ -79,6 +76,18 @@ export function installPreflightOutputFault(slot, { timeoutMs = 5000 } = {}) {
           clearTimeout(timer);
           if (!closed) issues.push('child-not-reaped');
         }
+        // Keep the closed wrapper installed until the child callback barrier.
+        // Never replace a third party's intervening runner.
+        const afterDrain = Object.getOwnPropertyDescriptor(slot, 'run');
+        if (!issues.includes('child-not-reaped') && afterDrain && afterDrain.value === fault && afterDrain.writable === descriptor.writable &&
+            afterDrain.enumerable === descriptor.enumerable && afterDrain.configurable === descriptor.configurable) {
+          try { Object.defineProperty(slot, 'run', descriptor); }
+          catch { issues.push('seam-removal-failed'); }
+        } else if ((!afterDrain || afterDrain.value !== fault || afterDrain.writable !== descriptor.writable ||
+                    afterDrain.enumerable !== descriptor.enumerable || afterDrain.configurable !== descriptor.configurable) &&
+                   !issues.includes('seam-identity-changed')) {
+          issues.push('seam-identity-changed');
+        }
         const restored = Object.getOwnPropertyDescriptor(slot, 'run');
         if (!restored || restored.value !== prior || restored.writable !== descriptor.writable ||
             restored.enumerable !== descriptor.enumerable || restored.configurable !== descriptor.configurable) issues.push('runner-not-restored');
@@ -87,4 +96,19 @@ export function installPreflightOutputFault(slot, { timeoutMs = 5000 } = {}) {
       return finalization;
     },
   };
+}
+
+// Scope the seam to one attempted action; cleanup failure overrides any product
+// refusal. The caller must invalidate its larger session on either failure.
+export async function withPreflightOutputFault(slot, action, options) {
+  const seam = installPreflightOutputFault(slot, options);
+  try {
+    await action();
+    throw new Error('Faulted action did not refuse; session invalid.');
+  } finally {
+    const finalization = await seam.finalize();
+    if (finalization.state === 'fail') {
+      throw new Error(`Fault finalization failed: ${finalization.issues.join(', ')}; session invalid.`);
+    }
+  }
 }
