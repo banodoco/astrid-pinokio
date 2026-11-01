@@ -13,7 +13,7 @@ Every OS object binds the same current coherent tuple:
 ```text
 Runtime  47e5949465cb6f3afdfd1cb8a0e90009fd9d4020
 Agent    020877f12ea490308a9e5f9564c8f4a4bf77ede1
-App      9d3ccda1e81383082258943207745086da2aabe4
+App      36ff224e3c9ad862e3f807e2548b997a36799543
 Pinokio  89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4
 ```
 
@@ -86,7 +86,7 @@ all tokens above, and serialize the resulting root object as the reusable
 workflow input `m4_4a_executor_configs`. It must pass the frozen Release-1
 candidate/manifest input separately: the App manifest path is
 `public/install-manifest.json`, SHA-256
-`a63d9bdac6dfcb22e4f4516f2d92f4c880477076512b5115f0cd8f415f34a9ef`, and its
+`b78ae7e74188f6e0bbf01950b0d388d4cf36ea990c9bb574fd8aef57a8782777`, and its
 Agent/Runtime entries must equal the tuple above. Preserve
 `m4_4a_backend_only` as needed for the selected matrix, keep the pinned
 workflow's `strategy.fail-fast: false`, and pass
