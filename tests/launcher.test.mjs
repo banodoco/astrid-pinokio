@@ -1238,7 +1238,7 @@ test('fully-local Update route stages failure, promotes success, and reports ins
     const target = git(seed, 'rev-parse', 'HEAD');
     const events = [];
     let ready = true;
-    const app = library.createApp({ platform: 'linux', appDirectory, environment: process.env,
+    const app = library.createApp({ platform: process.platform, appDirectory, environment: process.env,
       lifecycle: { preflightStop: async () => { events.push('preflight'); },
         requestGracefulStop: async () => { events.push('stop'); ready = false; }, waitForInstallerLock: async () => {} },
       localUpdateOperations: {
