@@ -1,5 +1,5 @@
-// Candidate preparation only. This is deliberately not wired into Update until
-// promotion and interrupted-update recovery can preserve checkout artifacts.
+// Candidate preparation only. Do not wire this into Update until promotion and
+// interrupted-update recovery can preserve checkout artifacts.
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -12,8 +12,16 @@ async function command(command, args, options) {
   return exec(command, args, { ...options, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
 }
 
+async function buildWithSession(options) {
+  const { runSession } = await import('./session.mjs');
+  await runSession(options);
+}
+
 // Fetch into a separate clone, leaving the installed checkout and its refs alone.
-export async function prepareCandidate({ editor, ref, remote, stagingRoot, installed, run = command }) {
+// The normal build session owns Runtime startup, build subprocesses and shutdown;
+// plain `npm run build` does not provide the Runtime discovery the app requires.
+export async function prepareCandidate({ editor, ref, remote, stagingRoot, root, installed,
+  run = command, build = buildWithSession }) {
   const git = async (cwd, ...args) => (await run('git', args, { cwd })).stdout.trim();
   const snapshot = async () => ({
     sha: await git(editor, 'rev-parse', '--verify', 'HEAD^{commit}'),
@@ -47,10 +55,15 @@ export async function prepareCandidate({ editor, ref, remote, stagingRoot, insta
     const release = manifest.release === undefined ? 0 : manifest.release;
     if (!Number.isSafeInteger(release) || release < 0) throw new Error('Candidate release is invalid.');
     const env = { ...installed.env, VITE_APP_BUILD: target, RAILWAY_GIT_COMMIT_SHA: target };
-    await run(installed.node, [installed.npx, '-y', 'npm@11', 'ci', '--no-audit', '--no-fund'], { cwd: candidate, env });
-    await run(installed.node, [installed.npm, 'run', 'build'], { cwd: candidate, env });
-    const build = JSON.parse(await readFile(path.join(candidate, 'dist', 'build.json'), 'utf8'));
-    if (build.app !== target || build.release !== release) throw new Error('Candidate build identity does not match its checkout and manifest.');
+    await build({ action: 'build', mode: 'local', root, editor: candidate, installed: { ...installed, env } });
+    // Build scripts are arbitrary code. A matching build.json alone does not
+    // prove that the checkout or installer manifest still matches the target.
+    if (await git(candidate, 'rev-parse', '--verify', 'HEAD^{commit}') !== target
+      || await git(candidate, 'status', '--porcelain=v1', '--untracked-files=no')) {
+      throw new Error('Candidate checkout changed during its build; refusing promotion.');
+    }
+    const identity = JSON.parse(await readFile(path.join(candidate, 'dist', 'build.json'), 'utf8'));
+    if (identity.app !== target || identity.release !== release) throw new Error('Candidate build identity does not match its checkout and manifest.');
     const current = await snapshot();
     if (JSON.stringify(current) !== JSON.stringify(old)) throw new Error('Editor checkout changed during staging; preserving it.');
     let cleanupPromise;

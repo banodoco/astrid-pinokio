@@ -1111,52 +1111,63 @@ test('isolated update preparation preserves the checkout and reports build and r
   const installed = { node: 'fixture-node', npx: 'npx', npm: 'npm', env: {} };
   const run = async (command, args, options) => {
     if (command === 'git') return { stdout: git(options.cwd, ...args) };
-    if (args.includes('build')) throw new Error('controlled build failure');
-    return { stdout: '' };
+    assert.fail(`unexpected command: ${command}`);
   };
-  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, installed, run }), /controlled build failure/);
+  const root = path.join(parent, 'runtime');
+  const failureBuild = async (options) => {
+    assert.equal(options.action, 'build');
+    assert.equal(options.mode, 'local');
+    assert.equal(options.root, root);
+    assert.notEqual(options.editor, editor);
+    assert.equal(options.installed.env.VITE_APP_BUILD, target);
+    assert.equal(options.installed.env.RAILWAY_GIT_COMMIT_SHA, target);
+    throw new Error('controlled build failure');
+  };
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: failureBuild }), /controlled build failure/);
   assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
   assert.equal(git(editor, 'rev-parse', 'origin/main'), remoteTracking);
   assert.equal(fs.readFileSync(selection, 'utf8'), 'old-runtime\n');
   assert.deepEqual(fs.readFileSync(data), Buffer.from([0, 1, 2, 255]));
   assert.deepEqual(fs.readdirSync(stage), []);
-  const successRun = async (command, args, options) => {
-    if (command === 'git') return { stdout: git(options.cwd, ...args) };
-    if (args.includes('build')) {
-      fs.mkdirSync(path.join(options.cwd, 'dist'));
-      fs.writeFileSync(path.join(options.cwd, 'dist/build.json'), JSON.stringify({ app: target, release: 2 }));
-    }
-    return { stdout: '' };
+  const successBuild = async (options) => {
+    assert.equal(options.installed.env.VITE_APP_BUILD, target);
+    fs.mkdirSync(path.join(options.editor, 'dist'));
+    fs.writeFileSync(path.join(options.editor, 'dist/build.json'), JSON.stringify({ app: target, release: 2 }));
   };
-  const prepared = await prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, installed, run: successRun });
+  const prepared = await prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: successBuild });
   assert.equal(prepared.targetSha, target);
   assert.equal(prepared.oldSha, original);
   assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
-  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, installed, run: successRun }), /already in progress/);
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: successBuild }), /already in progress/);
   await Promise.all([prepared.cleanup(), prepared.cleanup()]);
   await prepared.cleanup();
   assert.deepEqual(fs.readdirSync(stage), []);
   const staleLock = path.join(stage, 'astrid-update.lock');
   fs.mkdirSync(staleLock);
   fs.writeFileSync(path.join(staleLock, 'owner-evidence'), 'preserve');
-  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, installed, run: successRun }), /needs inspection/);
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: successBuild }), /needs inspection/);
   assert.equal(fs.readFileSync(path.join(staleLock, 'owner-evidence'), 'utf8'), 'preserve');
   fs.rmSync(staleLock, { recursive: true });
-  const mismatchRun = async (command, args, options) => {
-    const result = await successRun(command, args, options);
-    if (command !== 'git' && args.includes('build')) {
-      fs.writeFileSync(path.join(options.cwd, 'dist/build.json'), JSON.stringify({ app: target, release: 999 }));
-    }
-    return result;
+  const mismatchBuild = async (options) => {
+    await successBuild(options);
+    fs.writeFileSync(path.join(options.editor, 'dist/build.json'), JSON.stringify({ app: target, release: 999 }));
   };
-  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, installed, run: mismatchRun }), /build identity/);
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: mismatchBuild }), /build identity/);
   assert.deepEqual(fs.readdirSync(stage), []);
-  const raceRun = async (command, args, options) => {
-    const result = await successRun(command, args, options);
-    if (command !== 'git' && args.includes('build')) fs.writeFileSync(path.join(editor, 'user-change'), 'keep');
-    return result;
+  const tamperedBuild = async (options) => {
+    await successBuild(options);
+    fs.writeFileSync(path.join(options.editor, 'public/install-manifest.json'), '{"release":3}');
   };
-  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, installed, run: raceRun }), /changed during staging/);
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: tamperedBuild }), /Candidate checkout changed/);
+  assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
+  assert.equal(fs.readFileSync(selection, 'utf8'), 'old-runtime\n');
+  assert.deepEqual(fs.readFileSync(data), Buffer.from([0, 1, 2, 255]));
+  assert.deepEqual(fs.readdirSync(stage), []);
+  const raceBuild = async (options) => {
+    await successBuild(options);
+    fs.writeFileSync(path.join(editor, 'user-change'), 'keep');
+  };
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, root, installed, run, build: raceBuild }), /changed during staging/);
   assert.equal(fs.readFileSync(path.join(editor, 'user-change'), 'utf8'), 'keep');
   assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
   assert.deepEqual(fs.readdirSync(stage), []);
