@@ -81,7 +81,8 @@ test('checkpoint session retains two bounded censuses without asserting continuo
     pids: { controller: controller.pid, runtime: runtime.pid, editor: process.pid }, sequence: 31,
   });
   assert.equal(session.kind, 'pinokio-linux-custody-checkpoint-session');
-  assert.equal(session.state, 'observing');
+  assert.equal(session.state, 'unknown');
+  assert.equal(session.phase, 'observing');
   assert.equal(session.qualification, 'closed');
   const [result, repeat] = await Promise.all([session.finalize(), session.finalize()]);
   assert.equal(result, repeat);

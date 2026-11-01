@@ -244,7 +244,8 @@ export async function openLinuxCustodyCheckpointSession({ pids = {}, sequence = 
 
   return Object.freeze({
     kind: 'pinokio-linux-custody-checkpoint-session',
-    state: 'observing',
+    state: 'unknown',
+    phase: 'observing',
     qualification: 'closed',
     initial: publicReference(initial),
     // A local abort only closes this helper. It does not signal, stop, or
