@@ -15,9 +15,60 @@ const oldLauncher = 'bbba620e3d89eeff8021417f365e6ea584203105';
 const r17Candidate = '017472bf3e26ad8567accce88991942d094c71c8';
 const r17Refusal = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const nodeRequire = createRequire(import.meta.url);
+const candidateRepository = process.env.ASTRID_AGENT_REPOSITORY
+  || [
+    path.resolve(repo, '../agent-candidate'),
+    path.resolve(repo, '../../../../../../../M-AG/repos/astrid-agent'),
+  ].find((candidate) => fs.existsSync(path.join(candidate, '.git')))
+  || path.resolve(repo, '../agent-candidate');
 const source = (revision, file) => revision === 'worktree'
   ? fs.readFileSync(path.join(repo, file), 'utf8')
   : execFileSync('git', ['show', `${revision}:${file}`], { cwd: repo, encoding: 'utf8' });
+
+function candidateSource(file) {
+  return execFileSync('git', ['show', `${r17Candidate}:${file}`], {
+    cwd: candidateRepository, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+function sliceBetween(text, start, end) {
+  const from = text.indexOf(start);
+  const to = text.indexOf(end, from + start.length);
+  return from >= 0 && to >= 0 ? text.slice(from, to) : '';
+}
+
+function inspectR17Contract() {
+  const files = {
+    update: 'astrid/installer/app_update.py',
+    custody: 'astrid/installer/custody.py',
+    oldStopProof: 'tests/test_installer_pinokio_old_stop.py',
+    stoppedUpdateProof: 'tests/test_installer_pinokio_stopped_update.py',
+  };
+  const missing = [];
+  try {
+    const update = candidateSource(files.update);
+    const custody = candidateSource(files.custody);
+    const oldStopProof = candidateSource(files.oldStopProof);
+    const stoppedUpdateProof = candidateSource(files.stoppedUpdateProof);
+    const preflight = sliceBetween(update, 'def preflight_pinokio_update', '\ndef qualify_running');
+    const operation = sliceBetween(custody, 'def operation(', '\ndef _serve');
+    if (!preflight.includes('pinokio_lock_paths') || !preflight.includes('qualify_running')
+      || !preflight.includes(r17Refusal)) missing.push('candidate-running-refusal-order');
+    if (!operation.includes('stopped_custody') || !operation.includes('qualify_running')
+      || !operation.includes(r17Refusal)) missing.push('candidate-stopped-admission-refusal');
+    if (!oldStopProof.includes('test_receipt_free_old_stop_needs_custody_and_never_calls_newer_down')) {
+      missing.push('candidate-old-stop-proof');
+    }
+    if (!stoppedUpdateProof.includes('test_canonical_stop_then_fresh_update_cli_uses_retained_c1_authority')
+      || !stoppedUpdateProof.includes('retry = run_cli()')
+      || !stoppedUpdateProof.includes('assert retry.returncode == 0')) {
+      missing.push('candidate-fresh-retry-proof');
+    }
+  } catch (error) {
+    missing.push(`candidate-source-unavailable:${error.code || error.name}`);
+  }
+  return { status: missing.length === 0 ? 'bound' : 'blocked', missing };
+}
 
 function moduleAt(revision, file, dependencies = {}) {
   const module = { exports: {} };
@@ -143,6 +194,16 @@ function boundedCollection({ handoff, firstClick, stop, retry, observation }) {
     qualification: 'none',
   };
 }
+
+test('R-17 candidate contract binds refusal ordering and stopped-path proofs before collection', {
+  skip: fs.existsSync(path.join(candidateRepository, '.git'))
+    ? false : 'R-17 Agent checkout is not available in this environment',
+}, () => {
+  const contract = inspectR17Contract();
+  assert.deepEqual(contract, { status: 'bound', missing: [] });
+  assert.equal(fs.readFileSync(path.join(repo, 'pinokio/stop.js'), 'utf8').trim(),
+    "'use strict';\nconst app = require('./lib');\nmodule.exports = { run: [app.customStep(app.stopOwnedStart)] };");
+});
 
 test('R-21 component harness: old first click refuses, current Stop succeeds, and only a rebuilt retry reaches bounded collection', async () => {
   const events = [];
