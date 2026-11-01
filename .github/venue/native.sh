@@ -17,7 +17,9 @@ probe() {
   if npm ci --omit=dev --prefix "$RUNNER_TEMP/$name" --silent > "$RUNNER_TEMP/$name-install.log" 2>&1; then
     printf '%s npm-ci=ok\n' "$name" >> "$out/host.txt"
   else
-    printf '%s npm-ci=failed (details withheld; inspect runner log locally)\n' "$name" >> "$out/host.txt"
+    printf '%s npm-ci=failed\n' "$name" >> "$out/host.txt"
+    # Keep only standardized npm error codes, not arbitrary installation logs.
+    (grep -Eo 'npm error code [A-Z0-9_]+' "$RUNNER_TEMP/$name-install.log" | sort -u >> "$out/host.txt") || true
     return 1
   fi
 }
