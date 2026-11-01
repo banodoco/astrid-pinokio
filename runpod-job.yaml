@@ -7,154 +7,113 @@ setup:
     set -x
     set -uo pipefail
     PRODUCT_EXPECTED=c50e5c3fd3e6e2423a4e62ea67b2513ff8228932
-    REQUEST_REF=lane/M-PIN/R-20-NATIVE-R5-runpod
-    TASK_TMP="$PWD/runpod-tmp"
+    REQUEST_REF=lane/M-PIN/R-20-NATIVE-R6-runpod
+    TASK_TMP="$PWD/r20-native-r6-tmp"
     SETUP_RECEIPT="$TASK_TMP/r20-setup-receipt"
-    SETUP_STATUS=0
-    FIRST_STAGE=none
-    FIRST_TOOL=none
-    FIRST_REASON=none
-    FIRST_EXIT=0
-    record_setup_failure() {
-      stage="$1" tool="$2" reason="$3" code="$4"
-      if test "$SETUP_STATUS" -eq 0; then
-        FIRST_STAGE="$stage"
-        FIRST_TOOL="$tool"
-        FIRST_REASON="$reason"
-        FIRST_EXIT="$code"
-      fi
+    SETUP_STATUS=0; FIRST_STAGE=none; FIRST_TOOL=none; FIRST_OPERATION=none; FIRST_REASON=none; FIRST_STAGE_EXIT=0
+    record_failure() {
+      if test "$SETUP_STATUS" -eq 0; then FIRST_STAGE="$1"; FIRST_TOOL="$2"; FIRST_OPERATION="$3"; FIRST_REASON="$4"; FIRST_STAGE_EXIT="$5"; fi
       SETUP_STATUS=1
     }
     stage() {
-      stage_name="$1"; tool_name="$2"; reason_token="$3"; shift 3
-      "$@"
-      stage_exit=$?
-      if test "$stage_exit" -ne 0; then record_setup_failure "$stage_name" "$tool_name" "$reason_token" "$stage_exit"; fi
+      stage_name="$1"; tool_name="$2"; operation_name="$3"; reason_token="$4"; shift 4
+      "$@"; stage_exit=$?
+      if test "$stage_exit" -ne 0; then record_failure "$stage_name" "$tool_name" "$operation_name" "$reason_token" "$stage_exit"; fi
       return 0
     }
-    mkdir -p "$SETUP_RECEIPT"
+    printf 'expected_product_sha=%s\nexpected_request_ref=%s\n' "$PRODUCT_EXPECTED" "$REQUEST_REF"
+    printf 'git='; if git --version; then :; else stage_exit=$?; printf 'unavailable\n'; record_failure tool-versions git version git-version-failed "$stage_exit"; fi
+    if command -v node >/dev/null 2>&1; then printf 'node='; node --version; else printf 'node=unavailable-before-install\n'; fi
+    if command -v npm >/dev/null 2>&1; then printf 'npm='; npm --version; else printf 'npm=unavailable-before-install\n'; fi
+    stage task-scratch mkdir directory create-failed mkdir -p "$TASK_TMP"
+    stage setup-receipt mkdir directory create-failed mkdir -p "$SETUP_RECEIPT"
     PRODUCT_ACTUAL=unavailable
-    if PRODUCT_ACTUAL="$(git rev-parse HEAD)"; then :; else record_setup_failure product-identity git rev-parse-failed "$?"; fi
+    if PRODUCT_ACTUAL="$(git rev-parse HEAD)"; then :; else stage_exit=$?; PRODUCT_ACTUAL=unavailable; record_failure product-identity git rev-parse rev-parse-failed "$stage_exit"; fi
+    printf 'actual_product_sha_before_checkout=%s\n' "$PRODUCT_ACTUAL"
+    stage product-checkout git checkout checkout-failed git checkout --detach "$PRODUCT_EXPECTED"
+    if PRODUCT_ACTUAL="$(git rev-parse HEAD)"; then :; else stage_exit=$?; PRODUCT_ACTUAL=unavailable; record_failure product-identity git rev-parse rev-parse-failed "$stage_exit"; fi
     REQUEST_ACTUAL=unavailable
-    if REQUEST_ACTUAL="$(git ls-remote https://github.com/banodoco/astrid-pinokio.git "refs/heads/$REQUEST_REF" | awk 'NR == 1 { print $1 }')"; then
-      if test -n "$REQUEST_ACTUAL"; then :; else REQUEST_ACTUAL=unavailable; record_setup_failure request-identity git ref-unavailable 1; fi
-    else
-      record_setup_failure request-identity git ls-remote-failed "$?"
-    fi
+    if REQUEST_ACTUAL="$(git ls-remote https://github.com/banodoco/astrid-pinokio.git "refs/heads/$REQUEST_REF" | awk 'NR == 1 { print $1 }')"; then test -n "$REQUEST_ACTUAL" || { REQUEST_ACTUAL=unavailable; record_failure request-identity git ls-remote ref-unavailable 1; }; else stage_exit=$?; REQUEST_ACTUAL=unavailable; record_failure request-identity git ls-remote ls-remote-failed "$stage_exit"; fi
     REQUEST_EXPECTED="${R20_REQUEST_SHA:-$REQUEST_ACTUAL}"
-    printf 'expected_product_sha=%s\nactual_product_sha=%s\nexpected_request_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\n' "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL"
-    printf 'expected_product_sha=%s\nactual_product_sha=%s\nexpected_request_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\n' "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" > "$SETUP_RECEIPT/request-identity.txt"
-    if test "$PRODUCT_ACTUAL" = "$PRODUCT_EXPECTED"; then :; else record_setup_failure product-identity git sha-mismatch 1; fi
-    if test "$REQUEST_ACTUAL" = "$REQUEST_EXPECTED" && test "$REQUEST_EXPECTED" != unavailable; then :; else record_setup_failure request-identity git sha-mismatch 1; fi
-    mkdir -p "$TASK_TMP"
+    printf 'expected_product_sha=%s\nactual_product_sha=%s\nexpected_request_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\ntries=0\n' "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" | tee "$SETUP_RECEIPT/request-identity.txt"
+    test "$PRODUCT_ACTUAL" = "$PRODUCT_EXPECTED" || record_failure product-identity git identity sha-mismatch 1
+    test "$REQUEST_ACTUAL" = "$REQUEST_EXPECTED" && test "$REQUEST_EXPECTED" != unavailable || record_failure request-identity git identity sha-mismatch 1
     export npm_config_cache="$TASK_TMP/npm-cache"
-    stage system-update apt-get command-failed apt-get update
-    stage system-packages apt-get command-failed env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg git python3 make g++
-    stage nodesource-download curl command-failed curl -fL https://deb.nodesource.com/setup_20.x -o "$TASK_TMP/nodesource-setup.sh"
-    stage nodesource-bootstrap bash command-failed bash "$TASK_TMP/nodesource-setup.sh"
-    stage nodejs-install apt-get command-failed env DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
-    stage node-version node version-check node -e 'process.exit(Number(process.versions.node.split(".")[0]) === 20 ? 0 : 1)'
-    printf 'node='; node --version
-    stage npm-version npm version-check npm --version
-    printf 'npm='; npm --version
-    stage pinokiod-clone git command-failed git clone https://github.com/pinokiocomputer/pinokiod.git "$TASK_TMP/pinokiod"
-    stage pinokiod-checkout git command-failed git -C "$TASK_TMP/pinokiod" checkout --detach add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
+    stage system-update apt-get package-manager apt-update-failed apt-get update
+    stage system-packages apt-get package-manager apt-install-failed env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg git python3 make g++
+    stage nodesource-download curl download nodesource-download-failed curl -fL https://deb.nodesource.com/setup_20.x -o "$TASK_TMP/nodesource-setup.sh"
+    stage nodesource-bootstrap bash bootstrap nodesource-bootstrap-failed bash "$TASK_TMP/nodesource-setup.sh"
+    stage nodejs-install apt-get package-manager nodejs-install-failed env DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+    stage node-version node version node-major-not-20 node -e 'process.exit(Number(process.versions.node.split(".")[0]) === 20 ? 0 : 1)'
+    printf 'node='; stage node-version-read node version node-version-read-failed node --version
+    printf 'npm='; stage npm-version-read npm version npm-version-read-failed npm --version
+    stage pinokiod-clone git clone clone-failed git clone https://github.com/pinokiocomputer/pinokiod.git "$TASK_TMP/pinokiod"
+    stage pinokiod-checkout git checkout checkout-failed git -C "$TASK_TMP/pinokiod" checkout --detach add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
     PINOKIOD_ACTUAL=unavailable
-    if PINOKIOD_ACTUAL="$(git -C "$TASK_TMP/pinokiod" rev-parse HEAD)"; then :; else record_setup_failure pinokiod-identity git rev-parse-failed "$?"; fi
+    if PINOKIOD_ACTUAL="$(git -C "$TASK_TMP/pinokiod" rev-parse HEAD)"; then :; else stage_exit=$?; PINOKIOD_ACTUAL=unavailable; record_failure pinokiod-identity git rev-parse rev-parse-failed "$stage_exit"; fi
     printf 'expected_pinokiod_sha=add4a674ad1ba95bb62ec427fce519fe5bf0e9bf\nactual_pinokiod_sha=%s\n' "$PINOKIOD_ACTUAL"
-    if test "$PINOKIOD_ACTUAL" = add4a674ad1ba95bb62ec427fce519fe5bf0e9bf; then :; else record_setup_failure pinokiod-identity git sha-mismatch 1; fi
-    printf 'pinokiod_version='; stage pinokiod-version node version-read node -p "require('$TASK_TMP/pinokiod/package.json').version"
-    stage pinokiod-install npm npm-ci-failed npm ci --omit=dev --prefix "$TASK_TMP/pinokiod"
-    stage pterm-clone git command-failed git clone https://github.com/pinokiocomputer/pterm.git "$TASK_TMP/pterm"
-    stage pterm-checkout git command-failed git -C "$TASK_TMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb
+    test "$PINOKIOD_ACTUAL" = add4a674ad1ba95bb62ec427fce519fe5bf0e9bf || record_failure pinokiod-identity git identity sha-mismatch 1
+    printf 'pinokiod_version='; stage pinokiod-version node package-version version-read-failed node -p "require('$TASK_TMP/pinokiod/package.json').version"
+    stage pinokiod-install npm npm-ci npm-ci-failed npm ci --omit=dev --prefix "$TASK_TMP/pinokiod"
+    stage pterm-clone git clone clone-failed git clone https://github.com/pinokiocomputer/pterm.git "$TASK_TMP/pterm"
+    stage pterm-checkout git checkout checkout-failed git -C "$TASK_TMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb
     PTERM_ACTUAL=unavailable
-    if PTERM_ACTUAL="$(git -C "$TASK_TMP/pterm" rev-parse HEAD)"; then :; else record_setup_failure pterm-identity git rev-parse-failed "$?"; fi
+    if PTERM_ACTUAL="$(git -C "$TASK_TMP/pterm" rev-parse HEAD)"; then :; else stage_exit=$?; PTERM_ACTUAL=unavailable; record_failure pterm-identity git rev-parse rev-parse-failed "$stage_exit"; fi
     printf 'expected_pterm_sha=5be43718701c448b43daf0ce51d8935f170065bb\nactual_pterm_sha=%s\n' "$PTERM_ACTUAL"
-    if test "$PTERM_ACTUAL" = 5be43718701c448b43daf0ce51d8935f170065bb; then :; else record_setup_failure pterm-identity git sha-mismatch 1; fi
-    printf 'pterm_version='; stage pterm-version node version-read node -p "require('$TASK_TMP/pterm/package.json').version"
-    stage pterm-install npm npm-ci-failed npm ci --omit=dev --prefix "$TASK_TMP/pterm"
-    printf 'setup_status=%s\nexpected_product_sha=%s\nactual_product_sha=%s\nrequest_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\npinokiod_sha=%s\npterm_sha=%s\n' "$SETUP_STATUS" "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$PINOKIOD_ACTUAL" "$PTERM_ACTUAL" > "$TASK_TMP/setup-state.env"
-    if test "$SETUP_STATUS" -ne 0; then
-      printf '{"schema":"r20-native-r5-setup-v1","stage":"%s","tool":"%s","reason":"%s","exit":%s}\n' "$FIRST_STAGE" "$FIRST_TOOL" "$FIRST_REASON" "$FIRST_EXIT" > "$SETUP_RECEIPT/setup-classification.json"
-      (cd "$SETUP_RECEIPT" && rm -f SHA256SUMS && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort | xargs -r sha256sum > SHA256SUMS)
-    fi
+    test "$PTERM_ACTUAL" = 5be43718701c448b43daf0ce51d8935f170065bb || record_failure pterm-identity git identity sha-mismatch 1
+    printf 'pterm_version='; stage pterm-version node package-version version-read-failed node -p "require('$TASK_TMP/pterm/package.json').version"
+    stage pterm-install npm npm-ci npm-ci-failed npm ci --omit=dev --prefix "$TASK_TMP/pterm"
+    SETUP_INNER_EXIT=0; test "$SETUP_STATUS" -eq 0 || SETUP_INNER_EXIT=125
+    printf 'setup_status=%s\nexpected_product_sha=%s\nactual_product_sha=%s\nrequest_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\npinokiod_sha=%s\npterm_sha=%s\nfirst_stage=%s\nfirst_tool=%s\nfirst_operation=%s\nfirst_reason=%s\nfirst_stage_exit=%s\nsetup_inner_exit=%s\n' "$SETUP_STATUS" "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$PINOKIOD_ACTUAL" "$PTERM_ACTUAL" "$FIRST_STAGE" "$FIRST_TOOL" "$FIRST_OPERATION" "$FIRST_REASON" "$FIRST_STAGE_EXIT" "$SETUP_INNER_EXIT" > "$TASK_TMP/setup-state.env"
+    printf '{"schema":"r20-native-r6-setup-v1","status":"%s","first_stage":"%s","tool":"%s","operation_class":"%s","reason":"%s","first_stage_exit":%s,"authoritative_inner_exit":%s}\n' "$(test "$SETUP_STATUS" -eq 0 && printf passed || printf failed)" "$FIRST_STAGE" "$FIRST_TOOL" "$FIRST_OPERATION" "$FIRST_REASON" "$FIRST_STAGE_EXIT" "$SETUP_INNER_EXIT" > "$SETUP_RECEIPT/setup-classification.json"
+    (cd "$SETUP_RECEIPT" && rm -f SHA256SUMS && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort | xargs -r sha256sum > SHA256SUMS)
 run:
   - |
     set -x
     set -uo pipefail
     PRODUCT_EXPECTED=c50e5c3fd3e6e2423a4e62ea67b2513ff8228932
-    REQUEST_REF=lane/M-PIN/R-20-NATIVE-R5-runpod
-    TASK_TMP="$PWD/runpod-tmp"
+    REQUEST_REF=lane/M-PIN/R-20-NATIVE-R6-runpod
+    TASK_TMP="$PWD/r20-native-r6-tmp"
     SETUP_RECEIPT="$TASK_TMP/r20-setup-receipt"
-    RECEIPT=/workspace/out/r20-native-r5-c50e5c3fd3e6-1
-    mkdir -p "$RECEIPT"
-    PRODUCT_ACTUAL="$(git rev-parse HEAD)"
-    REQUEST_ACTUAL="$(git ls-remote https://github.com/banodoco/astrid-pinokio.git "refs/heads/$REQUEST_REF" | awk 'NR == 1 { print $1 }')"
-    test -n "$REQUEST_ACTUAL" || REQUEST_ACTUAL=unavailable
+    RUN_ID="$(printf '%s' "${GITHUB_RUN_ID:-runpod}" | tr -c 'A-Za-z0-9._:-' '_')"; ATTEMPT="$(printf '%s' "${GITHUB_RUN_ATTEMPT:-1}" | tr -c 'A-Za-z0-9._:-' '_')"; JOB_ID="$(printf '%s' "${RUNPOD_JOB_ID:-unavailable}" | tr -c 'A-Za-z0-9._:-' '_')"
+    RECEIPT="/workspace/out/r20-native-r6-c50e5c3fd3e6-${ATTEMPT}"; mkdir -p "$RECEIPT"
+    PRODUCT_ACTUAL=unavailable; if PRODUCT_ACTUAL="$(git rev-parse HEAD)"; then :; else PRODUCT_ACTUAL=unavailable; fi
+    REQUEST_ACTUAL=unavailable; if REQUEST_ACTUAL="$(git ls-remote https://github.com/banodoco/astrid-pinokio.git "refs/heads/$REQUEST_REF" | awk 'NR == 1 { print $1 }')"; then test -n "$REQUEST_ACTUAL" || REQUEST_ACTUAL=unavailable; fi
     REQUEST_EXPECTED="${R20_REQUEST_SHA:-$REQUEST_ACTUAL}"
-    SETUP_STATUS=1
-    PINOKIOD_ACTUAL=unavailable
-    PTERM_ACTUAL=unavailable
+    SETUP_STATUS=1; PINOKIOD_ACTUAL=unavailable; PTERM_ACTUAL=unavailable; FIRST_STAGE=unavailable; FIRST_TOOL=unavailable; FIRST_OPERATION=unavailable; FIRST_REASON=unavailable; FIRST_STAGE_EXIT=125
     if test -f "$TASK_TMP/setup-state.env"; then . "$TASK_TMP/setup-state.env"; fi
-    RUN_ID="$(printf '%s' "${GITHUB_RUN_ID:-runpod}" | tr -c 'A-Za-z0-9._:-' '_')"
-    ATTEMPT="$(printf '%s' "${GITHUB_RUN_ATTEMPT:-1}" | tr -c 'A-Za-z0-9._:-' '_')"
-    JOB_ID="$(printf '%s' "${RUNPOD_JOB_ID:-unavailable}" | tr -c 'A-Za-z0-9._:-' '_')"
-    printf 'expected_product_sha=%s\nactual_product_sha=%s\nexpected_request_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\nrun_id=%s\nattempt=%s\njob_id=%s\n' "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID" > "$RECEIPT/request-identity.txt"
-    printf 'expected_product_sha=%s\nactual_product_sha=%s\nexpected_request_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\n' "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL"
-    printf 'node='; node --version
-    printf 'npm='; npm --version
-    printf 'pinokiod='; git -C "$TASK_TMP/pinokiod" rev-parse HEAD
-    printf 'pterm='; git -C "$TASK_TMP/pterm" rev-parse HEAD
-    PHASE=setup
-    REASON=setup_failed
-    INNER=125
-    FOCUSED_EXIT=125
+    printf 'expected_product_sha=%s\nactual_product_sha=%s\nexpected_request_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\nrun_id=%s\nattempt=%s\njob_id=%s\ntries=0\n' "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID" > "$RECEIPT/request-identity.txt"
+    printf 'expected_product_sha=%s\nactual_product_sha=%s\nexpected_request_ref=%s\nexpected_request_sha=%s\nactual_request_sha=%s\nrun_id=%s\nattempt=%s\njob_id=%s\ntries=0\n' "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID"
+    if command -v node >/dev/null 2>&1; then printf 'node='; node --version; else printf 'node=unavailable\n'; fi
+    if command -v npm >/dev/null 2>&1; then printf 'npm='; npm --version; else printf 'npm=unavailable\n'; fi
+    printf 'pinokiod='; git -C "$TASK_TMP/pinokiod" rev-parse HEAD || printf 'unavailable\n'
+    printf 'pterm='; git -C "$TASK_TMP/pterm" rev-parse HEAD || printf 'unavailable\n'
+    PHASE=setup; REASON=setup_failed; INNER=125; FOCUSED_EXIT=125
     if test "$SETUP_STATUS" = 0 && test "$PRODUCT_ACTUAL" = "$PRODUCT_EXPECTED" && test "$REQUEST_EXPECTED" != unavailable && test "$REQUEST_ACTUAL" = "$REQUEST_EXPECTED" && test "$PINOKIOD_ACTUAL" = add4a674ad1ba95bb62ec427fce519fe5bf0e9bf && test "$PTERM_ACTUAL" = 5be43718701c448b43daf0ce51d8935f170065bb && test -d "$TASK_TMP/pinokiod/node_modules" && test -d "$TASK_TMP/pterm/node_modules/unws"; then
       PHASE=preflight
-      if node --test tests/venue-linux-native.test.mjs; then
-        FOCUSED_EXIT=0
-        PHASE=action
-        REASON=action_failed
-        if R20_LINUX_MODE=native TASK_TMP="$TASK_TMP" RUNNER_TEMP="$TASK_TMP" GITHUB_RUN_ID="$RUN_ID" GITHUB_RUN_ATTEMPT="$ATTEMPT" bash .github/venue/linux.sh; then INNER=0; REASON=none; else INNER=$?; fi
-      else
-        FOCUSED_EXIT=$?
-        INNER=$FOCUSED_EXIT
-        REASON=focused_test_failed
-      fi
+      if node --test tests/venue-linux-native.test.mjs; then FOCUSED_EXIT=0; PHASE=action; REASON=action_failed; if R20_LINUX_MODE=native TASK_TMP="$TASK_TMP" RUNNER_TEMP="$TASK_TMP" GITHUB_RUN_ID="$RUN_ID" GITHUB_RUN_ATTEMPT="$ATTEMPT" bash .github/venue/linux.sh; then INNER=0; REASON=none; else INNER=$?; fi; else FOCUSED_EXIT=$?; INNER=$FOCUSED_EXIT; REASON=focused_test_failed; fi
     fi
-    EVIDENCE="$TASK_TMP/r20-evidence"
-    ACTION_IDENTITY=0
-    if test -f "$EVIDENCE/identity.txt"; then cp -- "$EVIDENCE/identity.txt" "$RECEIPT/identity.txt"; ACTION_IDENTITY=1; else printf 'candidate=%s\ndaemon=%s\npterm=%s\nmode=native run=%s attempt=%s\n' "$PRODUCT_ACTUAL" "$PINOKIOD_ACTUAL" "$PTERM_ACTUAL" "$RUN_ID" "$ATTEMPT" > "$RECEIPT/identity.txt"; fi
-    for PACKET in settlement.json postcondition.txt version.json; do if test -f "$EVIDENCE/$PACKET"; then cp -- "$EVIDENCE/$PACKET" "$RECEIPT/$PACKET"; fi; done
-    if test -f "$EVIDENCE/SHA256SUMS"; then cp -- "$EVIDENCE/SHA256SUMS" "$RECEIPT/action-SHA256SUMS.txt"; fi
-    if test -f "$SETUP_RECEIPT/setup-classification.json"; then cp -- "$SETUP_RECEIPT/setup-classification.json" "$RECEIPT/setup-classification.json"; fi
-    ACTION_MANIFEST_VALID=0
-    if test -f "$RECEIPT/action-SHA256SUMS.txt" && (cd "$RECEIPT" && sha256sum -c action-SHA256SUMS.txt); then ACTION_MANIFEST_VALID=1; fi
+    EVIDENCE="$TASK_TMP/r20-evidence"; ACTION_IDENTITY=0
+    if test -f "$EVIDENCE/identity.txt"; then cp -- "$EVIDENCE/identity.txt" "$RECEIPT/identity.txt"; ACTION_IDENTITY=1; else printf 'candidate=%s\ndaemon=%s\npterm=%s\nrun_id=%s\nattempt=%s\n' "$PRODUCT_ACTUAL" "$PINOKIOD_ACTUAL" "$PTERM_ACTUAL" "$RUN_ID" "$ATTEMPT" > "$RECEIPT/candidate-identity.txt"; fi
+    for PACKET in settlement.json postcondition.txt version.json; do test -f "$EVIDENCE/$PACKET" && cp -- "$EVIDENCE/$PACKET" "$RECEIPT/$PACKET"; done
+    test -f "$EVIDENCE/SHA256SUMS" && cp -- "$EVIDENCE/SHA256SUMS" "$RECEIPT/action-SHA256SUMS.txt"
+    test -f "$SETUP_RECEIPT/setup-classification.json" && cp -- "$SETUP_RECEIPT/setup-classification.json" "$RECEIPT/setup-classification.json"
+    ACTION_MANIFEST_VALID=0; if test -f "$RECEIPT/action-SHA256SUMS.txt" && (cd "$RECEIPT" && sha256sum -c action-SHA256SUMS.txt); then ACTION_MANIFEST_VALID=1; fi
     if test "$INNER" -eq 0; then
-      PHASE=collector
-      REASON=collector_failed
-      if test "$ACTION_IDENTITY" -eq 1 && test -f "$RECEIPT/settlement.json" && test -f "$RECEIPT/postcondition.txt" && test "$ACTION_MANIFEST_VALID" -eq 1 && node -e 'const fs=require("node:fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (s.running_after !== false) process.exit(1);' "$RECEIPT/settlement.json" && grep -Fx 'program directory absent after Reset' "$RECEIPT/postcondition.txt" && node -e 'const net=require("node:net"); const s=net.createServer(); s.on("error",()=>process.exit(1)); s.listen(42000,"127.0.0.1",()=>s.close(()=>process.exit(0)));'; then
-        printf 'port_42000_released=true\nprogram_directory_absent=true\nrunning_after=false\n' > "$RECEIPT/cleanup.txt"
-        PHASE=complete
-        REASON=none
-      else
-        INNER=1
-      fi
+      PHASE=collector; REASON=collector_failed
+      if test "$ACTION_IDENTITY" -eq 1 && test -f "$RECEIPT/settlement.json" && test -f "$RECEIPT/postcondition.txt" && test "$ACTION_MANIFEST_VALID" -eq 1 && node -e 'const fs=require("node:fs");const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.exit(s.running_after === false ? 0 : 1)' "$RECEIPT/settlement.json" && grep -Fx 'program directory absent after Reset' "$RECEIPT/postcondition.txt" && node -e 'const n=require("node:net");const s=n.createServer();s.on("error",()=>process.exit(1));s.listen(42000,"127.0.0.1",()=>s.close(()=>process.exit(0)))'; then printf 'port_42000_released=true\nprogram_directory_absent=true\nrunning_after=false\n' > "$RECEIPT/cleanup.txt"; PHASE=complete; REASON=none; else INNER=1; fi
     fi
-    MISSING=''
-    for PACKET in settlement.json postcondition.txt action-SHA256SUMS.txt cleanup.txt; do if ! test -f "$RECEIPT/$PACKET"; then MISSING="${MISSING}${PACKET}\n"; fi; done
-    if test "$ACTION_IDENTITY" -ne 1; then MISSING="${MISSING}identity.txt\n"; fi
+    MISSING=''; for PACKET in settlement.json postcondition.txt action-SHA256SUMS.txt cleanup.txt; do test -f "$RECEIPT/$PACKET" || MISSING="${MISSING}${PACKET}\n"; done; test "$ACTION_IDENTITY" -eq 1 || MISSING="${MISSING}identity.txt\n"
     if test "$ACTION_MANIFEST_VALID" -ne 1 && test -f "$RECEIPT/action-SHA256SUMS.txt"; then printf 'action_manifest_valid=false\n' > "$RECEIPT/ACTION-MANIFEST-INVALID.txt"; fi
-    if test -n "$MISSING"; then printf '%b' "$MISSING" > "$RECEIPT/MISSING-ACTION-PACKETS.txt"; fi
-    STATUS=failed
-    if test "$INNER" -eq 0 && test -z "$MISSING" && test "$ACTION_MANIFEST_VALID" -eq 1; then STATUS=passed; fi
+    test -z "$MISSING" || printf '%b' "$MISSING" > "$RECEIPT/MISSING-ACTION-PACKETS.txt"
+    STATUS=failed; if test "$INNER" -eq 0 && test -z "$MISSING" && test "$ACTION_MANIFEST_VALID" -eq 1; then STATUS=passed; fi
     printf 'inner_exit=%s\nfocused_test_exit=%s\n' "$INNER" "$FOCUSED_EXIT" > "$RECEIPT/inner-exit.txt"
-    printf '{"schema":"r20-native-r5-phase-v1","phase":"%s","reason":"%s","product_sha":"%s","request_ref":"%s","expected_request_sha":"%s","actual_request_sha":"%s","run_id":"%s","attempt":"%s","job_id":"%s","inner_exit":%s,"focused_test_exit":%s}\n' "$PHASE" "$REASON" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID" "$INNER" "$FOCUSED_EXIT" > "$RECEIPT/phase.json"
-    printf '{"schema":"r20-native-r5-result-v1","status":"%s","product":{"expected":"%s","actual":"%s"},"request":{"ref":"%s","expected":"%s","actual":"%s"},"run_id":"%s","attempt":"%s","job_id":"%s","phase":"%s","inner_exit":%s,"focused_test_exit":%s,"running_after":%s,"action_manifest_valid":%s}\n' "$STATUS" "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID" "$PHASE" "$INNER" "$FOCUSED_EXIT" "$(test "$STATUS" = passed && printf false || printf null)" "$(test "$ACTION_MANIFEST_VALID" -eq 1 && printf true || printf false)" > "$RECEIPT/result.json"
-    printf 'R-20-NATIVE-R5 status=%s phase=%s inner_exit=%s\n' "$STATUS" "$PHASE" "$INNER" > "$RECEIPT/SUMMARY.txt"
+    printf '{"schema":"r20-native-r6-phase-v1","phase":"%s","reason":"%s","product_sha":"%s","request_ref":"%s","expected_request_sha":"%s","actual_request_sha":"%s","run_id":"%s","attempt":"%s","job_id":"%s","tries":0,"first_stage":"%s","tool":"%s","operation_class":"%s","reason_token":"%s","first_stage_exit":%s,"inner_exit":%s,"focused_test_exit":%s}\n' "$PHASE" "$REASON" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID" "$FIRST_STAGE" "$FIRST_TOOL" "$FIRST_OPERATION" "$FIRST_REASON" "$FIRST_STAGE_EXIT" "$INNER" "$FOCUSED_EXIT" > "$RECEIPT/phase.json"
+    printf '{"schema":"r20-native-r6-result-v1","status":"%s","product":{"expected":"%s","actual":"%s"},"request":{"ref":"%s","expected":"%s","actual":"%s"},"run_id":"%s","attempt":"%s","job_id":"%s","tries":0,"phase":"%s","inner_exit":%s,"focused_test_exit":%s,"running_after":%s,"action_manifest_valid":%s}\n' "$STATUS" "$PRODUCT_EXPECTED" "$PRODUCT_ACTUAL" "$REQUEST_REF" "$REQUEST_EXPECTED" "$REQUEST_ACTUAL" "$RUN_ID" "$ATTEMPT" "$JOB_ID" "$PHASE" "$INNER" "$FOCUSED_EXIT" "$(test "$STATUS" = passed && printf false || printf null)" "$(test "$ACTION_MANIFEST_VALID" -eq 1 && printf true || printf false)" > "$RECEIPT/result.json"
+    printf 'R-20-NATIVE-R6 status=%s phase=%s inner_exit=%s\n' "$STATUS" "$PHASE" "$INNER" > "$RECEIPT/SUMMARY.txt"
     (cd "$RECEIPT" && rm -f SHA256SUMS && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort | xargs -r sha256sum > SHA256SUMS)
     exit "$INNER"
 artifacts:
   - /workspace/out/job.log
   - /workspace/out/exit-codes.txt
-  - /workspace/out/r20-native-r5-c50e5c3fd3e6-1/**
+  - /workspace/out/r20-native-r6-c50e5c3fd3e6-*/**
