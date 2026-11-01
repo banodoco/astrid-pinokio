@@ -1,0 +1,111 @@
+name: M4-6 Pinokio venue driver
+
+on:
+  workflow_dispatch:
+    inputs:
+      binding_path:
+        description: Path to an externally provisioned R-24/R-36 execution binding; empty remains fail-closed.
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      binding_path:
+        description: Path to an externally provisioned R-24/R-36 execution binding.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  m4-6-slot:
+    name: ${{ matrix.slot_id }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slot_id: pinokio-backend-macos
+            runner: macos-14
+            workflow_shell: bash
+          - slot_id: pinokio-backend-linux
+            runner: ubuntu-24.04
+            workflow_shell: bash
+          - slot_id: pinokio-backend-windows
+            runner: windows-2022
+            workflow_shell: powershell
+          - slot_id: pinokio-fully-local-macos
+            runner: macos-14
+            workflow_shell: bash
+          - slot_id: pinokio-fully-local-linux
+            runner: ubuntu-24.04
+            workflow_shell: bash
+          - slot_id: pinokio-fully-local-windows
+            runner: windows-2022
+            workflow_shell: powershell
+    env:
+      R25_M4_6_BINDING: ${{ inputs.binding_path }}
+      R25_PACKET_DIR: ${{ github.workspace }}/.r25-packet/docs/merge-plan/venue/M-PIN/R-25
+      R25_PRODUCT_DIR: ${{ github.workspace }}/.r25-product
+      R25_EVIDENCE_DIR: ${{ github.workspace }}/m4-6-evidence
+    steps:
+      # This checkout is the immutable driver/workflow source. The product
+      # under test is deliberately checked out separately below.
+      - name: Checkout driver lane
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout immutable Pinokio product
+        uses: actions/checkout@v4
+        with:
+          repository: banodoco/astrid-pinokio
+          ref: 89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4
+          path: .r25-product
+          persist-credentials: false
+
+      - name: Checkout immutable RC-0 packet
+        uses: actions/checkout@v4
+        with:
+          repository: banodoco/astrid-pinokio
+          ref: ca8b3bf6e6b2283c90e131c189e2ebd3e53148d6
+          path: .r25-packet
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+
+      - name: Execute fail-closed slot driver (macOS/Linux)
+        if: matrix.workflow_shell == 'bash'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/venue/m4-6-driver.mjs \
+            --packet-dir "$R25_PACKET_DIR" \
+            --slot "${{ matrix.slot_id }}" \
+            --output-dir "$R25_EVIDENCE_DIR" \
+            --driver-checkout "$GITHUB_WORKSPACE" \
+            --product-checkout "$R25_PRODUCT_DIR"
+
+      - name: Execute fail-closed slot driver (Windows)
+        if: matrix.workflow_shell == 'powershell'
+        shell: powershell
+        run: |
+          node .github/venue/m4-6-driver.mjs `
+            --packet-dir $env:R25_PACKET_DIR `
+            --slot "${{ matrix.slot_id }}" `
+            --output-dir $env:R25_EVIDENCE_DIR `
+            --driver-checkout $env:GITHUB_WORKSPACE `
+            --product-checkout $env:R25_PRODUCT_DIR
+
+      - name: Upload sanitized slot receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m4-6-${{ matrix.slot_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: m4-6-evidence
+          if-no-files-found: error
+          retention-days: 30

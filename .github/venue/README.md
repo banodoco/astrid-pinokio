@@ -1,5 +1,28 @@
 # Headless Pinokio venue spike
 
+## M4-6 driver
+
+`.github/workflows/m4-6-venue.yml` dispatches the six immutable RC-0 slots.
+It checks out this driver lane, the product base
+`89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4`, and the packet commit
+`ca8b3bf6e6b2283c90e131c189e2ebd3e53148d6` separately. The driver verifies
+all five packet files before it selects a slot.
+
+`m4-6-driver.mjs` accepts only an externally provisioned
+`r25-m4-6-execution-binding.v1` that names a real Pinokio daemon provider,
+the fixture/profile, an installed-product digest, and R-36 collector and
+verifier references. It launches the provider once for each M4-6 scenario
+group and records only bounded result fields and artifact hashes. Shell and
+inline-eval provider commands, fake-kernel declarations, wrong tuples, dirty
+product checkouts, missing bindings, and OS mismatches are refused.
+
+No binding in this repository is accepted authority. With no accepted external
+R-24/R-36 bindings the driver writes one sanitized receipt with
+`AWAITING_BINDINGS` and exits nonzero. Even when an external provider reports
+all local scenario observations, the receipt remains
+`AWAITING_R36_VERIFICATION` and non-qualifying. The Reset spike and smoke
+tests below cannot satisfy M4-6.
+
 The lane-push and manually dispatched workflow probes macOS and Windows separately from the fake-kernel CI smoke. Linux runs on RunPod with pinokiod `add4a674ad1ba95bb62ec427fce519fe5bf0e9bf` and PTerm `5be43718701c448b43daf0ce51d8935f170065bb`, installed from their lockfiles. The script also retains its Docker mode; the upstream Dockerfile uses a mutable Node base and downloads unpinned seed dependencies.
 
 The disposable registered Astrid checkout contains no installation. PTerm starts the real `pinokio/reset.js` against `pinokio://127.0.0.1:42000/api/astrid`. A separate daemon socket must observe both Reset step results, the normal stop event, and disconnect; a fresh status query must report not running. The host checks that the program directory remains absent. A CLI exit alone is not accepted. This proves only this empty-state action, not install, runtime ownership, or the six M4-6 scenarios. Missing events, timeouts, or errors fail closed.
