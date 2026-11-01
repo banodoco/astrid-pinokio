@@ -1,0 +1,41 @@
+repos:
+  astrid-pinokio: lane/M-PIN/R-21-R5-wip
+gpu: false
+max_minutes: 60
+setup:
+  - >-
+    set -euo pipefail;
+    TASK_TMP="$PWD/runpod-tmp";
+    mkdir -p "$TASK_TMP" "$PWD/runpod-evidence";
+    apt-get update -qq;
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates curl git python3 python3-pip python3-venv;
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -;
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs;
+    python3 -m pip install --quiet 'pytest==9.0.2' 'uv==0.11.32';
+    git clone -q https://github.com/banodoco/astrid-agent.git "$TASK_TMP/astrid-agent";
+    git -C "$TASK_TMP/astrid-agent" checkout -q --detach 017472bf3e26ad8567accce88991942d094c71c8;
+    git -C "$TASK_TMP/astrid-agent" fetch -q --no-tags --depth=1 origin a53ef0c257e4b0bbc2a65959b9119e2cb4cff453;
+    git clone -q https://github.com/banodoco/astrid-runtime.git "$TASK_TMP/astrid-runtime";
+    git -C "$TASK_TMP/astrid-runtime" checkout -q --detach ecc9f1533234d33bfc082b34e1dc4e18a22e3f3d;
+    git -C "$TASK_TMP/astrid-runtime" fetch -q --no-tags --depth=1 origin 11443b0b5b34bd5b36725504fb083146192a759d 959ce04fcf91351903c361d03e6b19eb0bbe8587 efcb3264e854fc312faa0bc6e702a9034edc2e06;
+    python3 -m pip install --quiet --no-deps -e "$TASK_TMP/astrid-runtime" -e "$TASK_TMP/astrid-agent"
+run:
+  - >-
+    set -euo pipefail;
+    test "$(git rev-parse HEAD)" = 49224838b0c34af96ed5304179953e590cb961ea;
+    PINOKIO_ROOT="$PWD";
+    export TMPDIR="$PWD/runpod-tmp" UV_CACHE_DIR="$PWD/runpod-tmp/uv-cache" ASTRID_R17_CANDIDATE_CHECKOUT="$PWD/runpod-tmp/astrid-agent";
+    node --test tests/launcher.test.mjs tests/old-launcher-first-click.test.mjs tests/r21-old-launcher-stop-retry.test.mjs 2>&1 | tee runpod-evidence/launcher.tap;
+    node --test tests/r21-r17-candidate-binding.test.mjs 2>&1 | tee runpod-evidence/r17-binding.tap;
+    test "$(git -C "$ASTRID_R17_CANDIDATE_CHECKOUT" rev-parse HEAD)" = 017472bf3e26ad8567accce88991942d094c71c8;
+    test "$(git -C "$PWD/runpod-tmp/astrid-runtime" rev-parse HEAD)" = ecc9f1533234d33bfc082b34e1dc4e18a22e3f3d;
+    set +e;
+    cd "$ASTRID_R17_CANDIDATE_CHECKOUT";
+    ASTRID_CI_JOB=lanes-integration ASTRID_RUNTIME_CHECKOUT="$PINOKIO_ROOT/runpod-tmp/astrid-runtime" ASTRID_PINOKIO_CHECKOUT="$PINOKIO_ROOT" python3 -m pytest -q -m integration -o tmp_path_retention_policy=all "tests/test_installer_pinokio_stopped_update.py::test_canonical_stop_then_fresh_update_cli_uses_retained_c1_authority[stopped-backend]" "tests/test_installer_pinokio_stopped_update.py::test_canonical_stop_then_fresh_update_cli_uses_retained_c1_authority[stopped-local]" 2>&1 | tee "$PINOKIO_ROOT/runpod-evidence/r17-real-subprocess.tap";
+    r17_status=${PIPESTATUS[0]};
+    set -e;
+    printf '{"schema":"r21-r17-preflight-v1","pinokio":"%s","agent":"%s","runtime":"%s","r17_subprocess_exit":%s}\n' "$(git -C "$PINOKIO_ROOT" rev-parse HEAD)" "$(git rev-parse HEAD)" "$(git -C "$PINOKIO_ROOT/runpod-tmp/astrid-runtime" rev-parse HEAD)" "$r17_status" > "$PINOKIO_ROOT/runpod-evidence/identity.json";
+    sha256sum "$PINOKIO_ROOT"/runpod-evidence/* > "$PINOKIO_ROOT/runpod-evidence/SHA256SUMS";
+    exit "$r17_status"
+artifacts:
+  - 'runpod-evidence/**'
