@@ -1327,3 +1327,63 @@ test('fully-local Update route stages failure, promotes success, and reports ins
     assert.deepEqual(fs.readdirSync(programs).filter((file) => file.startsWith('astrid-update')), []);
   }
 });
+
+test('Update preflight failure, separate Stop and rebuilt retry preserve ordering in fixtures', async () => {
+  for (const mode of ['backend', 'local']) {
+    const events = [];
+    let refuse = true;
+    const base = fakeApp('linux', '', mode);
+    const app = library.createApp({ platform: 'linux', appDirectory: base.APP_DIR, environment: {},
+      filesystem: {
+        readFileSync(file) {
+          if (file.endsWith('install-mode.json')) return JSON.stringify({ schema_version: 1, mode });
+          throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+        },
+        existsSync: (file) => file === base.PROGRAMS_DIR,
+      },
+      lifecycle: {
+        preflightStop: async () => { events.push('preflight'); if (refuse) throw new Error('fixture preflight failure'); },
+        requestGracefulStop: async () => { events.push('graceful-stop'); },
+        waitForInstallerLock: async () => { events.push('lock'); },
+      },
+      localUpdateOperations: {
+        installation: async () => ({}), ready: async () => true,
+        prepare: async () => {
+          events.push('prepare');
+          return { old: { revision: 'fixture' }, snapshot: async () => ({ revision: 'fixture' }),
+            cleanup: async () => { events.push('cleanup'); } };
+        },
+        promote: async () => { events.push('promote'); },
+        installer: async () => { events.push('installer'); return { status: 0 }; },
+      },
+    });
+    app.validateExistingEditorCheckout = () => true;
+    const uri = app.paths.join(app.APP_DIR, 'pinokio', 'start.js');
+    const kernel = { api: { running: { [uri]: true }, stop: async () => {
+      events.push('kernel-stop'); delete kernel.api.running[uri];
+    } } };
+    const update = load('pinokio/update.js', app);
+    const first = await update();
+    await assert.rejects(first.run[0].method({}, () => {}, kernel), /fixture preflight failure/);
+    assert.deepEqual(events, mode === 'backend' ? ['preflight'] : ['prepare', 'preflight', 'cleanup']);
+    assert.equal(kernel.api.running[uri], true);
+
+    refuse = false;
+    events.length = 0;
+    const stop = load('pinokio/stop.js', app);
+    await stop.run[0].method({}, () => {}, kernel);
+    assert.deepEqual(events, ['preflight', 'graceful-stop', 'kernel-stop', 'lock']);
+    assert.equal(kernel.api.running[uri], undefined);
+
+    events.length = 0;
+    const retry = await update();
+    await retry.run[0].method({}, () => {}, kernel);
+    if (mode === 'backend') {
+      assert.deepEqual(events, ['preflight']);
+      assert.deepEqual(Array.from(retry.run.slice(1), (step) => step.method), ['shell.run', 'shell.run']);
+    } else {
+      assert.deepEqual(events, ['prepare', 'preflight', 'lock', 'promote', 'installer', 'cleanup']);
+      assert.equal(retry.run[1].method, 'script.start');
+    }
+  }
+});
