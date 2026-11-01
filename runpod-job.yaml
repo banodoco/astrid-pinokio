@@ -1,0 +1,12 @@
+repos:
+  astrid-pinokio: f6cf07671c63d797c4e5f44f94265ab9a0bf3e35
+gpu: false
+max_minutes: 60
+setup:
+  - 'curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs git'
+  - 'mkdir -p "$PWD/runpod-tmp" "$PWD/runpod-evidence"'
+run:
+  - 'export TMPDIR="$PWD/runpod-tmp"; node --version | tee runpod-evidence/node.txt; git rev-parse HEAD | tee runpod-evidence/head.txt; uname -a | tee runpod-evidence/platform.txt; set -o pipefail; node --test --test-name-pattern="fully-local Update route stages failure, promotes success, and reports installer failure" tests/launcher.test.mjs 2>&1 | tee runpod-evidence/controlled-failure.txt'
+  - 'sha256sum runpod-evidence/*.txt > runpod-evidence/SHA256SUMS'
+artifacts:
+  - 'runpod-evidence/**'
