@@ -10,7 +10,7 @@ async function command(command, args, options) {
   return exec(command, args, { ...options, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
 }
 
-async function buildWithSession(options) {
+export async function buildWithSession(options) {
   const { runSession, commands } = await import('./session.mjs');
   if (!options.running) return runSession(options);
   // The selected, healthy Runtime is already owned by Start. The app's build

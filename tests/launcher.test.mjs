@@ -1198,6 +1198,7 @@ test('isolated update preparation preserves the checkout and reports build and r
 
 test('fully-local Update route stages failure, promotes success, and reports installer failure', async (t) => {
   const { execFileSync } = await import('node:child_process');
+  const { buildWithSession } = await import('../pinokio/update-stage.mjs');
   for (const outcome of ['build failure', 'success', 'installer failure']) {
     const parent = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'pinokio-route-'));
     t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
@@ -1216,6 +1217,12 @@ test('fully-local Update route stages failure, promotes success, and reports ins
     fs.mkdirSync(path.join(seed, 'public'));
     fs.writeFileSync(path.join(seed, '.gitignore'), 'dist/\nnode_modules/\n');
     fs.writeFileSync(path.join(seed, 'public/install-manifest.json'), '{"release":1}');
+    fs.mkdirSync(path.join(seed, 'scripts'));
+    fs.writeFileSync(path.join(seed, 'scripts', 'dev-local-workspace.mjs'), `import fs from 'node:fs';
+      if (process.env.FIXTURE_BUILD_FAIL === '1') { console.error('controlled build failure'); process.exit(7); }
+      fs.mkdirSync('dist'); fs.writeFileSync('dist/build.json', JSON.stringify({ app: process.env.VITE_APP_BUILD, release: 2 }));`);
+    const npx = path.join(parent, 'fixture-npx.cjs');
+    fs.writeFileSync(npx, "require('node:fs').mkdirSync('node_modules'); require('node:fs').writeFileSync('node_modules/new', 'candidate dependencies');");
     git(seed, 'add', '.'); git(seed, 'commit', '-m', 'old'); git(seed, 'push', 'origin', 'main');
     git(programs, 'clone', remote, editor);
     const old = git(editor, 'rev-parse', 'HEAD');
@@ -1234,19 +1241,16 @@ test('fully-local Update route stages failure, promotes success, and reports ins
       lifecycle: { preflightStop: async () => { events.push('preflight'); },
         requestGracefulStop: async () => { events.push('stop'); ready = false; }, waitForInstallerLock: async () => {} },
       localUpdateOperations: {
-        installation: async () => ({ env: {} }), ready: async () => ready,
+        installation: async () => ({ node: process.execPath, npx, env: { ...process.env, FIXTURE_BUILD_FAIL: outcome === 'build failure' ? '1' : '0' } }), ready: async () => ready,
         run: async (cmd, args, options) => {
           assert.equal(cmd, 'git');
           const mapped = args.map((arg) => arg === library.EDITOR_REPOSITORY ? remote : arg);
           return { stdout: git(options.cwd, ...mapped) };
         },
-        build: async ({ editor: candidate, running }) => {
-          events.push('build'); assert.equal(running, true); assert.equal(ready, true);
-          assert.notEqual(candidate, editor);
-          if (outcome === 'build failure') throw new Error('controlled build failure');
-          fs.mkdirSync(path.join(candidate, 'dist')); fs.mkdirSync(path.join(candidate, 'node_modules'));
-          fs.writeFileSync(path.join(candidate, 'dist', 'build.json'), JSON.stringify({ app: target, release: 2 }));
-          fs.writeFileSync(path.join(candidate, 'node_modules', 'new'), 'candidate dependencies');
+        build: async (options) => {
+          events.push('build'); assert.equal(options.running, true); assert.equal(ready, true);
+          assert.notEqual(options.editor, editor);
+          await buildWithSession(options);
         },
         installer: async (_cmd, args) => {
           events.push('installer'); assert.equal(git(editor, 'rev-parse', 'HEAD'), target);
