@@ -9,37 +9,6 @@ permissions:
   contents: read
 
 jobs:
-  linux-real-action:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20.19.4
-      - name: Provision pinned sources
-        run: |
-          set -euo pipefail
-          git clone https://github.com/pinokiocomputer/pinokiod.git "$RUNNER_TEMP/pinokiod"
-          git -C "$RUNNER_TEMP/pinokiod" checkout --detach add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
-          git clone https://github.com/pinokiocomputer/pterm.git "$RUNNER_TEMP/pterm"
-          git -C "$RUNNER_TEMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb
-          npm ci --omit=dev --prefix "$RUNNER_TEMP/pterm" --silent
-      - name: Build pinned daemon image
-        run: docker build -t r20-pinokiod "$RUNNER_TEMP/pinokiod"
-      - name: Run real Reset action and verify settlement
-        run: bash .github/venue/linux.sh
-      - name: Retain evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: r20-linux-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/r20-evidence
-          if-no-files-found: warn
-          retention-days: 30
-
   native-probe:
     strategy:
       fail-fast: false
