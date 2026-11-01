@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-const { diagnostic, parse } = createRequire(import.meta.url)('../.github/venue/observer-probe/probe.cjs');
+const { diagnostic, parse, unavailableResult } = createRequire(import.meta.url)('../.github/venue/observer-probe/probe.cjs');
 
 test('missing, malformed and gaps fail closed', () => {
   assert.equal(diagnostic([]), 'unknown:source-missing');
@@ -19,4 +19,12 @@ test('native probe results require fixed fields and numeric statuses', () => {
   assert.throws(() => parse('etw-kernel-process', '{}'));
   assert.throws(() => parse('endpoint-security', '{'));
   assert.throws(() => parse('endpoint-security', '{"source":"endpoint-security","new_client_result":0,"delete_client_result":0,"created":1,"cleanup_ok":1,"not_entitled":3,"not_permitted":4,"not_privileged":5,"extra":0}'));
+});
+
+test('unavailable SDK remains unknown and fail-closed', () => {
+  const result = unavailableResult();
+  assert.equal(result.status, 'unknown');
+  assert.equal(result.continuity, 'unavailable');
+  assert.equal(result.authority, 'none');
+  assert.equal(result.error, 'sdk-framework-unavailable');
 });

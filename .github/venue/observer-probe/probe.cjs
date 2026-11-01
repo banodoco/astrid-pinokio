@@ -26,17 +26,28 @@ function parse(source, raw) {
   if (!x || x.source !== source || Object.keys(x).sort().join(',') !== ['source', ...fields].sort().join(',') || fields.some(k => !Number.isSafeInteger(x[k]) || x[k] < -1 || x[k] > 4294967295)) throw Error('malformed-result');
   return x;
 }
+function baseResult() {
+  return { platform: process.platform, arch: process.arch, os_release: os.release(), node: process.version, status: 'unknown', continuity: 'unavailable', authority: 'none' };
+}
+function unavailableResult(error = 'sdk-framework-unavailable') {
+  return { ...baseResult(), error };
+}
 function run() {
   const platform = process.platform;
-  const result = { platform, arch: process.arch, os_release: os.release(), node: process.version, status: 'unknown', continuity: 'unavailable', authority: 'none' };
+  const result = baseResult();
   const opts = { encoding: 'utf8', timeout: 20000, maxBuffer: 4096, windowsHide: true };
   try {
     let raw, source;
     if (platform === 'darwin') {
       source = 'endpoint-security';
+      if (process.env.R25_ES_SDK_AVAILABLE !== 'true') {
+        result.error = ['sdk-path-unavailable', 'sdk-framework-unavailable', 'sdk-link-unavailable'].includes(process.env.R25_ES_SDK_ERROR) ? process.env.R25_ES_SDK_ERROR : 'sdk-framework-unavailable';
+        throw Error(result.error);
+      }
       const exe = path.join(os.tmpdir(), `r25-es-${process.pid}`);
       try {
-        execFileSync('/usr/bin/clang', ['-fblocks', '-framework', 'EndpointSecurity', path.join(__dirname, 'macos.c'), '-o', exe], opts);
+        if (!process.env.SDKROOT) throw Error('sdk-path-unavailable');
+        execFileSync('/usr/bin/clang', ['-isysroot', process.env.SDKROOT, '-fblocks', '-framework', 'EndpointSecurity', path.join(__dirname, 'macos.c'), '-o', exe], opts);
         raw = execFileSync(exe, [], opts);
       } finally { try { fs.unlinkSync(exe); } catch {} }
     } else if (platform === 'win32') {
@@ -46,9 +57,12 @@ function run() {
     result.probe = parse(source, raw);
     if (source === 'endpoint-security' && result.probe.created === 1 && result.probe.cleanup_ok !== 1) result.cleanup = 'failed';
     if (source === 'etw-kernel-process' && result.probe.start_status === 0 && result.probe.stop_status !== 0) result.cleanup = 'failed';
-  } catch (e) { result.error = e.message === 'unsupported-platform' || e.message === 'malformed-result' ? e.message : 'source-command-failed'; }
+  } catch (e) {
+    if (['sdk-path-unavailable', 'sdk-framework-unavailable', 'sdk-link-unavailable', 'unsupported-platform', 'malformed-result'].includes(e.message)) result.error = e.message;
+    else result.error = 'source-command-failed';
+  }
   fs.writeFileSync('observer-probe-result.json', JSON.stringify(result, null, 2) + '\n', { mode: 0o600 });
   if (result.cleanup === 'failed' || result.error) process.exitCode = 1;
 }
 if (require.main === module) run();
-module.exports = { diagnostic, parse };
+module.exports = { diagnostic, parse, unavailableResult };

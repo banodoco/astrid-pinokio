@@ -1,7 +1,7 @@
 name: R-25 observer source probe
 on:
   push:
-    branches: ['lane/M-PIN/R-25-SOURCES']
+    branches: ['lane/M-PIN/R-25-SOURCES', 'lane/M-PIN/R-25-SOURCES-R1']
 permissions:
   contents: read
 jobs:
@@ -19,6 +19,46 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
+      - name: Select and probe macOS SDK
+        if: runner.os == 'macOS'
+        run: |
+          set -u
+          facts_dir="$RUNNER_TEMP/r25-source-probe"
+          mkdir -p "$facts_dir"
+          sdk="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+          sdk_version="$(xcrun --sdk macosx --show-sdk-version 2>/dev/null || true)"
+          xcode_path="$(xcode-select -p 2>/dev/null || true)"
+          xcode_version="$(xcodebuild -version 2>/dev/null | sed -n 's/^Xcode //p' | head -n 1 || true)"
+          framework_present=false
+          minimal_link=false
+          sdk_error=sdk-path-unavailable
+          if [ -n "$sdk" ] && [ -d "$sdk/System/Library/Frameworks/EndpointSecurity.framework" ]; then
+            framework_present=true
+            sdk_error=sdk-link-unavailable
+            if printf 'int main(void) { return 0; }\n' | /usr/bin/clang -x c -isysroot "$sdk" -framework EndpointSecurity -o "$facts_dir/link-probe" - >/dev/null 2>&1; then
+              minimal_link=true
+              sdk_error=''
+              printf 'SDKROOT=%s\n' "$sdk" >> "$GITHUB_ENV"
+            fi
+          elif [ -n "$sdk" ]; then
+            sdk_error=sdk-framework-unavailable
+          fi
+          SDK_PATH="$sdk" SDK_VERSION="$sdk_version" XCODE_PATH="$xcode_path" XCODE_VERSION="$xcode_version" FRAMEWORK_PRESENT="$framework_present" MINIMAL_LINK="$minimal_link" SDK_ERROR="$sdk_error" node > "$facts_dir/sdk-facts.json" <<'NODE'
+          const facts = {
+            xcode_select_path: process.env.XCODE_PATH,
+            xcode_version: process.env.XCODE_VERSION,
+            sdk_path: process.env.SDK_PATH,
+            sdk_version: process.env.SDK_VERSION,
+            framework_present: process.env.FRAMEWORK_PRESENT === 'true',
+            minimal_link: process.env.MINIMAL_LINK === 'true',
+            available: process.env.MINIMAL_LINK === 'true',
+            error: process.env.SDK_ERROR || null
+          };
+          process.stdout.write(JSON.stringify(facts, null, 2) + '\n');
+          NODE
+          printf 'R25_ES_SDK_AVAILABLE=%s\n' "$minimal_link" >> "$GITHUB_ENV"
+          printf 'R25_ES_SDK_ERROR=%s\n' "$sdk_error" >> "$GITHUB_ENV"
+          cat "$facts_dir/sdk-facts.json"
       - name: Focused observer tests
         run: node --test tests/native-observer-source.test.mjs
       - name: Probe source and retain allowlisted facts
@@ -28,6 +68,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: r25-source-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: observer-probe-result.json
+          path: |
+            observer-probe-result.json
+            ${{ runner.temp }}/r25-source-probe/sdk-facts.json
           if-no-files-found: warn
           retention-days: 30
