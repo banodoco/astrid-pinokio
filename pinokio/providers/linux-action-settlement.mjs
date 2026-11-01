@@ -38,7 +38,8 @@ function checkpoint(record) {
  * The daemon subscribes this same socket before invoking process(req), but does
  * not acknowledge admission or provide a unique execution ID. Always unknown.
  */
-export async function observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, timeoutMs = 120000 }) {
+export async function observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, timeoutMs = 120000,
+  startAction, subscriptionDelayMs = 3000 }) {
   if (process.platform !== 'linux') throw new Error('Linux required');
   let address;
   try { address = new URL(endpoint); } catch {}
@@ -48,7 +49,9 @@ export async function observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, t
       typeof uri !== 'string' || !path.isAbsolute(uri) || path.normalize(uri) !== uri ||
       path.basename(uri) !== 'reset.js' || path.basename(path.dirname(uri)) !== 'pinokio' ||
       !Number.isSafeInteger(daemonPid) || daemonPid < 1 ||
-      !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) {
+      !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000 ||
+      (startAction !== undefined && typeof startAction !== 'function') ||
+      !Number.isSafeInteger(subscriptionDelayMs) || subscriptionDelayMs < 0 || subscriptionDelayMs > 10000) {
     throw new TypeError('invalid Reset observation parameters');
   }
   const records = [];
@@ -63,25 +66,54 @@ export async function observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, t
   const request = JSON.stringify({ uri, source: 'pterm', client: { source: 'pterm' } });
   const requestBytes = Buffer.from(request);
   record('engine-request', { request_utf8: request, request_sha256: sha256(requestBytes), resource: uri,
-    engine_request_id: null, engine_execution_id: null });
+    engine_request_id: null, engine_execution_id: null,
+    dispatch: startAction ? 'external-pterm' : 'socket-request' });
 
   let action, status;
   let terminalCount = 0, disconnectCount = 0, sawDisconnect = false, statusValue = null;
   let finishAction;
   const actionDone = new Promise(resolve => { finishAction = resolve; });
-  let timer, observedBytes = 0;
+  let timer, subscriptionTimer, observedBytes = 0;
+  let finishDispatch = () => {};
+  const dispatchDone = new Promise(resolve => { finishDispatch = resolve; });
   let actionActive = true, dispatchAllowed = true;
   try {
     action = new WebSocket(endpoint, { headers: { 'x-pinokio-client': 'pterm' } });
     const timed = new Promise(resolve => { timer = setTimeout(() => { dispatchAllowed = false; issues.add('action-timeout'); resolve(); }, timeoutMs); });
     action.addEventListener('open', () => {
       if (!actionActive || !dispatchAllowed) return;
-      dispatchAllowed = false;
-      try { action.send(request); record('dispatch', { sent: true }); }
-      catch { issues.add('dispatch-failed'); finishAction(); }
+      if (!startAction) {
+        dispatchAllowed = false;
+        try { action.send(request); record('dispatch', { sent: true, kind: 'socket-request' }); }
+        catch { issues.add('dispatch-failed'); finishAction(); }
+        finishDispatch();
+        return;
+      }
+      // pinokiod does not acknowledge the subscription. Listen first, wait a
+      // bounded interval, then let the pinned PTerm path create the action.
+      try {
+        action.send(JSON.stringify({ uri, mode: 'listen' }));
+        record('subscription', { sent: true, resource: uri, delay_ms: subscriptionDelayMs });
+      } catch {
+        issues.add('subscription-send-failed');
+        finishDispatch();
+        finishAction();
+        return;
+      }
+      subscriptionTimer = setTimeout(() => {
+        subscriptionTimer = undefined;
+        if (!actionActive || !dispatchAllowed) { finishDispatch(); return; }
+        dispatchAllowed = false;
+        record('dispatch', { sent: true, kind: 'external-pterm' });
+        Promise.resolve(startAction()).then(finishDispatch, () => {
+          issues.add('external-action-failed');
+          finishAction();
+          finishDispatch();
+        });
+      }, subscriptionDelayMs);
     });
-    action.addEventListener('error', () => { if (actionActive) { dispatchAllowed = false; issues.add('action-socket-error'); finishAction(); } });
-    action.addEventListener('close', () => { if (actionActive) { dispatchAllowed = false; if (!sawDisconnect) issues.add('action-socket-closed-early'); finishAction(); } });
+    action.addEventListener('error', () => { if (actionActive) { dispatchAllowed = false; issues.add('action-socket-error'); finishDispatch(); finishAction(); } });
+    action.addEventListener('close', () => { if (actionActive) { dispatchAllowed = false; if (!sawDisconnect) issues.add('action-socket-closed-early'); finishDispatch(); finishAction(); } });
     action.addEventListener('message', event => {
       if (!actionActive) return;
       try {
@@ -102,7 +134,9 @@ export async function observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, t
         if (packet.type === 'disconnect') { disconnectCount++; sawDisconnect = true; finishAction(); }
       } catch { issues.add('invalid-or-overlimit-action-frame'); finishAction(); }
     });
-    await Promise.race([actionDone, timed]);
+    // The externally started PTerm must return as well as the observer seeing
+    // its terminal stream. A CLI exit alone is still not a settled action.
+    await Promise.race([Promise.all([actionDone, dispatchDone]), timed]);
     clearTimeout(timer);
     // Keep the action listener open during the separate, same-resource status
     // query; a disconnect packet alone is not a terminal success or a barrier.
@@ -133,7 +167,11 @@ export async function observeLinuxReset({ WebSocket, endpoint, uri, daemonPid, t
       status.addEventListener('close', () => { if (!done) { issues.add('status-socket-closed-early'); end(); } });
     });
   } catch { issues.add('socket-setup-failed'); }
-  finally { actionActive = false; dispatchAllowed = false; clearTimeout(timer); try { action?.close(); } catch {} try { status?.close(); } catch {} }
+  finally {
+    actionActive = false; dispatchAllowed = false; finishDispatch();
+    clearTimeout(timer); clearTimeout(subscriptionTimer);
+    try { action?.close(); } catch {} try { status?.close(); } catch {}
+  }
   if (terminalCount !== 1) issues.add(terminalCount ? 'duplicate-terminal' : 'terminal-unavailable');
   if (disconnectCount !== 1) issues.add(disconnectCount ? 'duplicate-disconnect' : 'disconnect-unavailable');
   if (statusValue !== false) issues.add('idle-not-observed');

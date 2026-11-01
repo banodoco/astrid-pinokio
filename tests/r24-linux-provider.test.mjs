@@ -17,6 +17,12 @@ test('Linux provider exposes the bounded producers without promoting their outpu
   assert.equal(provider.fault.installPreflightOutputFault, installPreflightOutputFault);
   assert.equal(provider.fault.withPreflightOutputFault, withPreflightOutputFault);
   assert.equal(provider.custody.captureCheckpoint, captureLinuxCustodyCheckpoint);
+  assert.equal(provider.realEngine.state, 'not-run');
+  assert.equal(provider.realEngine.qualification, 'closed');
+  assert.deepEqual(provider.realEngine.externalAwait.map((entry) => entry.id), ['R-06', 'R-15', 'R-36']);
+  assert.equal(provider.realEngine.fault.installPreflightOutputFault, installPreflightOutputFault);
+  assert.equal(provider.realEngine.fault.withPreflightOutputFault, withPreflightOutputFault);
+  assert.equal(provider.realEngine.fault.state, 'not-run');
   assert.throws(() => provider.requireTrustedQualification(), /R-36 trusted collector\/verifier/);
   assert.ok(Object.isFrozen(provider));
   assert.ok(Object.isFrozen(provider.settlement));
@@ -36,11 +42,15 @@ test('M4 harness plans name external awaits and reject noncanonical harness iden
     assert.equal(harness.kind, 'pinokio-linux-m4-harness');
     assert.equal(harness.state, 'not-run');
     assert.equal(harness.qualification, 'closed');
+    assert.deepEqual(harness.externalAwait, harness.await);
     assert.deepEqual(harness.producers, {
       settlement: 'diagnostic-only', preflightFault: 'diagnostic-only', custody: 'diagnostic-only',
     });
     assert.ok(Object.isFrozen(harness));
   }
+  assert.equal(update.externalAwait[0].receipt, 'approved stand-in R2 identity and Pinokio-path receipt');
+  assert.equal(update.externalAwait[1].receipt, 'approved same-operation recovery receipt');
+  assert.equal(update.externalAwait[3].receipt, 'trusted collector and verifier receipt');
   assert.throws(() => provider.prepareM4Harness('m4-4a'), /unknown Linux M4 harness/);
   assert.throws(() => provider.prepareM4Harness({}), /unknown Linux M4 harness/);
 });

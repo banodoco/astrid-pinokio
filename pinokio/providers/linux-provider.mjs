@@ -3,11 +3,13 @@
 import { observeLinuxReset } from './linux-action-settlement.mjs';
 import { captureLinuxCustodyCheckpoint } from './linux-custody-observations.mjs';
 import { installPreflightOutputFault, withPreflightOutputFault } from './linux-preflight-fault.mjs';
+import { EXTERNAL_AWAIT, JOURNEY_AWAITS, runNativeResetDiagnostic } from './linux-native-evidence-harness.mjs';
 
 const INTERFACE_SHA256 = '2f685c8aec21bef116f95645920717e4b12ef33c1ca820fe6185eb01ffea115d';
 
 const COMMON_AWAIT = Object.freeze([
   Object.freeze({ id: 'R-36',
+    receipt: 'trusted collector and verifier receipt',
     reason: 'trusted collector, approved profiles, immutable binding and verifier are unbound' }),
 ]);
 
@@ -32,8 +34,10 @@ const M4_HARNESSES = Object.freeze({
     id: 'M4-5',
     title: 'Pinokio Update from R1 to the approved stand-in R2',
     await: Object.freeze([
-      Object.freeze({ id: 'R-06', reason: 'approved stand-in R2 input is unbound' }),
-      Object.freeze({ id: 'R-15', reason: 'approved same-operation recovery input is unbound' }),
+      Object.freeze({ id: 'R-06', receipt: 'approved stand-in R2 identity and Pinokio-path receipt',
+        reason: 'approved stand-in R2 input is unbound' }),
+      Object.freeze({ id: 'R-15', receipt: 'approved same-operation recovery receipt',
+        reason: 'approved same-operation recovery input is unbound' }),
       Object.freeze({ id: 'R-21', reason: 'approved launcher integration for the Pinokio execution path is unbound' }),
       ...COMMON_AWAIT,
     ]),
@@ -56,6 +60,9 @@ function plan(harness) {
     state: 'not-run',
     qualification: 'closed',
     await: selected.await,
+    // This explicit spelling is for runner wiring. It is not accepted from a
+    // caller and cannot be replaced with a local fixture or a design digest.
+    externalAwait: selected.await,
     producers: Object.freeze({
       settlement: 'diagnostic-only',
       preflightFault: 'diagnostic-only',
@@ -79,6 +86,20 @@ export function createLinuxProviderSurface() {
     settlement: Object.freeze({ observeReset: observeLinuxReset, state: 'unknown' }),
     fault: Object.freeze({ installPreflightOutputFault, withPreflightOutputFault, state: 'unknown' }),
     custody: Object.freeze({ captureCheckpoint: captureLinuxCustodyCheckpoint, state: 'unknown' }),
+    realEngine: Object.freeze({
+      runNativeResetDiagnostic,
+      state: 'not-run',
+      qualification: 'closed',
+      externalAwait: Object.freeze([EXTERNAL_AWAIT['R-06'], EXTERNAL_AWAIT['R-15'], EXTERNAL_AWAIT['R-36']]),
+      fault: Object.freeze({
+        installPreflightOutputFault,
+        withPreflightOutputFault,
+        state: 'not-run',
+        qualification: 'closed',
+        externalAwait: Object.freeze([EXTERNAL_AWAIT['R-15'], EXTERNAL_AWAIT['R-21'], EXTERNAL_AWAIT['R-36']]),
+      }),
+      journeys: JOURNEY_AWAITS,
+    }),
     prepareM4Harness: plan,
     requireTrustedQualification() {
       throw new Error('Linux provider output is unbound; R-36 trusted collector/verifier is required.');

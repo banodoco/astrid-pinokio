@@ -7,7 +7,10 @@ import path from 'node:path';
 
 const MAX_SOURCE_BYTES = 1024 * 1024;
 const ACTION_FILES = Object.freeze([
-  'start.js', 'stop.js', 'update.js', 'lib.js', 'lifecycle.mjs', 'session.mjs',
+  // update-stage.mjs is the published R-22 fully-local candidate/restore
+  // implementation. Capturing it identifies only the source bytes selected by
+  // a native diagnostic; it does not establish that a build or restoration ran.
+  'start.js', 'stop.js', 'update.js', 'update-stage.mjs', 'lib.js', 'lifecycle.mjs', 'session.mjs',
 ]);
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 

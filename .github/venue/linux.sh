@@ -39,6 +39,7 @@ if [ "$mode" = native ]; then
   (cd "$RUNNER_TEMP/pinokiod" && exec env PINOKIO_HOME="$venue_home" PINOKIO_HTTPS_ACTIVE=0 PINOKIO_NETWORK_ACTIVE=0 node script/index.js) >/dev/null 2>&1 &
   daemon_pid=$!
   export R20_ACTION_URI="$venue_home/api/astrid/pinokio/reset.js"
+  export R20_DAEMON_PID="$daemon_pid"
 else
   docker run -d --name r20-pinokiod -p 127.0.0.1:42000:42000 \
     -e PINOKIO_HTTPS_ACTIVE=0 -e PINOKIO_NETWORK_ACTIVE=0 \
@@ -55,7 +56,11 @@ for i in $(seq 1 120); do
   sleep 2
 done
 test "$ready" = 1
-node .github/venue/observe.cjs
+if [ "$mode" = native ]; then
+  node .github/venue/r24-linux-real-engine.mjs
+else
+  node .github/venue/observe.cjs
+fi
 # Reset's expected disposable outcome is that no program directory exists.
 test ! -e "$venue_home/api/astrid/app"
 printf 'program directory absent after Reset\n' > "$out/postcondition.txt"

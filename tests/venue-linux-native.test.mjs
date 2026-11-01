@@ -18,11 +18,18 @@ for (const failObserver of [false, true]) test(`native Linux uses its own action
     script('curl', 'printf "{}\\n"');
     script('node', `if [ "$1" = -e ]; then exit 0; fi
 if [ "$1" = script/index.js ]; then echo "$$" > "$TEST_ROOT/daemon-pid"; exec sleep 60; fi
+if [ "$1" = .github/venue/r24-linux-real-engine.mjs ]; then
+  printf '%s' "$R20_ACTION_URI" > "$TEST_ROOT/action-uri"
+  printf 'invoked\\n' > "$TEST_ROOT/r24-native-runner"
+  exit ${failObserver ? 1 : 0}
+fi
+if [ "$1" = .github/venue/observe.cjs ]; then exit 97; fi
 printf '%s' "$R20_ACTION_URI" > "$TEST_ROOT/action-uri"
 exit ${failObserver ? 1 : 0}`);
     const result = spawnSync('bash', ['.github/venue/linux.sh'], { cwd: repo, encoding: 'utf8', timeout: 10000, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_ROOT: root, RUNNER_TEMP: runner, R20_LINUX_MODE: 'native', GITHUB_RUN_ID: 'test', GITHUB_RUN_ATTEMPT: '1' } });
     assert.equal(result.status, failObserver ? 1 : 0, result.stderr);
     assert.equal(readFileSync(path.join(root, 'action-uri'), 'utf8'), `${runner}/r20-home/api/astrid/pinokio/reset.js`);
+    assert.equal(readFileSync(path.join(root, 'r24-native-runner'), 'utf8'), 'invoked\n');
     assert.throws(() => readFileSync(path.join(root, 'docker-called')));
     assert.match(readFileSync(path.join(runner, 'r20-evidence', 'SHA256SUMS'), 'utf8'), /identity\.txt/);
     const pid = Number(readFileSync(path.join(root, 'daemon-pid'), 'utf8'));

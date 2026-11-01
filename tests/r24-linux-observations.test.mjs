@@ -9,7 +9,7 @@ import { captureActionSources, captureProcess } from '../pinokio/providers/linux
 
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const launcher = fileURLToPath(new URL('../pinokio/', import.meta.url));
-const names = ['start.js', 'stop.js', 'update.js', 'lib.js', 'lifecycle.mjs', 'session.mjs'];
+const names = ['start.js', 'stop.js', 'update.js', 'update-stage.mjs', 'lib.js', 'lifecycle.mjs', 'session.mjs'];
 
 test('captures exact fixed launcher source bytes without claiming evaluated action closure', async () => {
   const result = await captureActionSources(launcher);
