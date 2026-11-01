@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
@@ -263,7 +264,7 @@ test('hosted Update refuses at read-only preflight before the launcher pull', as
 });
 
 test('Update performs only installed-CLI recovery before any new launcher or manifest fetch', async (t) => {
-  const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'astrid-pinokio-recovery-'));
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-pinokio-recovery-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const appDirectory = path.join(temporary, 'pinokio', 'api', 'Astrid');
   const root = path.join(appDirectory, 'app', 'astrid');
@@ -973,7 +974,7 @@ test('owned partial install reaches the installer, while unowned, live and resid
     } });
     fs.mkdirSync(app.BACKEND_ROOT, { recursive: true });
     const marker = path.join(app.BACKEND_ROOT, 'install.json');
-    const selectionFile = path.join(home, '.local', 'share', 'astrid-install.json');
+    const selectionFile = path.join(home, ...(process.platform === 'win32' ? ['AppData', 'Local'] : ['.local', 'share']), 'astrid-install.json');
     const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); };
     const idle = { api: { running: {}, stop: () => assert.fail('no session') } };
     await assert.rejects(app.stopForUninstall({}, () => {}, idle), /unowned or incomplete/);
@@ -1011,7 +1012,7 @@ test('failed owned installation can finish through the installer uninstall route
     for (const step of script.run) {
       if (typeof step.method === 'function') await step.method({}, () => {}, { api: { running: {} } });
       else if (step.method === 'shell.run') {
-        assert.match(step.params.message, /--uninstall/);
+        assert.match(shellMessage(step, process.platform), /--uninstall/);
         calls.push('installer');
         // Simulate a successful installer-owned removal, including its lock and stop checks.
         fs.rmSync(app.BACKEND_ROOT, { recursive: true });
@@ -1042,7 +1043,7 @@ test('uninstall rechecks captured roots and current selection and preserves unre
     assert.ok(fs.existsSync(app.EDITOR_DIR));
     fs.unlinkSync(data);
     fs.symlinkSync(safe, data);
-    const selection = path.join(home, '.local', 'share', 'astrid-install.json');
+    const selection = path.join(home, ...(process.platform === 'win32' ? ['AppData', 'Local'] : ['.local', 'share']), 'astrid-install.json');
     fs.mkdirSync(path.dirname(selection), { recursive: true });
     fs.writeFileSync(selection, JSON.stringify({ realm_root: app.EDITOR_DIR }));
     assert.throws(() => app.finishUninstall(roots), /workspace roots overlap/);
@@ -1057,7 +1058,7 @@ test('uninstall rechecks captured roots and current selection and preserves unre
 test('isolated update preparation preserves the checkout and reports build and race failures', async (t) => {
   const { execFileSync } = await import('node:child_process');
   const { prepareCandidate } = await import('../pinokio/update-stage.mjs');
-  const parent = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'pinokio-stage-test-'));
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'pinokio-stage-test-'));
   t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
   const remote = path.join(parent, 'remote.git');
   const seed = path.join(parent, 'seed');
@@ -1200,7 +1201,7 @@ test('fully-local Update route stages failure, promotes success, and reports ins
   const { execFileSync } = await import('node:child_process');
   const { buildWithSession } = await import('../pinokio/update-stage.mjs');
   for (const outcome of ['build failure', 'success', 'installer failure']) {
-    const parent = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'pinokio-route-'));
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'pinokio-route-'));
     t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
     const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
     const remote = path.join(parent, 'remote.git');

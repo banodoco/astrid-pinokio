@@ -400,6 +400,8 @@ async function setup() {
   makeGitLauncher(pinokioGitDirectory);
   makeFfmpegGuard(guardDirectory);
   prepareCheckout(repository, appDirectory);
+  // Exercise branch selection through the launcher file in the disposable clone.
+  fs.writeFileSync(path.join(appDirectory, '_ENVIRONMENT'), 'ASTRID_APP_REF=feat/pinokio\n');
 
   const environment = makeEnvironment(pinokioHome, process.platform);
   assert.ok(environment && typeof environment === 'object', 'Pinokio env fixture must return an environment object');

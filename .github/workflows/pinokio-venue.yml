@@ -58,6 +58,21 @@ jobs:
           git clone https://github.com/pinokiocomputer/pterm.git "$RUNNER_TEMP/pterm"
           git -C "$RUNNER_TEMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb
           npm ci --omit=dev --prefix "$RUNNER_TEMP/pterm" --silent
+      # The pinned seed calls shell.init before the asynchronous kernel bin
+      # initialization has injected its modules. Wait for the daemon's own
+      # readiness promise before seeding; retain the upstream image and preset.
+      - name: Fix pinned seed startup ordering
+        run: |
+          node - "$RUNNER_TEMP/pinokiod/script/install-mode.js" <<'NODE'
+          const fs = require('fs');
+          const file = process.argv[2];
+          const source = fs.readFileSync(file, 'utf8');
+          const before = '  await kernel.shell.init()\n  await kernel.bin.init()';
+          if (!source.includes(before)) throw new Error('Pinned seed startup changed');
+          const after = `  await Promise.race([kernel.sysReady, new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('kernel readiness timed out')), 120000))])`;
+          fs.writeFileSync(file, source.replace(before, after));
+          NODE
       - name: Build pinned daemon image
         run: docker build -t r20-pinokiod "$RUNNER_TEMP/pinokiod"
       - name: Run real Reset action and verify settlement

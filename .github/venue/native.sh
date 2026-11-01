@@ -14,7 +14,7 @@ probe() {
     printf '%s source=failed\n' "$name" >> "$out/host.txt"
     return 1
   fi
-  if npm ci --omit=dev --prefix "$RUNNER_TEMP/$name" --silent > "$RUNNER_TEMP/$name-install.log" 2>&1; then
+  if npm ci --omit=dev --prefix "$RUNNER_TEMP/$name" > "$RUNNER_TEMP/$name-install.log" 2>&1; then
     printf '%s npm-ci=ok\n' "$name" >> "$out/host.txt"
   else
     printf '%s npm-ci=failed\n' "$name" >> "$out/host.txt"

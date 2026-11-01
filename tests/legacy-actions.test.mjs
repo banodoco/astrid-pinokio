@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const agent = path.resolve(repository, '../../../../astrid-agent');
+const agent = process.env.ASTRID_AGENT_CHECKOUT || path.resolve(repository, '../../../../astrid-agent');
 const revisions = ['bbba620e', 'c3b4cd5', '5e1f256'];
 
 function oldModule(revision, file, app) {
@@ -35,6 +35,7 @@ function fixture(mode, editorExists = true) {
     probeDoor: async () => ({ kind: 'free' }),
     hasOwnedSupervisor: () => true,
     hasPendingUpdate: () => false,
+    updateLocal: async () => {},
     validateExistingEditorCheckout: () => editorExists,
     launcherPullMessage: () => 'OLD_LAUNCHER_PULL',
     pullEditorMessage: () => 'OLD_EDITOR_PULL',
@@ -112,7 +113,7 @@ test('historical fully-local Install and Update arrays retain the editor manifes
     const parsed = askCurrentAgentParser(calls[0].action, calls[0].manifest);
     assert.equal(parsed.mode, 'update');
     assert.equal(parsed.managed_by, 'pinokio');
-    assert.equal(parsed.manifest, calls[0].manifest);
+    assert.equal(parsed.manifest.replaceAll('\\', '/'), calls[0].manifest);
   }
 });
 
@@ -122,11 +123,11 @@ test('current fully-local clicks preserve the existing editor-manifest installer
   assert.equal(installed.steps.some((step) => step.params?.message === 'OLD_EDITOR_CLONE'), true);
   assert.equal(installed.steps.some((step) => step.method === 'session' && step.args[0] === 'build'), true);
 
-  const updated = await buildAction('working', 'pinokio/update.js', 'local');
-  assert.deepEqual(updated.calls, [{ action: 'update', manifest: '/tmp/pinokio/Astrid/app/astrid/public/install-manifest.json' }]);
-  const messages = Array.from(updated.steps, (step) => step.params?.message).filter(Boolean);
-  assert.deepEqual(messages, ['OLD_LAUNCHER_PULL', 'OLD_EDITOR_PULL',
-    `AGENT_INSTALLER:${JSON.stringify(updated.calls[0])}`]);
-  assert.equal(updated.steps.some((step) => step.method === 'session' && step.args[0] === 'build'), true);
-  assert.equal(messages.some((message) => message.includes('npm run update')), false);
+  const { app, calls } = fixture('local');
+  const updated = await oldModule('working', 'pinokio/update.js', app)({}, {});
+  assert.deepEqual(calls, [], 'installer must not run while constructing the action');
+  assert.equal(updated.run.length, 2);
+  assert.equal(updated.run[0].method, app.updateLocal);
+  assert.equal(updated.run[1].method, 'script.start');
+  assert.equal(updated.run[1].params.uri, 'start.js');
 });
