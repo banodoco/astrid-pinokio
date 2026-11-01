@@ -15,7 +15,10 @@ for (const failObserver of [false, true]) test(`native Linux uses its own action
     const script = (name, body) => writeFileSync(path.join(bin, name), '#!/usr/bin/env bash\n' + body + '\n', { mode: 0o755 });
     script('git', 'if [ "$1" = -C ]; then echo pinned; else exec /usr/bin/git "$@"; fi');
     script('docker', 'echo invoked > "$TEST_ROOT/docker-called"; exit 1');
-    script('curl', 'printf "{}\\n"');
+    // The native daemon starts in the background. Model a readiness response
+    // only after its fixture has actually reached its first observable step;
+    // otherwise this test can race cleanup before daemon-pid is written.
+    script('curl', 'for _ in $(seq 1 100); do [ -e "$TEST_ROOT/daemon-pid" ] && { printf "{}\\n"; exit 0; }; sleep 0.01; done; exit 1');
     script('node', `if [ "$1" = -e ]; then exit 0; fi
 if [ "$1" = script/index.js ]; then echo "$$" > "$TEST_ROOT/daemon-pid"; exec sleep 60; fi
 if [ "$1" = .github/venue/r24-linux-real-engine.mjs ]; then
