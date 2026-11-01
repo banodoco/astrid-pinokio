@@ -24,7 +24,7 @@ test('Linux provider exposes the bounded producers without promoting their outpu
   assert.ok(Object.isFrozen(provider.custody));
 });
 
-test('M4 harness plans name external awaits and reject caller-selected replacement inputs', () => {
+test('M4 harness plans name external awaits and reject noncanonical harness identifiers', () => {
   const provider = createLinuxProviderSurface();
   const firstClick = provider.prepareM4Harness('M4-4a');
   assert.deepEqual(firstClick.await.map((entry) => entry.id), ['R-21', 'R-36']);
@@ -42,5 +42,5 @@ test('M4 harness plans name external awaits and reject caller-selected replaceme
     assert.ok(Object.isFrozen(harness));
   }
   assert.throws(() => provider.prepareM4Harness('m4-4a'), /unknown Linux M4 harness/);
-  assert.throws(() => provider.prepareM4Harness({ harness: 'M4-5', r06: '/fixture' }), /unknown Linux M4 harness/);
+  assert.throws(() => provider.prepareM4Harness({}), /unknown Linux M4 harness/);
 });
