@@ -22,7 +22,7 @@ function diagnostic(records) {
 function parse(source, raw) {
   let x;
   try { x = JSON.parse(raw); } catch { throw Error('malformed-result'); }
-  const fields = source === 'endpoint-security' ? ['new_client_result', 'delete_client_result'] : ['start_status', 'enable_status', 'stop_status'];
+  const fields = source === 'endpoint-security' ? ['new_client_result', 'delete_client_result', 'created', 'cleanup_ok', 'not_entitled', 'not_permitted', 'not_privileged'] : ['start_status', 'enable_status', 'stop_status'];
   if (!x || x.source !== source || Object.keys(x).sort().join(',') !== ['source', ...fields].sort().join(',') || fields.some(k => !Number.isSafeInteger(x[k]) || x[k] < -1 || x[k] > 4294967295)) throw Error('malformed-result');
   return x;
 }
@@ -44,7 +44,7 @@ function run() {
       raw = execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', path.join(__dirname, 'windows.ps1')], opts);
     } else { throw Error('unsupported-platform'); }
     result.probe = parse(source, raw);
-    if (source === 'endpoint-security' && result.probe.new_client_result === 0 && result.probe.delete_client_result !== 0) result.cleanup = 'failed';
+    if (source === 'endpoint-security' && result.probe.created === 1 && result.probe.cleanup_ok !== 1) result.cleanup = 'failed';
     if (source === 'etw-kernel-process' && result.probe.start_status === 0 && result.probe.stop_status !== 0) result.cleanup = 'failed';
   } catch (e) { result.error = e.message === 'unsupported-platform' || e.message === 'malformed-result' ? e.message : 'source-command-failed'; }
   fs.writeFileSync('observer-probe-result.json', JSON.stringify(result, null, 2) + '\n', { mode: 0o600 });

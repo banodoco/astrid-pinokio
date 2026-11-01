@@ -25,3 +25,41 @@ continuity, authenticated authority and independent verification before any
 M4-6 slot can execute or qualify. All six slots remain mandatory. The native
 workflow runs the focused adapter tests on both hosted operating systems; the
 Linux job is disabled for the R-25 lane, whose Linux jobs use the broker.
+
+## Native observer-source capability probe (R-25-SOURCES)
+
+`.github/workflows/r25-observer-source.yml` runs only on the named source lane.
+It builds a short Endpoint Security client on macOS and calls `es_new_client`,
+then deletes any created client. It tries a unique, real-time ETW session on
+Windows, enables `Microsoft-Windows-Kernel-Process` (keyword `0x10`, level 5),
+and stops that session in a `finally` block. It creates no ETL file, subscribes
+to no macOS events, does not consume ETW events and retains no process records.
+The Windows session is stopped immediately; enable success does not prove the
+provider produced or delivered any events. Session start/enable/stop codes are
+Win32 status codes; `4294967295` means that step was not reached. Apple codes
+are from the runner SDK; the result includes the three relevant SDK constants
+and explicit client-created/cleanup flags. The runner is not elevated by this
+workflow. A command error or failed cleanup makes the probe step fail; a denied
+source is a valid diagnostic result, never a successful custody observation.
+
+The artifact contains only OS release, architecture, Node version and fixed
+status fields. It always reports `status: unknown`, `continuity: unavailable`,
+and `authority: none`. The synthetic diagnostic state machine in the focused
+tests rejects missing, malformed, gapped, lost and post-terminal records; it
+is not an operating-system event parser. Neither platform has an approved
+source profile or complete process identity/descendant, event-loss, terminal,
+initial/final census, isolation or exact-child integration here. No serialized
+result grants removal authority, and these probes are not R-30 exports.
+
+Apple requires a restricted entitlement, Full Disk Access consent and root for
+Endpoint Security; message sequence numbers detect certain client drops:
+[client requirements](https://developer.apple.com/documentation/endpointsecurity/es_new_client%28_%3A_%3A%29),
+[sequence](https://developer.apple.com/documentation/endpointsecurity/es_message_t/seq_num),
+[client result](https://developer.apple.com/documentation/endpointsecurity/es_new_client_result_t).
+ETW has session loss statistics and consumer buffer callbacks; control requires
+appropriate privileges: [ETW](https://learn.microsoft.com/en-us/windows/win32/etw/about-event-tracing),
+[control permissions](https://learn.microsoft.com/en-us/windows/win32/etw/controlling-event-tracing-sessions),
+[consumer](https://learn.microsoft.com/en-us/windows/win32/etw/consuming-events).
+Those API capabilities alone do not establish end-to-end completeness, or the
+required terminal barrier and custody facts. R-24 and R-36 bindings remain
+prerequisites; all six M4-6 slots remain unexecuted.
