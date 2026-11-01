@@ -23,11 +23,6 @@ jobs:
       PINOKIO_BASE_COMMIT: c5b42701641889ecb916c60cde09a717f83d62ff
       PINOKIOD_REF: add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
       PTERM_REF: 5be43718701c448b43daf0ce51d8935f170065bb
-      PINOKIOD_ROOT: ${{ runner.temp }}/m4-6-pinokio/pinokiod
-      PTERM_ROOT: ${{ runner.temp }}/m4-6-pinokio/pterm
-      PINOKIO_HOME: ${{ runner.temp }}/m4-6-pinokio/home
-      VENUE_EVIDENCE_DIR: ${{ runner.temp }}/m4-6-pinokio/evidence
-      VENUE_DIAGNOSTIC_DIR: ${{ runner.temp }}/m4-6-pinokio/local-diagnostics
     steps:
       - name: Checkout clean Pinokio candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -40,6 +35,19 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20.19.4
+
+      - name: Set isolated runtime paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          for binding in \
+            "PINOKIOD_ROOT=$RUNNER_TEMP/m4-6-pinokio/pinokiod" \
+            "PTERM_ROOT=$RUNNER_TEMP/m4-6-pinokio/pterm" \
+            "PINOKIO_HOME=$RUNNER_TEMP/m4-6-pinokio/home" \
+            "VENUE_EVIDENCE_DIR=$RUNNER_TEMP/m4-6-pinokio/evidence" \
+            "VENUE_DIAGNOSTIC_DIR=$RUNNER_TEMP/m4-6-pinokio/local-diagnostics"; do
+            printf '%s\n' "$binding" >> "$GITHUB_ENV"
+          done
 
       - name: Bootstrap immutable Pinokio daemon and pterm sources
         shell: bash
@@ -63,9 +71,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/m4-6-pinokio/user-home"
-          export HOME="$RUNNER_TEMP/m4-6-pinokio/user-home"
-          export XDG_CONFIG_HOME="$HOME/.config"
-          export XDG_DATA_HOME="$HOME/.local/share"
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/m4-6-pinokio/user-home/.config"
+          export XDG_DATA_HOME="$RUNNER_TEMP/m4-6-pinokio/user-home/.local/share"
           mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
           node tests/genuine-pinokio-venue.mjs
 
