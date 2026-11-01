@@ -1,0 +1,38 @@
+repos:
+  astrid-pinokio: lane/M-PIN/R-20
+gpu: false
+max_minutes: 60
+setup:
+- |-
+  set -euo pipefail
+  TASK_TMP="$PWD/runpod-tmp"
+  R20_BROKER_OUT="${R20_BROKER_OUT:-/workspace/out}"
+  r20_collect() {
+    r20_inner=$?
+    trap - EXIT
+    set +e
+    r20_stage=0
+    mkdir -p "$R20_BROKER_OUT" || r20_stage=1
+    mkdir "$R20_BROKER_OUT/r20-receipt" || r20_stage=1
+    printf 'exit=%s\n' "$r20_inner" > "$R20_BROKER_OUT/r20-receipt/inner-exit.txt" || r20_stage=1
+    if [ -d "$TASK_TMP/r20-evidence" ]; then
+      cp -a "$TASK_TMP/r20-evidence" "$R20_BROKER_OUT/r20-receipt/evidence" || r20_stage=1
+    fi
+    if [ "$r20_stage" -eq 0 ]; then
+      tar -C "$R20_BROKER_OUT" -czf "$R20_BROKER_OUT/r20-receipt.tar.gz" r20-receipt || r20_stage=1
+    fi
+    if [ "$r20_stage" -eq 0 ]; then
+      printf 'R20_RECEIPT_BASE64_BEGIN\n'
+      base64 -w 0 "$R20_BROKER_OUT/r20-receipt.tar.gz" || r20_stage=1
+      printf '\nR20_RECEIPT_BASE64_END\n'
+    fi
+    if [ "$r20_inner" -ne 0 ]; then exit "$r20_inner"; fi
+    exit "$r20_stage"
+  }
+  trap r20_collect EXIT
+  # R20_WRAPPER_END
+  set -euo pipefail; test "$(git rev-parse HEAD)" = c50e5c3fd3e6e2423a4e62ea67b2513ff8228932; TASK_TMP="$PWD/runpod-tmp"; mkdir -p "$TASK_TMP"; export npm_config_cache="$TASK_TMP/npm-cache"; apt-get update -qq; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates curl gnupg git python3 make g++; curl -fsSL https://deb.nodesource.com/setup_20.x -o "$TASK_TMP/nodesource-setup.sh"; bash "$TASK_TMP/nodesource-setup.sh"; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs; node --version; npm --version; test "$(node -p "process.versions.node.split(\".\")[0]")" = 20; git clone -q https://github.com/pinokiocomputer/pinokiod.git "$TASK_TMP/pinokiod"; git -C "$TASK_TMP/pinokiod" checkout -q --detach add4a674ad1ba95bb62ec427fce519fe5bf0e9bf; npm ci --omit=dev --prefix "$TASK_TMP/pinokiod" --silent >/dev/null 2>&1 || { printf "pinokiod npm ci failed\n"; exit 1; }; git clone -q https://github.com/pinokiocomputer/pterm.git "$TASK_TMP/pterm"; git -C "$TASK_TMP/pterm" checkout -q --detach 5be43718701c448b43daf0ce51d8935f170065bb; npm ci --omit=dev --prefix "$TASK_TMP/pterm" --silent >/dev/null 2>&1 || { printf "pterm npm ci failed\n"; exit 1; }
+run:
+- set -euo pipefail; test "$(git rev-parse HEAD)" = c50e5c3fd3e6e2423a4e62ea67b2513ff8228932; export TASK_TMP="$PWD/runpod-tmp" RUNNER_TEMP="$PWD/runpod-tmp" GITHUB_RUN_ID=runpod GITHUB_RUN_ATTEMPT=1 R20_LINUX_MODE=native; test "$(node -p "process.versions.node.split(\".\")[0]")" = 20; test "$(git -C "$TASK_TMP/pinokiod" rev-parse HEAD)" = add4a674ad1ba95bb62ec427fce519fe5bf0e9bf; test "$(git -C "$TASK_TMP/pterm" rev-parse HEAD)" = 5be43718701c448b43daf0ce51d8935f170065bb; test -d "$TASK_TMP/pinokiod/node_modules"; test -d "$TASK_TMP/pterm/node_modules/unws"; bash .github/venue/linux.sh
+artifacts:
+- runpod-tmp/r20-evidence/**
