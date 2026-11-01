@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { captureLinuxCustodyCheckpoint } from '../pinokio/providers/linux-custody-observations.mjs';
 
@@ -27,6 +27,9 @@ test('captures bounded raw Linux checkpoints with matching observation and file 
   const args = { phase: 'initial', pids: { controller: controller.pid, runtime: runtime.pid, editor: process.pid }, sequence: 7 };
   const result = await captureLinuxCustodyCheckpoint(args);
   const payload = decode(result);
+  const canonical = spawnSync('python3', ['-c', 'import json,sys; x=json.load(sys.stdin); sys.stdout.write(json.dumps(x,sort_keys=True,separators=(",",":"),ensure_ascii=True,allow_nan=False))'], { input: result.bytes });
+  assert.equal(canonical.status, 0, canonical.stderr.toString());
+  assert.deepEqual(canonical.stdout, result.bytes);
   assert.deepEqual(result.observation, { id: 'obs-000007', kind: 'custody-census', file: 'observations/obs-000007.json', sha256: sha256(result.bytes), sequence: 7 });
   assert.deepEqual(result.file, { path: result.observation.file, role: 'custody-census', sha256: result.observation.sha256, size: result.bytes.length });
   assert.ok(result.bytes.length < 1024 * 1024);
