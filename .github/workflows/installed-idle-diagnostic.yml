@@ -71,8 +71,9 @@ jobs:
           sudo python3 -I "$DIAG_REF/repo/tests/installed-idle-cleanup.py" --census "$(id -u "$DIAG_USER")"
           for name in pinokiod pterm; do
             stage="directory-$name"
-            test -d "$DIAG_ROOT/home/$name"
-            test ! -L "$DIAG_ROOT/home/$name"
+            # The runner cannot traverse the disposable user's mode-700 home.
+            sudo test -d "$DIAG_ROOT/home/$name"
+            sudo test ! -L "$DIAG_ROOT/home/$name"
           done
           stage=destination
           sudo install -d -m 755 -o root -g root "$DIAG_REF/engines"
