@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "status": "FAILED",
+  "reason": "journey_receipt_missing",
+  "setup_exit": 0,
+  "journey_exit": 128,
+  "action_inner_exits": {
+    "install": null,
+    "first_click": null,
+    "stop": null,
+    "retry": null,
+    "cleanup": null
+  },
+  "workflow_sha": "e0c9d0a6df4dfe823bb2a2cadb94a2a310e29459",
+  "run_id": "41352924054",
+  "run_attempt": "1"
+}
