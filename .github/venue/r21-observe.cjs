@@ -29,9 +29,21 @@ const HTTP_URL = 'http://127.0.0.1:42000';
 const ACTION_TIMEOUT_MS = 20 * 60 * 1000;
 const POLL_TIMEOUT_MS = 4 * 60 * 1000;
 let actionNumber = 0;
+const progress = {};
+function substage(value) {
+  const dir = process.env.R21_PROGRESS_DIR;
+  if (!dir) return;
+  const file = path.join(dir, 'progress.json');
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify({ stage: 'run-r21-journey', substage: value,
+    elapsed_ms: Math.max(0, Date.now() - Number(process.env.R21_STARTED_MS)) }));
+  fs.renameSync(`${file}.tmp`, file);
+}
+const retainProgress = () => write('r21-progress.json', progress);
 
 function write(name, value) {
-  fs.writeFileSync(path.join(output, name), `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  const file = path.join(output, name);
+  fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(`${file}.tmp`, file);
 }
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
@@ -224,6 +236,10 @@ async function observeAction(label, script) {
     cwd: home, env: process.env, stdio: ['ignore', 'ignore', 'ignore'],
   });
   observation.inner_exit = await ptermExit(child, label);
+  const progressKey = { 'historical install': 'install', 'first Update': 'first_click',
+    'historical Stop': 'stop', 'fresh Update retry': 'retry', 'bounded cleanup Stop': 'cleanup' }[label];
+  progress[progressKey] = observation;
+  retainProgress();
   await Promise.race([done, delay(5000)]);
   socket.close();
   observation.running_after = await status(localPath);
@@ -286,42 +302,51 @@ async function main() {
   if (request.endpoint !== ENDPOINT || JSON.stringify(request.tuple) !== JSON.stringify(TUPLE)) {
     throw new Error('request did not retain the immutable R-21 tuple');
   }
-  const progress = {};
-  const retainProgress = () => write('r21-progress.json', progress);
+  substage('install');
   const install = await observeAction('historical install', 'pinokio/install.js');
   progress.install = install; retainProgress();
   if (install.inner_exit.code !== 0 || install.terminal.disconnect !== true || install.terminal.stop !== true) {
     throw new Error('historical installation did not settle');
   }
+  substage('initial-start-readiness');
   await startOldLauncher();
+  substage('state-before');
   const before = await digestProtectedState();
+  substage('first-click');
   const first = await observeAction('first Update', 'pinokio/update.js');
   // The exact refusal originates in the R-17 installer after the old action's
   // bootstrap dispatch.  Unlike a raw terminal echo, this boolean is safe to
   // retain and proves that the first click reached the real installer fence.
   first.installer_dispatch = first.terminal.expected_refusal;
   progress.first_click = first; retainProgress();
+  substage('state-after-first-click');
   const afterFirst = await digestProtectedState();
+  substage('stop');
   const stopped = await observeAction('historical Stop', 'pinokio/stop.js');
   stopped.start_running_after = await status(path.join(appRoot, 'pinokio/start.js'));
   stopped.lock_free = stopped.lock_free && await lockFree();
   progress.stop = stopped; retainProgress();
+  substage('retry');
   const retry = await observeAction('fresh Update retry', 'pinokio/update.js');
   progress.retry = retry; retainProgress();
   // Backend Update is not a Start action. Exercise a fresh Start after the
   // retry, and observe its engine status and independent readiness separately.
+  substage('retry-start-readiness');
   await startOldLauncher();
   retry.start_running_after_retry = await status(path.join(appRoot, 'pinokio/start.js'));
   await waitForReadiness();
   retry.runtime_ready = await runtimeReady();
   retry.application_ready = await applicationReady();
   retry.start_to_ready = retry.start_running_after_retry === true && retry.runtime_ready && retry.application_ready;
+  substage('state-after-retry');
   const afterRetry = await digestProtectedState();
+  substage('cleanup');
   const cleanup = await observeAction('bounded cleanup Stop', 'pinokio/stop.js');
   cleanup.start_running_after = await status(path.join(appRoot, 'pinokio/start.js'));
   cleanup.lock_free = cleanup.lock_free && await lockFree();
   cleanup.daemon_idle = await status(path.join(appRoot, 'pinokio/update.js'));
   progress.cleanup = cleanup; retainProgress();
+  substage('verify-receipt');
   const receipt = {
     schema: 1,
     request_id: request.request_id,

@@ -13,7 +13,7 @@ const read = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
 const action = source => source && typeof source === 'object' ? {
   action_id: number(source.action_id),
   action_uri: Object.values(require('./r21-verify.cjs').ACTIONS).includes(source.action_uri) ? source.action_uri : null,
-  inner_exit: { code: number(source.inner_exit?.code), signal: source.inner_exit?.signal === null ? null : 'non-null' },
+  inner_exit: source.inner_exit && typeof source.inner_exit === 'object' ? { code: number(source.inner_exit.code), signal: source.inner_exit.signal === null ? null : 'non-null' } : null,
   terminal: { stop: bool(source.terminal?.stop), disconnect: bool(source.terminal?.disconnect), expected_refusal: bool(source.terminal?.expected_refusal) },
   installer_dispatch: bool(source.installer_dispatch), stopped: bool(source.stopped), lock_free: bool(source.lock_free),
   running_after: bool(source.running_after), start_running_after: bool(source.start_running_after),
@@ -41,6 +41,19 @@ function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
   for (const code of [setupExit, journeyExit]) if (code !== null && (!Number.isInteger(code) || code < 0 || code > 255)) throw new Error('invalid inner exit');
   const receipt = projectReceipt(read(path.join(evidenceDir, 'r21-receipt.json')));
   const progress = read(path.join(evidenceDir, 'r21-progress.json'));
+  const watchdogDir = env.RUNNER_TEMP ? path.join(env.RUNNER_TEMP, 'r21-watchdog') : '';
+  const snapshot = read(path.join(watchdogDir, 'progress.json'));
+  const watchdog = read(path.join(watchdogDir, 'watchdog.json'));
+  const substages = {
+    setup: ['clone-pinokiod', 'checkout-pinokiod', 'install-pinokiod', 'clone-pterm', 'checkout-pterm', 'install-pterm'],
+    'run-r21-journey': ['install', 'initial-start-readiness', 'state-before', 'first-click', 'state-after-first-click', 'stop', 'retry', 'retry-start-readiness', 'state-after-retry', 'cleanup', 'verify-receipt'],
+  };
+  const stages = ['setup','preflight','verify-native-inputs','retain-historical-launcher','verify-published-app-manifest','start-native-engine','run-r21-journey','complete'];
+  const stage = stages.includes(snapshot?.stage) ? snapshot.stage : null;
+  const lastProgress = { stage, substage: substages[stage]?.includes(snapshot?.substage) ? snapshot.substage : null,
+    elapsed_ms: number(snapshot?.elapsed_ms) };
+  const execution = { timed_out: bool(watchdog?.timed_out), elapsed_ms: number(watchdog?.elapsed_ms),
+    exit_code: number(watchdog?.exit_code) };
   let accepted = false;
   let reason = 'journey_receipt_missing';
   if (receipt) {
@@ -49,21 +62,20 @@ function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
         if (!Object.values(receipt.protected_state[key] || {}).length || Object.values(receipt.protected_state[key]).some(value => !value)) throw new Error('protected_state digest missing');
       }
       verifyReceipt(receipt);
-      if (setupExit !== 0 || journeyExit !== 0) throw new Error('inner exit missing or nonzero');
+      if (setupExit !== 0 || journeyExit !== 0 || execution.timed_out !== false || execution.exit_code !== 0 || execution.elapsed_ms === null) throw new Error('inner exit missing or nonzero');
       accepted = true; reason = null;
     } catch (error) { reason = error.message; }
   }
   // Errors from the verifier are fixed strings, except JSON.stringify of an
   // expected constant; never publish exception text from engine or user data.
   const verdict = { schema: 1, status: accepted ? 'ACCEPTED' : 'FAILED', reason,
-    setup_exit: setupExit, journey_exit: journeyExit,
+    setup_exit: setupExit, journey_exit: journeyExit, progress: lastProgress, watchdog: execution,
     action_inner_exits: Object.fromEntries(['install', 'first_click', 'stop', 'retry', 'cleanup'].map(k => [k, receipt?.[k]?.inner_exit || action(progress?.[k])?.inner_exit || null])),
     workflow_sha: env.GITHUB_WORKFLOW_SHA, run_id: env.GITHUB_RUN_ID, run_attempt: env.GITHUB_RUN_ATTEMPT };
   fs.mkdirSync(destination, { recursive: true });
   const files = { 'request.json': request, 'verdict.json': verdict };
   if (receipt) files['r21-receipt.json'] = receipt;
   const failure = read(path.join(evidenceDir, 'r21-runner-failure.json'));
-  const stages = ['preflight','verify-native-inputs','retain-historical-launcher','verify-published-app-manifest','start-native-engine','run-r21-journey','complete'];
   if (failure && stages.includes(failure.stage)) files['runner-failure.json'] = { schema: 1, status: 'blocked', stage: failure.stage };
   const obsFailure = read(path.join(evidenceDir, 'r21-failure.json'));
   if (obsFailure && ['timeout','engine-or-observer'].includes(obsFailure.category)) files['observer-failure.json'] = { schema: 1, status: 'blocked', category: obsFailure.category };
@@ -74,7 +86,7 @@ function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
 }
 module.exports = { projectReceipt, publish };
 if (require.main === module) {
-  const parseExit = value => value === 'not-run' ? null : Number(value);
+  const parseExit = value => typeof value === 'string' && /^(0|[1-9][0-9]{0,2})$/.test(value) ? Number(value) : null;
   const verdict = publish({ env: process.env, evidenceDir: process.argv[2], destination: process.argv[3], setupExit: parseExit(process.argv[4]), journeyExit: parseExit(process.argv[5]) });
   process.stdout.write(`${verdict.status}\n`);
 }

@@ -112,6 +112,9 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
       GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: REQUEST_ID,
       R21_CONFIRMATION: CONFIRMATION, R21_RUNNER_REF: 'a'.repeat(40),
     };
+    environment.RUNNER_TEMP = root;
+    fs.mkdirSync(path.join(root, 'r21-watchdog'));
+    fs.writeFileSync(path.join(root, 'r21-watchdog', 'watchdog.json'), JSON.stringify({ timed_out: false, exit_code: 0, elapsed_ms: 42 }));
     const input = path.join(root, 'in');
     fs.mkdirSync(input);
     const sample = receipt();
@@ -126,6 +129,21 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
     assert.equal(JSON.parse(fs.readFileSync(path.join(out, 'verdict.json'))).action_inner_exits.retry.code, 0);
     assert.throws(() => publish({ env: { ...environment, GITHUB_WORKFLOW_SHA: 'b'.repeat(40) }, evidenceDir: input, destination: out, setupExit: 0, journeyExit: 0 }), /workflow SHA/);
     assert.equal(publish({ env: environment, evidenceDir: input, destination: out, setupExit: 0, journeyExit: 1 }).status, 'FAILED');
+    fs.writeFileSync(path.join(root, 'r21-watchdog', 'watchdog.json'), JSON.stringify({ timed_out: true, exit_code: 124, elapsed_ms: 50 }));
+    assert.equal(publish({ env: environment, evidenceDir: input, destination: out, setupExit: 0, journeyExit: 0 }).status, 'FAILED');
+    fs.unlinkSync(path.join(root, 'r21-watchdog', 'watchdog.json'));
+    assert.equal(publish({ env: environment, evidenceDir: input, destination: out, setupExit: 0, journeyExit: 0 }).status, 'FAILED');
+    fs.writeFileSync(path.join(root, 'r21-watchdog', 'progress.json'), JSON.stringify({ stage: 'run-r21-journey', substage: 'secret payload', elapsed_ms: 10 }));
+    const redacted = publish({ env: environment, evidenceDir: input, destination: path.join(root, 'redacted'), setupExit: null, journeyExit: null });
+    assert.deepEqual(redacted.progress, { stage: 'run-r21-journey', substage: null, elapsed_ms: 10 });
+    const { spawnSync } = await import('node:child_process');
+    const cliDest = path.join(root, 'missing-outputs');
+    const cli = spawnSync(process.execPath, ['.github/venue/r21-publish.cjs', input, cliDest, '', ''], { env: { ...process.env, ...environment }, encoding: 'utf8' });
+    assert.equal(cli.status, 0, cli.stderr);
+    const cliVerdict = JSON.parse(fs.readFileSync(path.join(cliDest, 'verdict.json')));
+    assert.equal(cliVerdict.setup_exit, null);
+    assert.equal(cliVerdict.journey_exit, null);
+    assert.equal(cliVerdict.status, 'FAILED');
     fs.unlinkSync(path.join(input, 'r21-receipt.json'));
     fs.writeFileSync(path.join(input, 'r21-progress.json'), JSON.stringify({ first_click: sample.first_click, secret: sample.secret }));
     const missing = publish({ env: environment, evidenceDir: input, destination: path.join(root, 'missing'), setupExit: 0, journeyExit: 1 });
