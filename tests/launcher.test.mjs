@@ -1132,7 +1132,16 @@ test('isolated update preparation preserves the checkout and reports build and r
   assert.equal(prepared.targetSha, target);
   assert.equal(prepared.oldSha, original);
   assert.equal(git(editor, 'rev-parse', 'HEAD'), original);
-  fs.rmSync(prepared.parent, { recursive: true, force: true });
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, installed, run: successRun }), /already in progress/);
+  await Promise.all([prepared.cleanup(), prepared.cleanup()]);
+  await prepared.cleanup();
+  assert.deepEqual(fs.readdirSync(stage), []);
+  const staleLock = path.join(stage, 'astrid-update.lock');
+  fs.mkdirSync(staleLock);
+  fs.writeFileSync(path.join(staleLock, 'owner-evidence'), 'preserve');
+  await assert.rejects(prepareCandidate({ editor, ref: 'main', remote, stagingRoot: stage, installed, run: successRun }), /needs inspection/);
+  assert.equal(fs.readFileSync(path.join(staleLock, 'owner-evidence'), 'utf8'), 'preserve');
+  fs.rmSync(staleLock, { recursive: true });
   const mismatchRun = async (command, args, options) => {
     const result = await successRun(command, args, options);
     if (command !== 'git' && args.includes('build')) {

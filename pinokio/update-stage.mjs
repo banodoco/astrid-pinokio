@@ -1,7 +1,7 @@
 // Candidate preparation only. This is deliberately not wired into Update until
 // promotion and interrupted-update recovery can preserve checkout artifacts.
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
@@ -20,13 +20,23 @@ export async function prepareCandidate({ editor, ref, remote, stagingRoot, insta
     branch: await git(editor, 'branch', '--show-current'),
     status: await git(editor, 'status', '--porcelain=v1', '--untracked-files=all'),
   });
-  const old = await snapshot();
-  if (!oid.test(old.sha) || old.branch !== ref || old.status) {
-    throw new Error('Editor checkout is dirty or on a different branch; preserve changes and retry.');
+  // This is a cooperative fence for preparations sharing this staging root.
+  // A surviving lock is intentionally not stolen: ownership after a crash is
+  // unknown, and a future recovery protocol must inspect it before removal.
+  const lock = path.join(stagingRoot, 'astrid-update.lock');
+  try { await mkdir(lock); }
+  catch (error) {
+    if (error.code === 'EEXIST') throw new Error(`An editor update is already in progress or needs inspection: ${lock}`);
+    throw error;
   }
-  const parent = await mkdtemp(path.join(stagingRoot, 'astrid-update-'));
-  const candidate = path.join(parent, 'checkout');
+  let parent;
   try {
+    const old = await snapshot();
+    if (!oid.test(old.sha) || old.branch !== ref || old.status) {
+      throw new Error('Editor checkout is dirty or on a different branch; preserve changes and retry.');
+    }
+    parent = await mkdtemp(path.join(stagingRoot, 'astrid-update-'));
+    const candidate = path.join(parent, 'checkout');
     await run('git', ['clone', '--no-hardlinks', '--no-checkout', '--', editor, candidate], { cwd: parent });
     await git(candidate, 'fetch', '--no-tags', '--', remote, `refs/heads/${ref}`);
     const target = await git(candidate, 'rev-parse', '--verify', 'FETCH_HEAD^{commit}');
@@ -43,10 +53,22 @@ export async function prepareCandidate({ editor, ref, remote, stagingRoot, insta
     if (build.app !== target || build.release !== release) throw new Error('Candidate build identity does not match its checkout and manifest.');
     const current = await snapshot();
     if (JSON.stringify(current) !== JSON.stringify(old)) throw new Error('Editor checkout changed during staging; preserving it.');
-    return { parent, candidate, oldSha: old.sha, targetSha: target, ref, release };
+    let cleanupPromise;
+    const cleanup = () => {
+      cleanupPromise ??= (async () => {
+        await rm(parent, { recursive: true, force: true });
+        await rm(lock, { recursive: true, force: true });
+      })().catch((error) => { cleanupPromise = undefined; throw error; });
+      return cleanupPromise;
+    };
+    return { parent, candidate, oldSha: old.sha, targetSha: target, ref, release, cleanup };
   } catch (error) {
-    try { await rm(parent, { recursive: true, force: true }); }
-    catch (cleanup) { throw new AggregateError([error, cleanup], `Candidate staging failed and cleanup failed; retain ${parent} for inspection.`); }
+    try {
+      if (parent) await rm(parent, { recursive: true, force: true });
+      await rm(lock, { recursive: true, force: true });
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], `Candidate staging failed and cleanup failed; inspect ${parent || lock}.`);
+    }
     throw error;
   }
 }
