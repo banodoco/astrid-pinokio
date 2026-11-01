@@ -1,66 +1,17 @@
-# R-25 frozen-manifest input refresh receipt
+# R-25 adapter compatibility input refresh
 
-Status: `INPUT_REFRESH_ONLY` / `NO_R-25_QUALIFICATION`
+Status: **HARNESS COMPATIBILITY ONLY; NO QUALIFICATION**
 
-## Repository and lane
+Source: `banodoco/astrid-pinokio` base `196473d283d7ca7fd860f1c1110e83e1af82322a` on `lane/M-PIN/R-25-ADAPTER-COMPAT-R2`. The companion task receipt records the published head, parents, cross-binding and checks.
 
-| Field | Value |
-|---|---|
-| Repository | `banodoco/astrid-pinokio` |
-| Branch | `lane/M-PIN/R-25-FROZEN-MANIFEST-R1` |
-| Base | `e6baa4700da35189053aecf3d414020f32ab8424` |
-| Base parent | `58e7191d915777db86a8b597f01a98b687e02bb7` |
-| Published head | Recorded in the companion task receipt at `queue/running/R-25-FROZEN-MANIFEST-R1/REPORT.md` |
-| Scope | Journey config, binding, `SHA256SUMS`, and this report only |
+The exact `banodoco/astrid-app@99144531aedab3ac8042b5d06f72bd5aaecf523f:public/install-manifest.json` bytes hash to `15ea3a2e0a4067773b727635e4eaa4b894eceb10f73aaa88cd29896a2364bd77` and declare Release 1, Agent `dd6b48192c720c5346e6f140184e313b2cf84f31` and Runtime `1e6d899efa77a2d6ec247c38250f9748330bb587`. The Pinokio execution ref remains `89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4`.
 
-## Frozen App source
-
-Source: `banodoco/astrid-app@36ff224e3c9ad862e3f807e2548b997a36799543:public/install-manifest.json`.
-The manifest declares `release: 1`, Agent
-`020877f12ea490308a9e5f9564c8f4a4bf77ede1`, and Runtime
-`47e5949465cb6f3afdfd1cb8a0e90009fd9d4020`. Its SHA-256 is
-`b78ae7e74188f6e0bbf01950b0d388d4cf36ea990c9bb574fd8aef57a8782777`.
-
-All three OS configs now bind App
-`36ff224e3c9ad862e3f807e2548b997a36799543` and that exact manifest hash.
-Agent, Runtime, and Pinokio remain pinned to
-`020877f12ea490308a9e5f9564c8f4a4bf77ede1`,
-`47e5949465cb6f3afdfd1cb8a0e90009fd9d4020`, and
-`89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4` respectively. All six unique D9
-slots (backend and fully-local for Linux, macOS, and Windows) remain intact.
-The provider-unavailable and platform/runtime seam tokens are unchanged.
-
-## Generated files and hashes
+All three OS entries bind these refs and manifest bytes. Agent workflow inventory was rehashed at the new Agent commit; every other inventoried source was checked at its tuple commit. The six backend and fully-local slots, provider tokens, platform and runtime seams, and Stop controls are unchanged.
 
 | File | SHA-256 |
 |---|---|
-| `M4-4A-JOURNEY-CONFIGS.json` | `56fd24b416ac5d7ecd0bbb8e3aceb1167585f151ce7a9e4e92f3ca96801f0ac4` |
-| `CONFIG-BINDING.md` | `0d28c6b885d08bc49a4da28262a9e0496367f3a39c10d21426efd049df0faad4` |
-| `SHA256SUMS` | Listed in the companion task receipt after publication |
+| `M4-4A-JOURNEY-CONFIGS.json` | `37c2c7f06712eb8e7fad9c9a0ca7371a301ee4ee7da5995d326e1f42ee9b87f4` |
+| `CONFIG-BINDING.md` | `1f075dc352b2ac8fce4c3ed3a2820be9c35cfbc218222295517f796ece01c9b5` |
+| `SHA256SUMS` | `4f3c644d1aeddd87c5d3ece6520f33721ac15a48a2920c0e0288ecb2f80d2f77` |
 
-## Commands and results
-
-| Command/check | Result |
-|---|---|
-| `/home/user/merge/kit/codex/task-clone.sh astrid-pinokio /tmp/R-25-FROZEN-MANIFEST-R1-pinokio e6baa4700da35189053aecf3d414020f32ab8424` | PASS; exact base and parent verified |
-| `/home/user/merge/kit/codex/task-clone.sh astrid-app /tmp/R-25-FROZEN-MANIFEST-R1-app 36ff224e3c9ad862e3f807e2548b997a36799543` | Helper could not run: no local App repo/store. Fallback exact-origin clone and detached checkout at requested commit succeeded |
-| `sha256sum /tmp/R-25-FROZEN-MANIFEST-R1-app/public/install-manifest.json` | PASS; `b78ae7e74188f6e0bbf01950b0d388d4cf36ea990c9bb574fd8aef57a8782777` |
-| Standard-library Python manifest/config assertions | PASS; release and manifest tuple/hash; all three OS bindings; only four App-specific JSON leaves changed per OS; six unique slots; all non-App fields and unavailable seams preserved |
-| `sha256sum -c SHA256SUMS` | PASS; all five retained packet/config/binding files verified |
-| `git diff --check` | PASS |
-| Exact changed-path audit | PASS; config, binding, checksum, and this report only |
-| `/home/user/merge/kit/codex/env-safe.sh git push -u origin lane/M-PIN/R-25-FROZEN-MANIFEST-R1` | See companion task receipt for push and remote-head verification |
-
-## Coverage inventory
-
-The refreshed bundle includes the three-OS `M4-4A-JOURNEY-CONFIGS.json`,
-`CONFIG-BINDING.md`, and `SHA256SUMS`. Existing source packet inputs
-`RC-0-EXECUTOR-CONFIGS.json`, `SLOT-MAPPING.md`, and `R-21-R7-DISPATCH.md`
-remain unchanged and remain inventoried in the checksum file.
-
-## Limitations
-
-This refresh binds a frozen Release-1 App manifest as journey input only. It
-does not fill the unavailable real-engine/provider identity, runtime identity,
-or platform spec; it does not alter slot mapping or acceptance semantics. No
-hosted job ran and this receipt makes no R-25 qualification claim.
+This is a template and harness input refresh. No trusted provider, runtime identity, platform spec or live Stop authority was supplied or invented. Missing bindings remain non-authorizing. No hosted job or qualification dispatch ran; validation does not establish tuple execution, authentic receipts, or R-24/R-25 qualification.
