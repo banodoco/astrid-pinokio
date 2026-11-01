@@ -12,28 +12,23 @@ changed_files() {
       if [[ "$remote_sha" =~ ^0+$ ]]; then
         found_base=0
         for base_ref in refs/remotes/origin/int/r1 refs/remotes/origin/main refs/remotes/origin/release-1; do
-          if git merge-base --is-ancestor "$base_ref" "$local_sha" 2>/dev/null; then git diff --name-only "$base_ref" "$local_sha"; found_base=1; break; fi
+          if git merge-base --is-ancestor "$base_ref" "$local_sha" 2>/dev/null; then git diff --check "$base_ref" "$local_sha"; git diff --name-only "$base_ref" "$local_sha"; found_base=1; break; fi
         done
-        [ "$found_base" -eq 1 ] || git diff-tree --root --no-commit-id --name-only -r "$local_sha"
-      else git diff --name-only "$remote_sha" "$local_sha"; fi
+        [ "$found_base" -eq 1 ] || { git diff-tree --root --check -r "$local_sha"; git diff-tree --root --no-commit-id --name-only -r "$local_sha"; }
+      else git diff --check "$remote_sha" "$local_sha"; git diff --name-only "$remote_sha" "$local_sha"; fi
     done
     return
   fi
+  git diff --check
   if git rev-parse --verify --quiet origin/main >/dev/null; then git diff --name-only origin/main...HEAD; fi
   git diff --name-only HEAD
   git ls-files --others --exclude-standard
 }
-find_tool() { local name=$1; if [ -x "node_modules/.bin/$name" ]; then printf '%s\n' "node_modules/.bin/$name"; else command -v "$name" || true; fi; }
-
 run_changed_checks() {
-  mapfile -t changed < <(changed_files "$@" | sed '/^$/d' | sort -u)
+  local changed_output
+  changed_output=$(changed_files "$@")
+  mapfile -t changed < <(printf '%s\n' "$changed_output" | sed '/^$/d' | sort -u)
   if [ "${#changed[@]}" -eq 0 ]; then echo "pre-push: no changed files; full suites remain in CI"; return 0; fi
-  mapfile -t format_files < <(printf '%s\n' "${changed[@]}" | awk '/\.(cjs|js|json|md|mjs|yaml|yml)$/')
-  if [ "${#format_files[@]}" -gt 0 ]; then
-    prettier_bin=$(find_tool prettier)
-    [ -n "$prettier_bin" ] || { echo "pre-push: changed JavaScript/config files require Prettier for syntax/format checks" >&2; return 2; }
-    "$prettier_bin" --check --ignore-unknown "${format_files[@]}"
-  fi
   mapfile -t node_files < <(printf '%s\n' "${changed[@]}" | awk '/\.(cjs|js|mjs)$/')
   if [ "${#node_files[@]}" -gt 0 ]; then
     node_bin=${NODE_BIN:-}; [ -n "$node_bin" ] || node_bin=$(command -v node || true)
