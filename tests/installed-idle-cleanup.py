@@ -121,15 +121,26 @@ def cleanup(user, root, marker, collector_target, target):
     emit(target, result)
 
 
+def census(uid):
+    """Return a bounded reason without exposing process identities."""
+    if os.geteuid() != 0 or uid <= 1000:
+        return 'invalid-identity'
+    try:
+        return 'processes-present' if process_ids(uid) else 'clear'
+    except Exception:
+        return 'inspection-failed'
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == '--census':
         try:
-            uid = int(sys.argv[2])
-            if os.geteuid() != 0 or uid <= 1000 or process_ids(uid):
-                raise SystemExit(1)
-            raise SystemExit(0)
-        except Exception:
+            result = census(int(sys.argv[2]))
+        except ValueError:
+            result = 'invalid-identity'
+        if result != 'clear':
+            print('UID census: ' + result, file=sys.stderr)
             raise SystemExit(1)
+        raise SystemExit(0)
     if len(sys.argv) != 6:
         raise SystemExit(2)
     cleanup(*sys.argv[1:])

@@ -64,19 +64,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Static labels expose which check failed without printing private paths,
+          # process details, or bootstrap output.
+          stage=census
+          trap 'printf "Freeze stage failed: %s\n" "$stage" >&2' ERR
           sudo python3 -I "$DIAG_REF/repo/tests/installed-idle-cleanup.py" --census "$(id -u "$DIAG_USER")"
           for name in pinokiod pterm; do
+            stage="directory-$name"
             test -d "$DIAG_ROOT/home/$name"
             test ! -L "$DIAG_ROOT/home/$name"
           done
+          stage=destination
           sudo install -d -m 755 -o root -g root "$DIAG_REF/engines"
+          stage=move
           sudo mv "$DIAG_ROOT/home/pinokiod" "$DIAG_ROOT/home/pterm" "$DIAG_REF/engines/"
+          stage=ownership
           sudo chown -R root:root "$DIAG_REF/engines"
+          stage=permissions
           sudo chmod -R a+rX,go-w "$DIAG_REF/engines"
+          stage=config-check
           test -f "$DIAG_REF/engines/pinokiod/script/pinokio.json"
           test ! -L "$DIAG_REF/engines/pinokiod/script/pinokio.json"
+          stage=config-ownership
           sudo chown "$DIAG_USER:$DIAG_USER" "$DIAG_REF/engines/pinokiod/script/pinokio.json"
+          stage=config-permissions
           sudo chmod 600 "$DIAG_REF/engines/pinokiod/script/pinokio.json"
+          trap - ERR
       - name: Run genuine install, Start and idle Stop
         timeout-minutes: 33
         shell: bash

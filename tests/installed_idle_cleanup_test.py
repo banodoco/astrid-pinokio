@@ -12,6 +12,16 @@ spec.loader.exec_module(module)
 
 
 class CleanupTest(unittest.TestCase):
+    def test_census_reasons_remain_bounded_and_fail_closed(self):
+        with patch.object(module.os, 'geteuid', return_value=0), patch.object(module, 'process_ids') as process_ids:
+            process_ids.return_value = []
+            self.assertEqual(module.census(1001), 'clear')
+            process_ids.return_value = [123]
+            self.assertEqual(module.census(1001), 'processes-present')
+            process_ids.side_effect = RuntimeError('sensitive detail')
+            self.assertEqual(module.census(1001), 'inspection-failed')
+            self.assertEqual(module.census(1000), 'invalid-identity')
+
     def test_census_detects_matching_real_or_saved_uid_with_foreign_effective_uid(self):
         with tempfile.TemporaryDirectory() as tmp:
             proc = Path(tmp)
