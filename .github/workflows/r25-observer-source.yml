@@ -1,7 +1,7 @@
 name: R-25 observer source probe
 on:
   push:
-    branches: ['lane/M-PIN/R-25-SOURCES']
+    branches: ['lane/M-PIN/R-25-SOURCES', 'lane/M-PIN/R-25-SOURCE-FIX-R1']
 permissions:
   contents: read
 jobs:
@@ -19,6 +19,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
+      - name: Select macOS SDK
+        if: runner.os == 'macOS'
+        run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
       - name: Focused observer tests
         run: node --test tests/native-observer-source.test.mjs
       - name: Probe source and retain allowlisted facts
