@@ -1,0 +1,103 @@
+name: R-21 native old-launcher Update Stop retry
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Exact authorised venue request ID
+        required: true
+        type: string
+      runner_ref:
+        description: Immutable R-21 lane commit SHA; must equal this run's GitHub SHA
+        required: true
+        type: string
+      confirmation:
+        description: Required literal REAL_ENGINE_UPDATE_STOP_RETRY
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r21-real-engine-${{ inputs.request_id }}-${{ inputs.runner_ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-request:
+    name: Bind dedicated R-21 request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      runner_ref: ${{ steps.request.outputs.runner_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: request
+        name: Reject mutable, wrong-lane, or non-R-21 dispatches
+        env:
+          R21_REQUEST_ID: ${{ inputs.request_id }}
+          R21_RUNNER_REF: ${{ inputs.runner_ref }}
+          R21_CONFIRMATION: ${{ inputs.confirmation }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          node .github/venue/r21-inputs.cjs --output "$RUNNER_TEMP/r21-request.json"
+          echo "runner_ref=${R21_RUNNER_REF}" >> "$GITHUB_OUTPUT"
+      - name: Retain the request binding only
+        uses: actions/upload-artifact@v4
+        with:
+          name: r21-request-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/r21-request.json
+          if-no-files-found: error
+          retention-days: 30
+
+  native-old-launcher-journey:
+    needs: validate-request
+    name: Native old-launcher Update Stop retry
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-request.outputs.runner_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Provision pinned native engine inputs
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/pinokiocomputer/pinokiod.git "$RUNNER_TEMP/pinokiod"
+          git -C "$RUNNER_TEMP/pinokiod" checkout --detach add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
+          git clone --filter=blob:none https://github.com/pinokiocomputer/pterm.git "$RUNNER_TEMP/pterm"
+          git -C "$RUNNER_TEMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb
+          npm ci --omit=dev --prefix "$RUNNER_TEMP/pterm" --silent
+      - name: Execute the dedicated real-engine R-21 journey
+        env:
+          R21_REQUEST_ID: ${{ inputs.request_id }}
+          R21_RUNNER_REF: ${{ needs.validate-request.outputs.runner_ref }}
+          R21_CONFIRMATION: ${{ inputs.confirmation }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: bash .github/venue/r21-real-engine.sh "$RUNNER_TEMP/r21-request.json"
+      - name: Retain sanitised R-21 receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r21-real-engine-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/r21-evidence
+          if-no-files-found: warn
+          retention-days: 30
