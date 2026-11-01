@@ -47,6 +47,53 @@ test('unsupported host refuses without running a caller-chosen source', { skip: 
   session.stop();
 });
 
+// Keep only compiler error identifiers and fixed, allowlisted message fragments.
+// Compiler lines can contain paths or other runner-specific values.
+function nativeBuildDiagnostics(compiled) {
+  const code = compiled.error?.code;
+  const signal = compiled.signal;
+  const diagnostics = [];
+  const fragments = [
+    'cannot open compiler generated file',
+    'cannot open include file',
+    'cannot open source file',
+    'cannot open file',
+    'no source filename specified',
+    'unable to execute command',
+  ];
+  for (const output of [compiled.stdout, compiled.stderr]) {
+    for (const line of (typeof output === 'string' ? output : '').split(/\r?\n/)) {
+      const match = /\b(fatal error|error)\s+((?:C|D|LNK)\d{4})\s*:\s*(.*)/i.exec(line);
+      if (match) {
+        const message = match[3].toLowerCase();
+        const fragment = fragments.find(value => message.startsWith(value));
+        diagnostics.push(`${match[1].toLowerCase()} ${match[2].toUpperCase()}${fragment ? `: ${fragment}` : ''}`.slice(0, 120));
+      } else if (/^\s*'cl' is not recognized as an internal or external command,?\s*$/i.test(line)) {
+        diagnostics.push('cl is not recognized as a command');
+      }
+      if (diagnostics.length === 5) break;
+    }
+    if (diagnostics.length === 5) break;
+  }
+  return {
+    error_code: typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,31}$/.test(code) ? code : null,
+    status: Number.isSafeInteger(compiled.status) ? compiled.status : null,
+    signal: typeof signal === 'string' && /^SIG[A-Z0-9]{1,12}$/.test(signal) ? signal : null,
+    compiler_errors: diagnostics,
+  };
+}
+
+test('native build diagnostics are bounded and omit arbitrary child output', () => {
+  const result = nativeBuildDiagnostics({
+    error: { code: 'ETIMEDOUT' }, status: null, signal: 'SIGTERM',
+    stdout: Array(8).fill('C:\\private\\source.cpp(1): fatal error C1083: Cannot open include file: secret').join('\n'),
+    stderr: 'unrelated secret',
+  });
+  assert.deepEqual(result, { error_code: 'ETIMEDOUT', status: null, signal: 'SIGTERM', compiler_errors: Array(5).fill('fatal error C1083: cannot open include file') });
+  assert.deepEqual(nativeBuildDiagnostics({ error: { code: 'secret/path' }, status: 1, signal: 'secret', stderr: 'secret' }),
+    { error_code: null, status: 1, signal: null, compiler_errors: [] });
+});
+
 test('Windows hosted capability: compile and attempt bounded ETW capture', { skip: process.platform !== 'win32', timeout: 120000 }, async t => {
   const { execFileSync, spawnSync } = await import('node:child_process');
   const { mkdtempSync, rmSync } = await import('node:fs');
@@ -63,7 +110,9 @@ test('Windows hosted capability: compile and attempt bounded ETW capture', { ski
     const setup = join(vs, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat');
     const build = `call "${setup}" >nul && cl /nologo /EHsc /W4 /O2 /Fo"${join(scratch, 'observer.obj')}" /Fe"${exe}" "${join(directory, 'etw-observer.cpp')}" /link advapi32.lib ole32.lib`;
     const compiled = spawnSync('cmd.exe', ['/d', '/s', '/c', build], { windowsHide: true, encoding: 'utf8', timeout: 45000 });
-    assert.equal(compiled.status, 0, `native build failed: ${compiled.error?.code || compiled.status}`);
+    const buildDiagnostics = nativeBuildDiagnostics(compiled);
+    if (compiled.status !== 0) t.diagnostic(`native build diagnostics: ${JSON.stringify(buildDiagnostics)}`);
+    assert.equal(compiled.status, 0, `native build failed: ${buildDiagnostics.error_code || buildDiagnostics.status}`);
     const session = openWindowsObservation();
     const ready = await session.ready;
     if (ready) {
