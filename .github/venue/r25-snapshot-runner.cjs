@@ -9,7 +9,7 @@ const crypto = require('node:crypto');
 const { execFileSync, spawn } = require('node:child_process');
 const binding = require('../../pinokio/providers/r25-native-collector-binding.cjs');
 const { createObserverIO } = require('./r21-observer-io.cjs');
-const { ptermExit } = require('./r21-observer-diagnostics.cjs');
+const { ptermExit, createInstallDiagnostics, terminateChild } = require('./r21-observer-diagnostics.cjs');
 
 const AGENT_REF = binding.AGENT_SOURCE_REF;
 const PINOKIO_SOURCE_REF = '95aafb5a029c3f53cb2268d8596909eab0deb3c4';
@@ -130,13 +130,15 @@ async function filesystemState(home, appRoot) {
   return { schema: 'astrid.r25.pinokio-filesystem-record.v1', protected: rows, app_tree: await digestTree(appRoot) };
 }
 
-async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, action, timeoutMs = 30 * 60 * 1000 }) {
+async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, action, timeoutMs = 30 * 60 * 1000, diagnostic = null }) {
   const socket = await io.openSocket();
+  let child;
   let terminal = { stop: false, disconnect: false, error: false };
   let firstError = null;
   const onMessage = event => {
     try {
       const packet = JSON.parse(String(event.data));
+      try { diagnostic?.packet(packet); } catch {}
       if (packet?.type === 'event' && packet.data === 'stop') terminal.stop = true;
       if (packet?.type === 'event' && packet.data === 'disconnect') terminal.disconnect = true;
       if (packet?.type === 'error' || packet?.type === 'installer-failure-marker') {
@@ -148,13 +150,14 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
   socket.addEventListener('message', onMessage);
   try {
     socket.send(JSON.stringify({ uri: path.join(appRoot, script), mode: 'listen' }));
-    const child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', endpoint], {
+    child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', endpoint], {
       cwd: home, env: process.env, stdio: ['ignore', 'ignore', 'ignore'],
     });
-    const innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs);
+    const innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs, diagnostic?.pterm);
     await new Promise(resolve => setTimeout(resolve, 500));
     return { script, inner_exit: innerExit, terminal, first_error: firstError, status_after: await io.status(path.join(appRoot, script), `${action}-status`) };
   } finally {
+    await terminateChild(child);
     io.disposeSocket(socket);
   }
 }
@@ -214,14 +217,26 @@ async function main() {
   if (!daemonReady) throw new Error('native pinokiod did not reach readiness');
   const { WebSocket } = require(path.join(ptermRoot, 'node_modules', 'unws'));
   const trace = createObserverIO({ WebSocket, fetch, spawn, record: () => {}, appRoot, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', pollMs: 120000 });
-  // Installation is disposable preparation, outside the six measured
-  // boundaries. It is still driven through the real Pinokio engine and is
-  // allowed to fail closed before an evidence session can begin.
-  const preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: 'pinokio/install.js', action: 'setup-install', timeoutMs: 45 * 60 * 1000 });
-  if (preparation.first_error || preparation.inner_exit.code !== 0 || preparation.terminal.error) throw new Error('disposable Pinokio install preparation failed');
-  const worker = spawn(process.env.PYTHON || 'python', [path.join(process.cwd(), '.github', 'venue', 'r25-snapshot-worker.py'), requestPath, output], { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: path.resolve(cli['agent-root']) }, stdio: ['pipe', 'pipe', 'ignore'] });
+  const setupDiagnostics = createInstallDiagnostics({
+    schema: 'astrid.r25.pinokio-setup-diagnostics.v1',
+    run_id: process.env.GITHUB_RUN_ID || null,
+    run_attempt: process.env.GITHUB_RUN_ATTEMPT || null,
+    phase: 'setup-install',
+  }, value => {
+    const file = path.join(diagnostics, 'r25-install-diagnostics.json');
+    fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(`${file}.tmp`, file);
+  });
+  let worker;
   const results = [];
   try {
+    // Installation is disposable preparation, outside the six measured
+    // boundaries. It is still driven through the real Pinokio engine and is
+    // allowed to fail closed before an evidence session can begin. Keep its
+    // bounded native trace even when PTerm times out before returning an exit.
+    const preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: 'pinokio/install.js', action: 'setup-install', timeoutMs: 45 * 60 * 1000, diagnostic: setupDiagnostics });
+    if (preparation.first_error || preparation.inner_exit.code !== 0 || preparation.terminal.error) throw new Error('disposable Pinokio install preparation failed');
+    worker = spawn(process.env.PYTHON || 'python', [path.join(process.cwd(), '.github', 'venue', 'r25-snapshot-worker.py'), requestPath, output], { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: path.resolve(cli['agent-root']) }, stdio: ['pipe', 'pipe', 'ignore'] });
     for (const item of plans) {
       const action = item.plan.action;
       await workerSend(worker, { op: 'open', action });
@@ -249,8 +264,8 @@ async function main() {
     for (const record of results) writeCanonical(path.join(output, 'filesystem', `${record.action}.json`), record);
   } finally {
     await trace.cleanup();
-    if (worker.exitCode === null) worker.kill();
-    if (daemon.exitCode === null) daemon.kill();
+    if (worker && worker.exitCode === null) worker.kill();
+    await terminateChild(daemon);
   }
 }
 
