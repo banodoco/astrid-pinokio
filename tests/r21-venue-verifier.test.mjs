@@ -38,6 +38,12 @@ function receipt() {
         app: TUPLE.app, origin: APP_RUNTIME.origin, app_release: 1,
         health: true, realm: true, handshake: true,
         runtime_instance_digest: '1'.repeat(64), realm_digest: '2'.repeat(64),
+        served_build: {
+          source_commit: TUPLE.app,
+          manifest_sha256: '920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87',
+          build_json_app: TUPLE.app, build_json_release: 1, build_json_sha256: '3'.repeat(64),
+          origin: APP_RUNTIME.origin, local_loopback: true,
+        },
       },
     },
     cleanup: {
@@ -67,6 +73,13 @@ test('R-21 real-engine route and receipt bind the same current manifest tuple', 
   for (const value of [TUPLE.pinokio, TUPLE.agent, TUPLE.app, '920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87']) {
     assert.match(runner, new RegExp(value));
   }
+  for (const command of [
+    'npm ci --prefix "$RUNNER_TEMP/r21-candidate-app-source" --silent',
+    'npm run --prefix "$RUNNER_TEMP/r21-candidate-app-source" build:hosted --silent',
+    'r21-candidate-app-server.cjs',
+    "R21_CANDIDATE_APP_HOST_RULES='MAP astrid.haus 127.0.0.1'",
+    'iptables -w -t nat -I OUTPUT 1 -p tcp -d 127.0.0.1 --dport 443',
+  ]) assert.match(runner, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   for (const stale of [
     '2f085c5fc0cde192ac4a022065883c85dcccd0de',
     'e425903f7a9fa5b82973281d15054c0716b46e2d',
@@ -102,10 +115,10 @@ test('R-21 venue verifier rejects a successful-looking wrapper with a nonzero in
 test('R-21 dispatch binding accepts only the exact product dispatch or self-serve venue ref', () => {
   const environment = {
     GITHUB_EVENT_NAME: 'push',
-    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1',
+    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1',
     GITHUB_SHA: 'a'.repeat(40),
     GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1',
     GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1',
   };
   const bound = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment);
@@ -121,8 +134,8 @@ test('R-21 dispatch binding accepts only the exact product dispatch or self-serv
   const manualEnvironment = {
     ...environment,
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-FINDINGS-CLOSURE-R1',
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-FINDINGS-CLOSURE-R1',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-CANDIDATE-APP-SERVE-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-CANDIDATE-APP-SERVE-R1',
   };
   const manualInput = { request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) };
   const manual = validateDispatch(manualInput, manualEnvironment);
@@ -146,9 +159,9 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-publisher-'));
   try {
     const environment = {
-      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1',
+      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1',
       GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1',
+      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1',
       GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: REQUEST_ID,
       R21_CONFIRMATION: CONFIRMATION, R21_RUNNER_REF: 'a'.repeat(40),
     };
@@ -163,6 +176,7 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
       v.installed_bytes = 'd'.repeat(64); v.user_data = 'c'.repeat(64);
     }
     sample.secret = 'must-never-leave-runner';
+    sample.retry.served_app_runtime.served_build.secret = sample.secret;
     fs.writeFileSync(path.join(input, 'r21-receipt.json'), JSON.stringify(sample));
     fs.writeFileSync(path.join(input, 'r21-install-diagnostics.json'), JSON.stringify({ binding: { request_id: REQUEST_ID, runner_ref: 'a'.repeat(40), run_id: '100', run_attempt: '1', secret: 'spoof' },
       events: [{ kind: 'stream', timestamp: '2026-01-01T00:00:00.000Z', index: 2, total: 4, method: 'shell.run', raw: sample.secret }], secret: sample.secret }));
@@ -259,6 +273,9 @@ test('R-21 rejects wrong or broken served candidate App interactions', () => {
     value => { value.retry.served_app_runtime.health = false; },
     value => { value.retry.served_app_runtime.handshake = false; },
     value => { delete value.retry.served_app_runtime.realm_digest; },
+    value => { value.retry.served_app_runtime.served_build.source_commit = '0'.repeat(40); },
+    value => { value.retry.served_app_runtime.served_build.build_json_release = 2; },
+    value => { value.retry.served_app_runtime.served_build.local_loopback = false; },
     value => { delete value.retry.served_app_runtime; },
   ]) {
     const value = receipt(); mutate(value);

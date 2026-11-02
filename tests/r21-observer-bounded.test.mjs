@@ -227,23 +227,32 @@ function servedAppObservation() {
   };
 }
 
+function servedBuild() {
+  return {
+    source_commit: 'a'.repeat(40), manifest_sha256: 'b'.repeat(64),
+    build_json_app: 'a'.repeat(40), build_json_release: 1, build_json_sha256: 'c'.repeat(64),
+    origin: APP_RUNTIME.origin, local_loopback: true,
+  };
+}
+
 test('served candidate App observation binds its exact build to this Runtime interaction', () => {
   const expected = {
     appRuntime: APP_RUNTIME, appSha: 'a'.repeat(40),
-    expectedRuntimeInstanceId: 'runtime-1', expectedRealmId: 'realm-1',
+    expectedRuntimeInstanceId: 'runtime-1', expectedRealmId: 'realm-1', servedBuild: servedBuild(),
   };
   assert.deepEqual(validateCandidateAppInteraction(servedAppObservation(), expected), {
     app: 'a'.repeat(40), origin: APP_RUNTIME.origin, app_release: 1,
     health: true, realm: true, handshake: true,
     runtime_instance_digest: '168957e8d7dc810a091762d5cd16db9da1a4a817f39c580ed44cdd1bf8b87e7f',
     realm_digest: '17961365c4a44198bfaa8ec85245cbc86498765e5f3b72e970a6973c4bb21ba0',
+    served_build: servedBuild(),
   });
 });
 
 test('served candidate App observation rejects wrong, broken, or other-Runtime Apps', () => {
   const expected = {
     appRuntime: APP_RUNTIME, appSha: 'a'.repeat(40),
-    expectedRuntimeInstanceId: 'runtime-1', expectedRealmId: 'realm-1',
+    expectedRuntimeInstanceId: 'runtime-1', expectedRealmId: 'realm-1', servedBuild: servedBuild(),
   };
   for (const [label, mutate] of [
     ['wrong App', value => { value.page.build_app = 'b'.repeat(40); }],
@@ -299,7 +308,7 @@ test('successful Start still requires explicit engine, runtime and application r
 
 test('publisher allows only timestamped fixed operation and category fields', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r21-observer-publish-'));
-  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
   try {
     const evidenceDir = path.join(root, 'evidence'); const destination = path.join(root, 'result'); fs.mkdirSync(evidenceDir);
     const put = last_operation => fs.writeFileSync(path.join(evidenceDir, 'r21-failure.json'), JSON.stringify({ category: 'timeout', last_operation }));
@@ -409,7 +418,7 @@ exports.WebSocket = class extends EventTarget {
 test('publisher retains only a bound, reprojected first Install error', () => {
   const { createInstallDiagnostics } = require('../.github/venue/r21-observer-diagnostics.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r21-first-error-publish-'));
-  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1', GITHUB_RUN_ID: '101', GITHUB_RUN_ATTEMPT: '2', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1', GITHUB_RUN_ID: '101', GITHUB_RUN_ATTEMPT: '2', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
   try {
     const evidenceDir = path.join(root, 'evidence'); fs.mkdirSync(evidenceDir);
     const binding = { request_id: env.R21_REQUEST_ID, runner_ref: env.R21_RUNNER_REF, run_id: env.GITHUB_RUN_ID, run_attempt: env.GITHUB_RUN_ATTEMPT };
@@ -443,7 +452,7 @@ test('publisher retains only a bound, reprojected first Install error', () => {
 test('publisher retains bounded native Install event and PTerm facts on failure', () => {
   const { createInstallDiagnostics, INSTALL_TRACE_LIMIT } = require('../.github/venue/r21-observer-diagnostics.cjs');
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-install-publish-'));
-  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
   try {
     const input = path.join(root, 'evidence'); const destination = path.join(root, 'result');
     fs.mkdirSync(input);

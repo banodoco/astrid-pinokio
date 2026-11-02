@@ -13,9 +13,10 @@ const { createTrace, actionPhase, createActionTracker, ptermExit, createInstallD
 const { createStartDiagnostics, runBoundedRuntimeStatus, probePort17340 } = require('./r21-start-diagnostics.cjs');
 const { createObserverIO } = require('./r21-observer-io.cjs');
 const { observeCandidateAppInteraction } = require('./r21-app-browser.cjs');
+const { verifyCandidateAppProvenance } = require('./r21-candidate-app-build.cjs');
 const { digestProtectedState, installedTupleMatches, runtimeStatusSpec } = require('./r21-protected-state.cjs');
 const {
-  ACTIONS, APP_RUNTIME, ENDPOINT, FIRST_REFUSAL, TUPLE, verifyReceipt,
+  ACTIONS, APP_RUNTIME, ENDPOINT, FIRST_REFUSAL, MANIFEST_SHA256, TUPLE, verifyReceipt,
 } = require('./r21-verify.cjs');
 
 const [requestPath, output] = process.argv.slice(2);
@@ -243,10 +244,15 @@ async function main() {
   const contract = await candidateAppRuntimeObservation();
   if (contract.ready !== true) throw new Error('candidate App Runtime contract probe was not ready');
   substage('candidate-app-browser');
+  const servedBuild = verifyCandidateAppProvenance(JSON.parse(await fsp.readFile(process.env.R21_CANDIDATE_APP_PROVENANCE || '', 'utf8')), {
+    appSha: TUPLE.app, manifestSha256: MANIFEST_SHA256,
+  });
   retry.served_app_runtime = await observeCandidateAppInteraction({
     spawn, chromePath, profileDir: path.join(home, '.r21-candidate-app-browser'),
     appRuntime: APP_RUNTIME, appSha: TUPLE.app,
     expectedRuntimeInstanceId: contract.runtime_instance_id, expectedRealmId: contract.realm_id,
+    servedBuild, hostResolverRules: process.env.R21_CANDIDATE_APP_HOST_RULES,
+    certificateSpki: process.env.R21_CANDIDATE_APP_CERTIFICATE_SPKI,
   });
   retry.candidate_app_runtime_ready = true;
   retry.start_to_ready = retry.start_running_after_retry === true && retry.runtime_ready

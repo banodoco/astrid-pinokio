@@ -17,6 +17,10 @@ for (const phase of ['setup', 'journey']) {
       fs.mkdirSync(bin);
       // A resistant descendant exercises escalation after its leader receives TERM.
       fs.writeFileSync(path.join(bin, 'git'), `#!/bin/bash
+if [[ "$1" == -C && "$3" == rev-parse ]]; then
+  echo ce1502e94b935fe6ef1e2f363fc6b55aade4a204
+  exit 0
+fi
 if [[ "$R21_FAKE_PHASE" == setup && "$1" == clone ]] || [[ "$R21_FAKE_PHASE" == journey && "$1" == rev-parse ]]; then
   bash -c 'trap "" TERM; echo "$BASHPID" > "$R21_CHILD_PID"; while :; do sleep 1; done' &
   wait
@@ -24,14 +28,30 @@ fi
 exit 0
 `, { mode: 0o755 });
       fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
+      // The watchdog fixture replaces network/package tools. Let the real
+      // supervisor Node handle timers, while the exact-build verifier writes
+      // the one bounded provenance file its later preflight requires.
+      fs.writeFileSync(path.join(bin, 'node'), `#!/bin/bash
+if [[ "$1" == *r21-candidate-app-build.cjs ]]; then
+  while [[ "$#" -gt 0 ]]; do
+    if [[ "$1" == --output ]]; then
+      printf '%s\\n' '{"source_commit":"ce1502e94b935fe6ef1e2f363fc6b55aade4a204","manifest_sha256":"920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87","build_json_app":"ce1502e94b935fe6ef1e2f363fc6b55aade4a204","build_json_release":1,"build_json_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","origin":"https://astrid.haus","local_loopback":true}' > "$2"
+      exit 0
+    fi
+    shift
+  done
+fi
+exec "$R21_REAL_NODE" "$@"
+`, { mode: 0o755 });
+      fs.mkdirSync(path.join(root, 'r21-candidate-app-source', 'dist'), { recursive: true });
       const output = path.join(root, 'github-output');
       fs.writeFileSync(output, '');
       const env = {
-        ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: root,
+        ...process.env, PATH: `${bin}:${process.env.PATH}`, R21_REAL_NODE: process.execPath, RUNNER_TEMP: root,
         GITHUB_OUTPUT: output, R21_FAKE_PHASE: phase, R21_CHILD_PID: path.join(root, 'child.pid'),
-        GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1',
+        GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1',
         GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-        GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1',
+        GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1',
         GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1',
         R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40),
       };

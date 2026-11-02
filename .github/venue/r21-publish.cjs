@@ -6,17 +6,27 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { TRACE_LIMIT, projectOperation, projectActionFailure, projectInstallEvidence } = require('./r21-observer-diagnostics.cjs');
 const { projectStartDiagnostics } = require('./r21-start-diagnostics.cjs');
-const { validateDispatch, verifyReceipt, TUPLE, ENDPOINT, REQUEST_ID } = require('./r21-verify.cjs');
+const { validateDispatch, verifyReceipt, TUPLE, ENDPOINT, MANIFEST_SHA256, REQUEST_ID } = require('./r21-verify.cjs');
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const bool = value => value === true ? true : value === false ? false : null;
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : null;
 const number = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+const servedBuild = source => source && typeof source === 'object' ? {
+  source_commit: source.source_commit === TUPLE.app ? TUPLE.app : null,
+  manifest_sha256: source.manifest_sha256 === MANIFEST_SHA256 ? MANIFEST_SHA256 : null,
+  build_json_app: source.build_json_app === TUPLE.app ? TUPLE.app : null,
+  build_json_release: source.build_json_release === 1 ? 1 : null,
+  build_json_sha256: hash(source.build_json_sha256),
+  origin: source.origin === require('./r21-verify.cjs').APP_RUNTIME.origin ? source.origin : null,
+  local_loopback: bool(source.local_loopback),
+} : null;
 const servedApp = source => source && typeof source === 'object' ? {
   app: source.app === TUPLE.app ? TUPLE.app : null,
   origin: source.origin === require('./r21-verify.cjs').APP_RUNTIME.origin ? source.origin : null,
   app_release: source.app_release === 1 ? 1 : null,
   health: bool(source.health), realm: bool(source.realm), handshake: bool(source.handshake),
   runtime_instance_digest: hash(source.runtime_instance_digest), realm_digest: hash(source.realm_digest),
+  served_build: servedBuild(source.served_build),
 } : null;
 const read = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 const action = source => source && typeof source === 'object' ? {
@@ -60,10 +70,12 @@ function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
   const snapshot = read(path.join(watchdogDir, 'progress.json'));
   const watchdog = read(path.join(watchdogDir, 'watchdog.json'));
   const substages = {
-    setup: ['clone-pinokiod', 'checkout-pinokiod', 'install-pinokiod', 'clone-pterm', 'checkout-pterm', 'install-pterm'],
+    setup: ['clone-pinokiod', 'checkout-pinokiod', 'install-pinokiod', 'clone-pterm', 'checkout-pterm', 'install-pterm',
+      'clone-candidate-app', 'install-candidate-app', 'build-candidate-app'],
     'run-r21-journey': ['install', 'initial-start-readiness', 'state-before', 'first-click', 'state-after-first-click', 'stop', 'retry', 'retry-start-readiness', 'candidate-app-browser', 'state-after-retry', 'cleanup', 'verify-receipt'],
   };
-  const stages = ['setup','preflight','verify-native-inputs','retain-historical-launcher','verify-published-app-manifest','start-native-engine','run-r21-journey','complete'];
+  const stages = ['setup','preflight','verify-native-inputs','retain-historical-launcher','verify-published-app-manifest',
+    'serve-candidate-app-build','start-native-engine','run-r21-journey','complete'];
   const stage = stages.includes(snapshot?.stage) ? snapshot.stage : null;
   const lastProgress = { stage, substage: substages[stage]?.includes(snapshot?.substage) ? snapshot.substage : null,
     elapsed_ms: number(snapshot?.elapsed_ms) };

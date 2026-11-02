@@ -81,6 +81,24 @@ if [[ "${1:-}" == --work ]]; then
     git -C "$RUNNER_TEMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb
     progress setup install-pterm
     npm ci --omit=dev --prefix "$RUNNER_TEMP/pterm" --silent
+    progress setup clone-candidate-app
+    git init --quiet "$RUNNER_TEMP/r21-candidate-app-source"
+    git -C "$RUNNER_TEMP/r21-candidate-app-source" remote add origin https://github.com/banodoco/astrid-app.git
+    git -C "$RUNNER_TEMP/r21-candidate-app-source" fetch --quiet --depth=1 --filter=blob:none origin \
+      ce1502e94b935fe6ef1e2f363fc6b55aade4a204
+    git -C "$RUNNER_TEMP/r21-candidate-app-source" checkout --quiet --detach FETCH_HEAD
+    test "$(git -C "$RUNNER_TEMP/r21-candidate-app-source" rev-parse HEAD)" = 'ce1502e94b935fe6ef1e2f363fc6b55aade4a204'
+    progress setup install-candidate-app
+    npm ci --prefix "$RUNNER_TEMP/r21-candidate-app-source" --silent
+    progress setup build-candidate-app
+    env RAILWAY_GIT_COMMIT_SHA=ce1502e94b935fe6ef1e2f363fc6b55aade4a204 \
+      VITE_APP_BUILD=ce1502e94b935fe6ef1e2f363fc6b55aade4a204 NODE_OPTIONS=--max-old-space-size=4096 \
+      npm run --prefix "$RUNNER_TEMP/r21-candidate-app-source" build:hosted --silent
+    node .github/venue/r21-candidate-app-build.cjs \
+      --source "$RUNNER_TEMP/r21-candidate-app-source" \
+      --app ce1502e94b935fe6ef1e2f363fc6b55aade4a204 \
+      --manifest 920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87 \
+      --output "$RUNNER_TEMP/r21-candidate-app-build.json"
   )
   status=$?
   printf '%s\n' "$status" > "$R21_PROGRESS_DIR/setup.exit"
@@ -103,6 +121,15 @@ venue_home="$RUNNER_TEMP/r21-pinokio-home"
 source_root="$RUNNER_TEMP/r21-old-launcher-source"
 agent_source="$RUNNER_TEMP/r21-published-agent-source"
 app_root="$venue_home/api/astrid"
+candidate_app_source="$RUNNER_TEMP/r21-candidate-app-source"
+candidate_app_dist="$candidate_app_source/dist"
+candidate_app_provenance="$RUNNER_TEMP/r21-candidate-app-build.json"
+candidate_app_key="$RUNNER_TEMP/r21-candidate-app.key"
+candidate_app_cert="$RUNNER_TEMP/r21-candidate-app.crt"
+candidate_app_ready="$RUNNER_TEMP/r21-candidate-app-server.json"
+candidate_app_pid=''
+candidate_app_port=''
+candidate_app_nat=false
 stage='preflight'
 daemon_pid=''
 progress() {
@@ -112,7 +139,8 @@ progress() {
 }
 progress "$stage"
 
-if [ -e "$out" ] || [ -e "$venue_home" ] || [ -e "$source_root" ] || [ -e "$agent_source" ]; then
+if [ -e "$out" ] || [ -e "$venue_home" ] || [ -e "$source_root" ] || [ -e "$agent_source" ] \
+    || [ ! -d "$candidate_app_source" ] || [ ! -d "$candidate_app_dist" ] || [ ! -f "$candidate_app_provenance" ]; then
   printf 'R-21 venue paths already exist; a fresh RUNNER_TEMP is required\n' >&2
   exit 1
 fi
@@ -135,6 +163,13 @@ failure_receipt() {
     kill -KILL "$daemon_pid" 2>/dev/null || true
     wait "$daemon_pid" 2>/dev/null || true
   fi
+  if [ "$candidate_app_nat" = true ] && [ -n "$candidate_app_port" ]; then
+    sudo -n iptables -w -t nat -D OUTPUT -p tcp -d 127.0.0.1 --dport 443 -j REDIRECT --to-ports "$candidate_app_port" 2>/dev/null || true
+  fi
+  if [ -n "$candidate_app_pid" ]; then
+    kill "$candidate_app_pid" 2>/dev/null || true
+    wait "$candidate_app_pid" 2>/dev/null || true
+  fi
   if [ -d "$out" ]; then
     (cd "$out" && rm -f SHA256SUMS && sha256sum ./* > SHA256SUMS) || true
   fi
@@ -150,6 +185,11 @@ chrome_path=$(command -v google-chrome-stable || command -v google-chrome || com
 test -x "$chrome_path"
 test "$(git -C "$RUNNER_TEMP/pinokiod" rev-parse HEAD)" = 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf'
 test "$(git -C "$RUNNER_TEMP/pterm" rev-parse HEAD)" = '5be43718701c448b43daf0ce51d8935f170065bb'
+node .github/venue/r21-candidate-app-build.cjs \
+  --source "$candidate_app_source" \
+  --app ce1502e94b935fe6ef1e2f363fc6b55aade4a204 \
+  --manifest 920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87 \
+  --output "$candidate_app_provenance"
 node .github/venue/r21-inputs.cjs --output "$request"
 git init --quiet "$agent_source"
 git -C "$agent_source" remote add origin https://github.com/banodoco/astrid-agent.git
@@ -203,6 +243,41 @@ if (manifest?.runtime?.schema_digest !== 'sha256:9628bb5fd6e1dbbec392dd39f2e0103
 NODE
 rm -f "$manifest"
 
+stage='serve-candidate-app-build'
+progress "$stage"
+openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 \
+  -subj '/CN=astrid.haus' -addext 'subjectAltName=DNS:astrid.haus,IP:127.0.0.1' \
+  -keyout "$candidate_app_key" -out "$candidate_app_cert" >/dev/null 2>&1
+chmod 600 "$candidate_app_key"
+node .github/venue/r21-candidate-app-server.cjs --root "$candidate_app_dist" \
+  --key "$candidate_app_key" --cert "$candidate_app_cert" --ready "$candidate_app_ready" >/dev/null 2>&1 &
+candidate_app_pid=$!
+for _ in $(seq 1 50); do
+  if [ -f "$candidate_app_ready" ]; then break; fi
+  kill -0 "$candidate_app_pid" 2>/dev/null || exit 1
+  sleep 0.1
+done
+test -f "$candidate_app_ready"
+candidate_app_port=$(node - "$candidate_app_ready" <<'NODE'
+const fs = require('node:fs');
+const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (value?.schema !== 1 || value?.host !== '127.0.0.1' || value?.origin !== 'https://astrid.haus'
+    || !Number.isInteger(value?.port) || value.port < 1024 || value.port > 65535) process.exit(1);
+process.stdout.write(String(value.port));
+NODE
+)
+command -v sudo >/dev/null
+sudo -n true
+sudo -n iptables -w -t nat -I OUTPUT 1 -p tcp -d 127.0.0.1 --dport 443 -j REDIRECT --to-ports "$candidate_app_port"
+candidate_app_nat=true
+curl --noproxy '*' --fail --silent --show-error --resolve astrid.haus:443:127.0.0.1 \
+  --cacert "$candidate_app_cert" https://astrid.haus/build.json --output "$RUNNER_TEMP/r21-served-build.json"
+cmp "$candidate_app_dist/build.json" "$RUNNER_TEMP/r21-served-build.json"
+rm -f "$RUNNER_TEMP/r21-served-build.json"
+candidate_app_spki=$(openssl x509 -in "$candidate_app_cert" -pubkey -noout \
+  | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64 -w0)
+test "$candidate_app_spki" != ''
+
 stage='start-native-engine'
 progress "$stage"
 # A free port is required so all actions and statuses belong to this daemon.
@@ -229,7 +304,9 @@ stage='run-r21-journey'
 progress "$stage"
 env HOME="$venue_home/user-home" XDG_DATA_HOME="$venue_home/data" PINOKIO_HOME="$venue_home" \
   R21_APP_ROOT="$app_root" R21_PTERM_ROOT="$RUNNER_TEMP/pterm" R21_VENUE_HOME="$venue_home" \
-  R21_CHROME_PATH="$chrome_path" \
+  R21_CHROME_PATH="$chrome_path" R21_CANDIDATE_APP_PROVENANCE="$candidate_app_provenance" \
+  R21_CANDIDATE_APP_HOST_RULES='MAP astrid.haus 127.0.0.1' \
+  R21_CANDIDATE_APP_CERTIFICATE_SPKI="$candidate_app_spki" \
   node .github/venue/r21-observe.cjs "$request" "$out"
 
 stage='complete'

@@ -13,7 +13,13 @@ const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const exactStrings = (actual, expected) => Array.isArray(actual) && actual.length === expected.length
   && [...actual].sort().every((value, index) => value === [...expected].sort()[index]);
 
-function validateCandidateAppInteraction(observed, { appRuntime, appSha, expectedRuntimeInstanceId, expectedRealmId }) {
+function validateCandidateAppInteraction(observed, { appRuntime, appSha, expectedRuntimeInstanceId, expectedRealmId, servedBuild }) {
+  if (servedBuild?.source_commit !== appSha || servedBuild?.build_json_app !== appSha
+      || servedBuild?.build_json_release !== 1 || servedBuild?.origin !== appRuntime.origin
+      || servedBuild?.local_loopback !== true || !/^[a-f0-9]{64}$/.test(servedBuild?.manifest_sha256 || '')
+      || !/^[a-f0-9]{64}$/.test(servedBuild?.build_json_sha256 || '')) {
+    throw new Error('served candidate App build provenance is invalid');
+  }
   if (observed?.page?.origin !== appRuntime.origin || observed.page.build_status !== 200
       || observed.page.build_app !== appSha || observed.page.build_release !== 1) {
     throw new Error('served candidate App identity was not observed in the browser');
@@ -52,6 +58,15 @@ function validateCandidateAppInteraction(observed, { appRuntime, appSha, expecte
     handshake: true,
     runtime_instance_digest: sha256(expectedRuntimeInstanceId),
     realm_digest: sha256(expectedRealmId),
+    served_build: {
+      source_commit: servedBuild.source_commit,
+      manifest_sha256: servedBuild.manifest_sha256,
+      build_json_app: servedBuild.build_json_app,
+      build_json_release: servedBuild.build_json_release,
+      build_json_sha256: servedBuild.build_json_sha256,
+      origin: servedBuild.origin,
+      local_loopback: true,
+    },
   };
 }
 
@@ -121,15 +136,21 @@ function initiatedByApp(initiator, origin) {
 
 async function observeCandidateAppInteraction({
   spawn, chromePath, profileDir, appRuntime, appSha, expectedRuntimeInstanceId, expectedRealmId,
+  servedBuild, hostResolverRules, certificateSpki,
   timeoutMs = 45000,
 }) {
   if (typeof chromePath !== 'string' || !path.isAbsolute(chromePath) || !fs.existsSync(chromePath)) {
     throw new Error('candidate App browser executable is unavailable');
   }
+  if (hostResolverRules !== 'MAP astrid.haus 127.0.0.1'
+      || typeof certificateSpki !== 'string' || !/^[A-Za-z0-9+/]{43}=$/.test(certificateSpki)) {
+    throw new Error('candidate App browser local exact-origin route is unavailable');
+  }
   await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
   const child = spawn(chromePath, [
     '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
     '--disable-background-networking', '--no-first-run', '--no-default-browser-check',
+    `--host-resolver-rules=${hostResolverRules}`, `--ignore-certificate-errors-spki-list=${certificateSpki}`,
     '--remote-debugging-pipe', `--user-data-dir=${profileDir}`, 'about:blank',
   ], { env: process.env, stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
   const cdp = createCdp(child);
@@ -198,7 +219,7 @@ async function observeCandidateAppInteraction({
       if (evaluated.exceptionDetails || !evaluated.result?.value) throw new Error('served candidate App identity could not be read');
       await withTimeout(ready, timeoutMs, 'served candidate App Runtime interaction');
       return validateCandidateAppInteraction({ page: evaluated.result.value, requests: observations }, {
-        appRuntime, appSha, expectedRuntimeInstanceId, expectedRealmId,
+        appRuntime, appSha, expectedRuntimeInstanceId, expectedRealmId, servedBuild,
       });
     } finally { unlisten(); }
   } finally {

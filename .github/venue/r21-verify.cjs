@@ -39,8 +39,8 @@ const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
 // This lane is the dedicated diagnostic workflow source.  The product tuple
 // above remains the candidate under observation; this execution lane is never
 // substituted for its Pinokio product pin.
-const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-FINDINGS-CLOSURE-R1';
-const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1';
+const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-CANDIDATE-APP-SERVE-R1';
+const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1';
 const WORKFLOW_PATH = '.github/workflows/r21-real-engine.yml';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const ACTIONS = Object.freeze({
@@ -190,6 +190,15 @@ function verifyReceipt(receipt) {
       || !/^[a-f0-9]{64}$/.test(served.realm_digest || '')) {
     fail('served candidate App did not observably connect and handshake with this Runtime');
   }
+  const build = object(served.served_build, 'served candidate App build provenance');
+  equal(build.source_commit, TUPLE.app, 'served candidate App source commit');
+  equal(build.manifest_sha256, MANIFEST_SHA256, 'served candidate App manifest digest');
+  equal(build.build_json_app, TUPLE.app, 'served candidate App build.json app');
+  equal(build.build_json_release, 1, 'served candidate App build.json release');
+  equal(build.origin, APP_RUNTIME.origin, 'served candidate App build origin');
+  if (build.local_loopback !== true || !/^[a-f0-9]{64}$/.test(build.build_json_sha256 || '')) {
+    fail('served candidate App build was not locally served from its verified output');
+  }
   if (protectedState.before.user_data !== protectedState.after_retry?.user_data) {
     fail('retry changed the protected user-data digest');
   }
@@ -205,6 +214,6 @@ function verifyReceipt(receipt) {
 }
 
 module.exports = {
-  ACTIONS, APP_RUNTIME, CONFIRMATION, ENDPOINT, FIRST_REFUSAL, REQUEST_ID, TUPLE,
+  ACTIONS, APP_RUNTIME, CONFIRMATION, ENDPOINT, FIRST_REFUSAL, MANIFEST_SHA256, REQUEST_ID, TUPLE,
   validateDispatch, verifyReceipt,
 };
