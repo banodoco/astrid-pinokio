@@ -190,7 +190,7 @@ async function main() {
   const appRoot = path.join(home, 'api', 'astrid');
   const ptermRoot = cli.pterm || process.env.PTERM_ROOT;
   const pinokiodRoot = cli.pinokiod || process.env.PINOKIOD_ROOT;
-  if (!ptermRoot || !pinokiodRoot || !cli.agent-root) throw new Error('runner roots are incomplete');
+  if (!ptermRoot || !pinokiodRoot || !cli['agent-root']) throw new Error('runner roots are incomplete');
   await verifyAppCandidate(tuple);
   binding.validateSourceRoots({ agentRoot: path.resolve(cli['agent-root']), pinokioRoot: process.cwd(), agentRef: AGENT_REF });
   materializeProduct(productRoot, appRoot);
