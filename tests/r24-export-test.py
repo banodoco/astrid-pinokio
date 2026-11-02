@@ -116,6 +116,22 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(diagnostic['custody'], 'unknown')
         self.assertFalse(dest.exists())
 
+    def test_run_seals_only_internal_complete_records_and_fails_on_existing_destination(self):
+        action = {'dispatched': True, 'client_exit': 0, 'client_signal': None, 'messages': 1,
+                  'disconnects': 1, 'errors': 0, 'post_terminal': False,
+                  'end': 'socket-closed', 'settlement': 'unknown'}
+        dest = self.root / 'out'
+        with patch.object(p, 'validate', return_value=({'pinokio': self.root}, self.root, self.root)), \
+             patch.object(p, 'invoke_action', return_value=subprocess.CompletedProcess([], 0, json.dumps(action).encode())), \
+             patch.object(p.secrets, 'token_hex', return_value=self.session), \
+             patch.object(p, 'collect_authenticated', return_value=self.records):
+            result, diagnostic = p.run(self.request, {}, dest)
+            self.assertIsNone(diagnostic)
+            self.assertEqual(result, json.loads((dest / 'observation-result.json').read_bytes()))
+            result, diagnostic = p.run(self.request, {}, dest)
+            self.assertIsNone(result)
+            self.assertEqual(diagnostic['custody'], 'unknown')
+
     def test_exact_collector_round_trip_with_synthetic_api(self):
         collector_path = os.environ['R24_COLLECTOR']
         self.assertEqual(hashlib.sha256(Path(collector_path).read_bytes()).hexdigest(),
