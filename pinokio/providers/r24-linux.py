@@ -72,7 +72,7 @@ def materialize(request):
         'uncertainty': {'status': 'not-run'},
         'restoration': {'status': 'not-run', 'fencing': 'unknown'},
         'engine': {'identity': 'unknown', 'session': 'unknown'},
-        'reason': 'independent terminal, busy, fault and fencing sources are not bound',
+        'reason': 'journey execution and observation are not implemented by this diagnostic',
     }
 
 

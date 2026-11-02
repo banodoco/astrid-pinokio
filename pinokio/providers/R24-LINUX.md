@@ -34,11 +34,17 @@ trusted provenance; the runner and collector must establish those independently.
 Recheck identities at use; this diagnostic is not authority for mutation or an
 R-30 binding.
 
-There is no accepted independent engine request/task/terminal source, genuine
-busy control, uncertainty seam, or source-backed restoration/fence here. No
-success, refusal, restoration, or timeout observation is emitted. Missing source
-closure is not settlement; no automatic retry or mutation is performed. A
-compatible M-QUAL adapter and M-VENUE hook must bind approved sources and their
-provenance before a canonical journey. Existing harness retry step (`name`)
-conflicts with executor (`bootstrap_action`); the old adoption command has
-fields rejected by the pinned driver. Path substitution does not repair either.
+Action, session, fault, restoration and fence observations are outputs of the
+journey, not prerequisites for constructing a provider. This diagnostic does
+not run the journey or implement those observations. No success, refusal,
+restoration, or timeout observation is emitted. Missing source closure is not
+settlement; no automatic retry or mutation is performed.
+
+The supplied Agent adapter candidate pins earlier App and Pinokio commits. The
+pinned journey builder's retry step (`name`) conflicts with the executor's
+required `bootstrap_action`. The pinned driver's composition also unconditionally
+raises after its Stop checks, and the old adoption command includes fields the
+driver rejects. These Agent-owned interfaces require correction before an
+executor config can be consumed. A venue hook must materialize that config on
+the runner. This diagnostic cannot stand in for the missing executable journey
+provider or the R-30 export.
