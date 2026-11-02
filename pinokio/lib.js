@@ -338,7 +338,47 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     return true;
   }
   function cloneEditorMessage() {
-    return checkedNative(`git clone --branch ${q(appRef() || 'main')} --single-branch -- ${q(EDITOR_REPOSITORY)} ${q(EDITOR_DIR)}`, 'Editor clone');
+    const ref = appRef() || 'main';
+    if (!/^[0-9a-f]{40}$/i.test(ref)) {
+      return checkedNative(`git clone --branch ${q(ref)} --single-branch -- ${q(EDITOR_REPOSITORY)} ${q(EDITOR_DIR)}`, 'Editor clone');
+    }
+
+    // A commit ID is an object, not a remote branch.  Fetch and verify it
+    // explicitly, and remove only the newly-created checkout if any step
+    // fails.  The caller reaches this path only after the editor directory
+    // was found absent, so cleanup cannot touch an existing installation.
+    if (!isWindows) {
+      const editor = q(EDITOR_DIR);
+      const commit = q(ref.toLowerCase());
+      return [
+        'set -eu',
+        `trap 'rm -rf -- ${editor}' EXIT`,
+        `git clone --no-checkout --single-branch -- ${q(EDITOR_REPOSITORY)} ${editor}`,
+        `git -C ${editor} fetch --depth=1 origin ${commit}`,
+        `git -C ${editor} checkout --detach --force ${commit}`,
+        `test "$(git -C ${editor} rev-parse --verify HEAD^{commit})" = ${commit}`,
+        'trap - EXIT',
+      ].join('\n');
+    }
+
+    const editor = q(EDITOR_DIR);
+    const commit = q(ref.toLowerCase());
+    return [
+      "$ErrorActionPreference = 'Stop'",
+      'try {',
+      `  & git clone --no-checkout --single-branch -- ${q(EDITOR_REPOSITORY)} ${editor}`,
+      "  if ($LASTEXITCODE -ne 0) { throw 'Editor clone failed.' }",
+      `  & git -C ${editor} fetch --depth=1 origin ${commit}`,
+      "  if ($LASTEXITCODE -ne 0) { throw 'Editor commit fetch failed.' }",
+      `  & git -C ${editor} checkout --detach --force ${commit}`,
+      "  if ($LASTEXITCODE -ne 0) { throw 'Editor commit checkout failed.' }",
+      `  $head = (& git -C ${editor} rev-parse --verify ${q('HEAD^{commit}')}).Trim()`,
+      `  if ($LASTEXITCODE -ne 0 -or $head -ne ${commit}) { throw 'Editor commit verification failed.' }`,
+      '} catch {',
+      `  if (Test-Path -LiteralPath ${editor}) { Remove-Item -LiteralPath ${editor} -Recurse -Force }`,
+      '  throw',
+      '}',
+    ].join('\n');
   }
   function pullEditorMessage() {
     // Fail if the test ref changed since install; never silently build old pins.

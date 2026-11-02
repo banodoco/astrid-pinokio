@@ -471,6 +471,34 @@ test('settings use ENVIRONMENT first and fall back to the shipped _ENVIRONMENT t
   assert.equal(app.setting('ASTRID_APP_REF'), 'feat/pinokio');
 });
 
+test('editor clone fetches and verifies an exact commit without treating it as a branch', () => {
+  const sha = 'A'.repeat(40);
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const app = fakeApp(platform, sha);
+    const message = shellMessage(app.shellStep(app.cloneEditorMessage()), platform);
+    assert.doesNotMatch(message, /git clone --branch/);
+    assert.match(message, /git clone --no-checkout --single-branch/);
+    assert.match(message, /fetch --depth=1 origin/);
+    assert.match(message, /checkout --detach --force/);
+    assert.match(message, /rev-parse --verify.*HEAD\^\{commit\}/);
+    assert.match(message, /Remove-Item.*-Recurse -Force|rm -rf --/);
+  }
+});
+
+test('editor clone keeps named branches on the existing branch clone path', () => {
+  const app = fakeApp('linux', 'feat/pinokio');
+  const message = shellMessage(app.shellStep(app.cloneEditorMessage()), 'linux');
+  assert.match(message, /git clone --branch .*feat\/pinokio.*--single-branch/);
+  assert.doesNotMatch(message, /--no-checkout|fetch --depth=1|checkout --detach/);
+});
+
+test('invalid editor refs remain rejected before clone command generation', () => {
+  for (const ref of ['-main', 'feature name', '../main']) {
+    const app = fakeApp('linux', ref);
+    assert.throws(() => app.cloneEditorMessage(), /ASTRID_APP_REF must be a Git branch or tag/);
+  }
+});
+
 test('port classification and preflight use injected requests; no live port probes', async () => {
   assert.equal((await library.probeDoor({ portOpen: async () => false })).kind, 'free');
   for (const [status, body, expected] of [[200, { status: 'ok', protocol: 'workspace.v1' }, 'astrid'], [503, { error: 'runtime_unavailable' }, 'occupied'], [503, { error: 'runtime_identity_mismatch' }, 'occupied'], [403, { error: 'hosted_origin_required' }, 'astrid'], [200, { status: 'ok' }, 'occupied'], [404, {}, 'occupied']]) {
