@@ -49,13 +49,40 @@ function ptermExit(child, label, timeoutMs, diagnostic = null) {
 }
 
 // The pinned engine emits start.data.current/total/method, and stream/result
-// index/total. Never retain packet content, arbitrary method names, or errors.
+// index/total. Never retain packet content, arbitrary method names, or error text.
 const INSTALL_TRACE_LIMIT = 40;
 const installKinds = ['start', 'stream', 'result', 'error', 'installer-failure-marker', 'stop', 'disconnect'];
 const installMethods = ['shell.run', 'local.set', 'script.start', 'input'];
 const timestamp = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
   && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value ? value : null;
 const boundedIndex = value => Number.isInteger(value) && value >= 0 && value <= 10000 ? value : null;
+// Only these fixed signatures may leave the listener. Scan a bounded prefix;
+// unrecognized native errors remain explicit rather than copying their text.
+const firstErrorCodes = ['ENOENT', 'EACCES', 'EPERM', 'ENOSPC', 'EEXIST', 'ECONNREFUSED',
+  'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'];
+const firstErrorReasons = ['unknown', 'installer_failure_marker', 'command_not_found',
+  'file_not_found', 'permission_denied'];
+const FIRST_ERROR_SCAN_LIMIT = 8192;
+const failureMarker = 'ASTRID_PINOKIO_FAILURE';
+function classifyError(data) {
+  const object = data && typeof data === 'object' && !Array.isArray(data) ? data : null;
+  const directCode = typeof object?.code === 'string' && firstErrorCodes.includes(object.code) ? object.code : null;
+  const message = typeof data === 'string' ? data : typeof object?.message === 'string' ? object.message : '';
+  const sample = message.slice(0, FIRST_ERROR_SCAN_LIMIT);
+  const code = directCode || firstErrorCodes.find(value => new RegExp(`\\b${value}\\b`).test(sample)) || 'unknown';
+  const reason = /\bcommand not found\b/i.test(sample) ? 'command_not_found' :
+    /\bno such file or directory\b/i.test(sample) ? 'file_not_found' :
+      /\bpermission denied\b/i.test(sample) ? 'permission_denied' : 'unknown';
+  return { reason, code };
+}
+function projectFirstError(value) {
+  if (!timestamp(value?.timestamp) || !['engine_error', 'installer_failure_marker'].includes(value?.source)) return null;
+  return { timestamp: timestamp(value.timestamp), source: value.source,
+    index: boundedIndex(value.index), total: boundedIndex(value.total),
+    method: installMethods.includes(value.method) ? value.method : null,
+    reason: firstErrorReasons.includes(value.reason) ? value.reason : 'unknown',
+    code: firstErrorCodes.includes(value.code) ? value.code : 'unknown' };
+}
 function projectInstallEvidence(raw, binding) {
   const timer = raw?.timer || {};
   const child = raw?.child || {};
@@ -70,6 +97,7 @@ function projectInstallEvidence(raw, binding) {
     last_start: selectEvent(raw?.last_start, ['start']),
     last_result: selectEvent(raw?.last_result, ['result']),
     last_error: selectEvent(raw?.last_error, ['error', 'installer-failure-marker']),
+    first_error: projectFirstError(raw?.first_error),
     last_terminal: selectEvent(raw?.last_terminal, ['stop', 'disconnect']),
     timer: { started_at: timestamp(timer.started_at), deadline_at: timestamp(timer.deadline_at), fired_at: timestamp(timer.fired_at) },
     child: { spawn_error_at: timestamp(child.spawn_error_at), exited_at: timestamp(child.exited_at),
@@ -80,25 +108,39 @@ function projectInstallEvidence(raw, binding) {
 function createInstallDiagnostics(binding, save, now = () => Date.now()) {
   const state = { events: [], timer: {}, child: {} };
   let lastStreamWrite = -Infinity;
-  // Only a transient suffix is used to recognize a marker split across packets.
-  // It is never included in the retained projection.
-  const failureMarker = 'ASTRID_PINOKIO_FAILURE';
-  let streamTail = '';
+  // A prefix length, never stream text, bridges a marker split between packets.
+  let markerPrefix = 0;
+  let markerIndex = null;
   const iso = ms => new Date(ms).toISOString();
   const persist = () => { try { save(projectInstallEvidence(state, binding)); } catch {} };
   persist();
   return {
     packet(packet) {
-      const raw = packet?.type === 'stream' && typeof packet.data?.raw === 'string' ? packet.data.raw : '';
-      const marker = packet?.type === 'stream' && (streamTail + raw).includes(failureMarker);
-      streamTail = packet?.type === 'stream' ? (streamTail + raw).slice(-(failureMarker.length - 1)) : '';
+      let markerSeen = false;
+      if (packet?.type === 'stream' && typeof packet.data?.raw === 'string') {
+        const index = boundedIndex(packet.index ?? packet.rpc?.current);
+        if (index !== markerIndex) markerPrefix = 0;
+        markerIndex = index;
+        const raw = packet.data.raw;
+        for (const char of raw.slice(0, FIRST_ERROR_SCAN_LIMIT)) {
+          if (char === failureMarker[markerPrefix]) markerPrefix++;
+          else markerPrefix = char === failureMarker[0] ? 1 : 0;
+          if (markerPrefix === failureMarker.length) { markerSeen = true; markerPrefix = 0; break; }
+        }
+        if (raw.length > FIRST_ERROR_SCAN_LIMIT) markerPrefix = 0;
+      } else { markerPrefix = 0; markerIndex = null; }
       const kind = packet?.type === 'event' && packet.data === 'stop' ? 'stop' :
-        marker ? 'installer-failure-marker' : packet?.type;
+        markerSeen ? 'installer-failure-marker' : packet?.type;
       if (!installKinds.includes(kind)) return;
       const ms = now();
       const rpc = packet.type === 'start' ? packet.data : packet.rpc;
       const item = { timestamp: iso(ms), kind, index: boundedIndex(packet.index ?? rpc?.current),
         total: boundedIndex(packet.total ?? rpc?.total), method: installMethods.includes(rpc?.method) ? rpc.method : null };
+      if (!state.first_error && (kind === 'error' || kind === 'installer-failure-marker')) {
+        state.first_error = projectFirstError({ ...item,
+          source: kind === 'error' ? 'engine_error' : 'installer_failure_marker',
+          ...(kind === 'error' ? classifyError(packet.data) : { reason: 'installer_failure_marker', code: 'unknown' }) });
+      }
       // Consecutive stream samples represent the latest observed activity, so
       // keep step boundaries and errors instead of filling the ring with output.
       const previous = state.events.at(-1);

@@ -20,8 +20,11 @@ const MANIFEST_SHA256 = 'a6eef2804e58e198d56899f1b36d97688d5cbc4a0847a82078ba144
 const REQUEST_ID = 'R-21-PUBLISHED-TUPLE-R1';
 const CONFIRMATION = 'REAL_ENGINE_UPDATE_STOP_RETRY';
 const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
-const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-R1';
-const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-R1';
+// This lane is the dedicated diagnostic workflow source.  The product tuple
+// above remains the candidate under observation; this execution lane is never
+// substituted for its Pinokio product pin.
+const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-ADMISSION-BINDING-R1';
+const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-ADMISSION-BINDING-R1';
 const WORKFLOW_PATH = '.github/workflows/r21-real-engine.yml';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const ACTIONS = Object.freeze({
@@ -63,14 +66,15 @@ function validateDispatch(input, environment = process.env) {
     fail('runner_ref must be a lowercase immutable 40-character SHA');
   }
   equal(input.runner_ref, environment.GITHUB_SHA, 'runner_ref/GITHUB_SHA binding');
+  equal(environment.GITHUB_WORKFLOW_SHA, environment.GITHUB_SHA, 'workflow SHA/runner SHA binding');
   const expectedRef = {
     workflow_dispatch: PRODUCT_REF,
     push: VENUE_REF,
   }[environment.GITHUB_EVENT_NAME];
   if (!expectedRef) fail('GitHub event must be workflow_dispatch or the dedicated venue push');
   equal(environment.GITHUB_REF, expectedRef, 'GitHub ref');
-  if (typeof environment.GITHUB_WORKFLOW_REF !== 'string'
-      || !environment.GITHUB_WORKFLOW_REF.endsWith(`${WORKFLOW_PATH}@${expectedRef}`)) {
+  const expectedWorkflowRef = `banodoco/astrid-pinokio/${WORKFLOW_PATH}@${expectedRef}`;
+  if (environment.GITHUB_WORKFLOW_REF !== expectedWorkflowRef) {
     fail('workflow source is not the dedicated R-21 lane workflow');
   }
   return {
@@ -85,6 +89,7 @@ function validateDispatch(input, environment = process.env) {
       event: environment.GITHUB_EVENT_NAME,
       ref: environment.GITHUB_REF,
       workflow_ref: environment.GITHUB_WORKFLOW_REF,
+      sha: environment.GITHUB_WORKFLOW_SHA,
       run_id: environment.GITHUB_RUN_ID || null,
       run_attempt: environment.GITHUB_RUN_ATTEMPT || null,
     },

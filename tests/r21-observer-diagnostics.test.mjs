@@ -41,6 +41,8 @@ test('native Install step activity and terminal errors are timestamped, bounded 
 test('timer timeout records fire and unknown child until an actual exit is observed', async () => {
   let evidence;
   const recorder = createInstallDiagnostics(binding, value => { evidence = value; });
+  recorder.packet({ type: 'error', data: { code: 'ENOENT', message: 'No such file or directory /private/token' }, rpc: { current: 2, total: 4, method: 'shell.run' } });
+  const first = evidence.first_error;
   const child = new EventEmitter();
   child.kill = signal => { child.sent = signal; return true; };
   await assert.rejects(ptermExit(child, 'historical install', 10, recorder.pterm), /PTerm timeout/);
@@ -49,11 +51,13 @@ test('timer timeout records fire and unknown child until an actual exit is obser
   assert.ok(Date.parse(evidence.timer.fired_at) >= Date.parse(evidence.timer.started_at));
   assert.equal(evidence.child.exited_at, null);
   assert.equal(evidence.child.signal_observed, null);
+  assert.deepEqual(evidence.first_error, first);
   child.emit('exit', null, 'SIGTERM');
   assert.ok(evidence.child.exited_at);
   assert.equal(evidence.child.code, null);
   assert.equal(evidence.child.signal, 'SIGTERM');
   assert.equal(evidence.child.signal_observed, true);
+  assert.deepEqual(evidence.first_error, first);
 });
 
 test('normal exit and spawn error stay distinct and projection rejects arbitrary payloads', async () => {
@@ -99,6 +103,7 @@ test('Install listener captures native packets while PTerm is pending', async ()
       queueMicrotask(() => {
         packet({ type: 'start', data: { current: 2, total: 4, method: 'shell.run', params: 'sensitive' } });
         packet({ type: 'stream', index: 2, total: 4, data: { raw: 'sensitive' }, rpc: { method: 'shell.run' } });
+        packet({ type: 'error', data: 'ENOENT: No such file or directory /sensitive', rpc: { current: 2, total: 4, method: 'shell.run' } });
         packet({ type: 'result', index: 2, total: 4, data: 'sensitive' });
         packet({ type: 'event', data: 'stop' });
         packet({ type: 'disconnect' });
@@ -110,11 +115,47 @@ test('Install listener captures native packets while PTerm is pending', async ()
   vm.runInContext(`${constants}\n${action}`, context);
   const result = await vm.runInContext("observeAction('historical install', 'pinokio/install.js')", context);
   assert.equal(result.inner_exit.code, 0);
-  assert.deepEqual(evidence.events.map(event => event.kind), ['start', 'stream', 'result', 'stop', 'disconnect']);
+  assert.deepEqual(evidence.events.map(event => event.kind), ['start', 'stream', 'error', 'result', 'stop', 'disconnect']);
+  assert.equal(evidence.first_error.code, 'ENOENT');
+  assert.equal(evidence.first_error.reason, 'file_not_found');
   assert.equal(evidence.events[1].method, 'shell.run');
   assert.ok(evidence.timer.started_at);
   assert.ok(evidence.child.exited_at);
   assert.doesNotMatch(JSON.stringify(evidence), /sensitive/);
+});
+
+test('first error classifications are allowlisted, bounded, and never replaced', () => {
+  for (const [data, reason, code] of [
+    ['sh: command not found: /private', 'command_not_found', 'unknown'],
+    [{ code: 'EACCES', message: 'Permission denied /private', extra: 'secret' }, 'permission_denied', 'EACCES'],
+    ['ENOENT: No such file or directory /private', 'file_not_found', 'ENOENT'],
+    [{ code: 'secret', message: 'secret /private' }, 'unknown', 'unknown'],
+    ['x'.repeat(8192) + ' ENOENT permission denied', 'unknown', 'unknown'],
+  ]) {
+    let evidence;
+    const recorder = createInstallDiagnostics(binding, value => { evidence = value; }, () => Date.parse('2026-01-01T00:00:00.000Z'));
+    recorder.packet({ type: 'error', data, index: -1, total: 10001, rpc: { method: 'secret' } });
+    const first = evidence.first_error;
+    assert.deepEqual(first, { timestamp: '2026-01-01T00:00:00.000Z', source: 'engine_error', index: null, total: null, method: null, reason, code });
+    for (let i = 0; i < 100; i++) recorder.packet({ type: 'error', data: 'ENOSPC /private' });
+    assert.deepEqual(evidence.first_error, first);
+    assert.doesNotMatch(JSON.stringify(evidence), /secret|private|command not found|permission denied|No such file|x{100}/i);
+    assert.ok(Buffer.byteLength(JSON.stringify(evidence)) < 12000);
+  }
+});
+
+test('split marker is captured before stream sampling and does not join different steps', () => {
+  let evidence;
+  const recorder = createInstallDiagnostics(binding, value => { evidence = value; }, () => Date.parse('2026-01-01T00:00:00.000Z'));
+  recorder.packet({ type: 'stream', index: 2, data: { raw: 'private ASTRID_PINOKIO_' } });
+  recorder.packet({ type: 'stream', index: 3, data: { raw: 'FAILURE private' } });
+  assert.equal(evidence.first_error, null);
+  recorder.packet({ type: 'stream', index: 3, data: { raw: 'ASTRID_PINOKIO_' } });
+  recorder.packet({ type: 'stream', index: 3, data: { raw: 'FAILURE /private' }, rpc: { method: 'shell.run' } });
+  assert.deepEqual(evidence.first_error, { timestamp: '2026-01-01T00:00:00.000Z', source: 'installer_failure_marker', index: 3, total: null, method: 'shell.run', reason: 'installer_failure_marker', code: 'unknown' });
+  recorder.packet({ type: 'error', data: 'ENOENT /private' });
+  assert.equal(evidence.first_error.source, 'installer_failure_marker');
+  assert.doesNotMatch(JSON.stringify(evidence), /private|ASTRID_PINOKIO_FAILURE/);
 });
 
 test('last native operation survives settlement; result is observed, not inferred success', () => {
