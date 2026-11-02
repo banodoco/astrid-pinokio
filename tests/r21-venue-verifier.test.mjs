@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { test } from 'node:test';
 import verifier from '../.github/venue/r21-verify.cjs';
@@ -151,10 +150,12 @@ test('R-21 dispatch binding accepts only the exact dedicated request or self-ser
   assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_WORKFLOW_REF: `untrusted/${manualEnvironment.GITHUB_WORKFLOW_REF}` }), /workflow source/);
 });
 
-test('R-21 dedicated request admits only this lane at its exact checked-out head', () => {
+test('R-21 dedicated request admits only its configured lane and SHA binding', () => {
   const lane = 'lane/M-PIN/R-21-VENUE-REF-BINDING-R1';
-  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-  assert.equal(execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim(), lane);
+  // Admission is a property of the supplied Actions provenance.  Do not make
+  // this unit test depend on the branch used to run the test suite: correction
+  // lanes must be able to exercise the same fail-closed binding.
+  const sha = 'a'.repeat(40);
   const ref = `refs/heads/${lane}`;
   const environment = {
     GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: ref,
