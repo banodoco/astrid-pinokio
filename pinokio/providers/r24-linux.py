@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Linux Stop-action observation producer; no qualification authority."""
+import base64
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import secrets
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -21,7 +23,25 @@ HEX64 = re.compile(r'[0-9a-f]{64}\Z')
 HEX32 = re.compile(r'[0-9a-f]{32}\Z')
 MAX_EVIDENCE_BYTES = 65536
 MAX_REQUEST_BYTES = 65536
+MAX_ACTION_STREAM_BYTES = 16384
+MAX_ACTION_RECORD_BYTES = 32768
 JUNIT = b'<testsuite name="r24-producer-export" tests="1" skipped="1"><testcase name="qualification"><skipped message="not a qualification result"/></testcase></testsuite>\n'
+
+
+class ActionInvocationFailure(ValueError):
+    """A fail-closed inner invocation with its bounded, source-bound record."""
+
+    def __init__(self, action):
+        super().__init__('live action collection failed')
+        self.action = action
+
+
+class CollectedObservations(list):
+    """Internal complete observations plus the exact action invocation record."""
+
+    def __init__(self, values, action):
+        super().__init__(values)
+        self.action = action
 
 
 def canonical(obj):
@@ -115,7 +135,7 @@ def proc_identity(pid, node, daemon, engine):
             'port': engine['port'], 'node_sha256': sha(regular(node))}
 
 
-def installed_context(home, lifecycle):
+def installed_context(home, lifecycle, candidate_manifest):
     backend = home / 'api/astrid/app/astrid'
     install = decode(regular(backend / 'install.json'))
     if install.get('owner') != 'haus.astrid.runtime' or install.get('managed_by') != 'pinokio':
@@ -125,14 +145,23 @@ def installed_context(home, lifecycle):
         raise ValueError('invalid installed version')
     version_root = (backend / 'versions' / version).resolve(strict=True)
     record = decode(regular(version_root / 'version.json'))
+    record_root = Path(record['root']).resolve(strict=True)
     python = Path(record['python']).resolve(strict=True)
+    profile = Path(record['profile']).resolve(strict=True)
     data = Path(install['data_root']).resolve(strict=True)
-    if version_root not in python.parents or not data.is_dir() or data.is_symlink():
+    if record_root != version_root or record.get('identity') != {'release': 1, 'managed_by': 'pinokio'} \
+            or version_root not in python.parents or version_root not in profile.parents \
+            or not data.is_dir() or data.is_symlink():
         raise ValueError('installed path mismatch')
+    installed_manifest = regular(version_root / 'manifest.json')
+    if decode(installed_manifest) != decode(candidate_manifest):
+        raise ValueError('installed manifest mismatch')
     if sha(regular(lifecycle)) != BINDING['lifecycle_sha256']:
         raise ValueError('lifecycle source mismatch')
     return {'backend_root': backend, 'version_root': version_root, 'python': python,
-            'python_sha256': sha(regular(python)), 'data_root': data}
+            'python_sha256': sha(regular(python)), 'profile': profile,
+            'profile_sha256': sha(regular(profile)), 'data_root': data,
+            'manifest_sha256': sha(installed_manifest)}
 
 
 def validate(request, config):
@@ -170,6 +199,17 @@ def validate(request, config):
     parsed_manifest = decode(manifest)
     if parsed_manifest.get('release') != 1 or any(parsed_manifest[k]['sha'] != BINDING['candidate'][k] for k in ('agent', 'runtime')):
         raise ValueError('manifest tuple mismatch')
+    exact(BINDING['runtime_execution_sources'], ('agent', 'runtime'))
+    for owner, source_files in BINDING['runtime_execution_sources'].items():
+        if not isinstance(source_files, dict) or not source_files:
+            raise ValueError('runtime execution source inventory unavailable')
+        for rel, digest in source_files.items():
+            if not isinstance(rel, str) or rel.startswith('/') or any(part in ('', '.', '..') for part in rel.split('/')):
+                raise ValueError('invalid runtime execution source path')
+            match(digest, HEX64)
+            if sha(regular(roots[owner] / rel)) != digest or \
+                    sha(git_blob(roots[owner], BINDING['candidate'][owner], rel)) != digest:
+                raise ValueError('runtime execution source mismatch')
     stop = regular(roots['pinokio'] / 'pinokio/stop.js')
     if sha(stop) != BINDING['stop_sha256'] or sha(git_blob(roots['pinokio'], BINDING['candidate']['pinokio'], 'pinokio/stop.js')) != BINDING['stop_sha256']:
         raise ValueError('stop bytes mismatch')
@@ -207,7 +247,7 @@ def validate(request, config):
     if not scratch.is_absolute() or scratch.is_symlink() or not scratch.is_dir() or scratch.stat().st_uid != os.getuid():
         raise ValueError('invalid scratch root')
     identity = proc_identity(engine['pid'], node, daemon, engine)
-    installed = installed_context(home, resource / 'pinokio/lifecycle.mjs')
+    installed = installed_context(home, resource / 'pinokio/lifecycle.mjs', manifest)
     return {'roots': roots, 'pterm': pterm, 'node': node, 'daemon': daemon, 'home': home,
             'resource': resource, 'scratch': scratch, 'engine': identity, 'installed': installed}
 
@@ -217,8 +257,54 @@ def git_blob(root, ref, rel):
 
 
 def invoke_action(node, control):
-    return subprocess.run([str(node), str(HERE / 'r24-action.cjs'), str(control)],
-                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=120, check=False)
+    argv = [str(node), str(HERE / 'r24-action.cjs'), str(control)]
+    process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        stdout, stderr = process.communicate(timeout=120)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        stdout, stderr = process.communicate()
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+
+
+def _captured_stream(data, label):
+    if not isinstance(data, bytes) or len(data) > MAX_ACTION_STREAM_BYTES:
+        raise ValueError(f'invalid action {label}')
+    return {'bytes': len(data), 'sha256': sha(data),
+            'base64': base64.b64encode(data).decode('ascii')}
+
+
+def action_invocation(proc, request, session, context):
+    """Preserve exact bounded controller streams without promoting their claims."""
+    if not isinstance(proc, subprocess.CompletedProcess) or type(proc.returncode) is not int \
+            or proc.returncode < -255 or proc.returncode > 255:
+        raise ValueError('invalid action process result')
+    match(session, HEX32)
+    request_sha = sha(canonical(request))
+    source = 'pinokio/providers/r24-action.cjs'
+    sources = request['provider']['sources']
+    match(sources[source], HEX64)
+    signame = None
+    exit_code = proc.returncode
+    if proc.returncode < 0:
+        exit_code = None
+        try:
+            signame = signal.Signals(-proc.returncode).name
+        except ValueError as error:
+            raise ValueError('invalid action signal') from error
+    engine = context['engine']
+    exact(engine, ('pid', 'boot_id', 'start_ticks', 'port', 'node_sha256'))
+    result = {'schema': 'astrid.r24.action-invocation.v1', 'request_sha256': request_sha,
+            'run_id': request['run_id'], 'session': session, 'source': source,
+            'source_sha256': sources[source], 'engine': engine,
+            'runtime_execution_sources': BINDING['runtime_execution_sources'],
+            'returncode': proc.returncode, 'exit_code': exit_code, 'signal': signame,
+            'raw_result': _captured_stream(proc.stdout, 'stdout'),
+            'stderr': _captured_stream(proc.stderr, 'stderr'),
+            'raw_result_validated': False}
+    if len(canonical(result)) > MAX_ACTION_RECORD_BYTES:
+        raise ValueError('action invocation record too large')
+    return result
 
 
 def serialize_success(request, session, observations):
@@ -333,20 +419,77 @@ def protected_snapshot(context):
     data = installed['data_root']
     support = data / 'runtime'
     catalog = decode(regular(support / 'catalog.json'))
+    discovery = decode(regular(support / 'discovery.json'))
+    instance = decode(regular(support / 'instance.lock'))
     selected = catalog.get('selected_realm_id')
     realms = [row for row in catalog.get('realms', []) if isinstance(row, dict) and row.get('realm_id') == selected]
     if len(realms) != 1:
         raise ValueError('selected realm unavailable')
-    realm = Path(realms[0]['data_root']).resolve(strict=True)
+    realm_row = realms[0]
+    realm = Path(realm_row['data_root']).resolve(strict=True)
     database = realm / 'realm.sqlite3'
     if database.is_symlink() or not database.is_file():
         raise ValueError('realm database unavailable')
     connection = sqlite3.connect(f'file:{database}?mode=ro', uri=True, timeout=5)
     try:
-        rows = [dict(zip(('task_id', 'capability', 'status'), row)) for row in connection.execute(
-            "SELECT id, capability, status FROM tasks WHERE lower(status) IN ('running','cancel_requested') ORDER BY id")]
+        lifecycle_rows = list(connection.execute(
+            'SELECT boot_id, runtime_epoch FROM runtime_lifecycle WHERE id=1'))
+        if len(lifecycle_rows) != 1:
+            raise ValueError('Runtime session unavailable')
+        runtime_session, runtime_epoch = lifecycle_rows[0]
+        columns = ('task_id', 'run_id', 'capability', 'status', 'binding_id',
+                   'execution_session_id', 'runtime_epoch', 'executor_id',
+                   'target_kind', 'target_id', 'binding_status')
+        rows = [dict(zip(columns, row)) for row in connection.execute(
+            "SELECT t.id,t.run_id,t.capability,t.status,b.binding_id,b.session_id,b.runtime_epoch,"
+            "b.executor_id,b.target_kind,b.target_id,b.status FROM tasks t "
+            "LEFT JOIN execution_bindings b ON b.task_id=t.id "
+            "WHERE lower(t.status) IN ('running','cancel_requested') ORDER BY t.id")]
     finally:
         connection.close()
+    if not isinstance(runtime_session, str) or not runtime_session or type(runtime_epoch) is not int or runtime_epoch < 1:
+        raise ValueError('invalid Runtime session')
+    for row in rows:
+        if not all(isinstance(row[key], str) and row[key] for key in
+                   ('task_id', 'run_id', 'capability', 'status', 'binding_id',
+                    'execution_session_id', 'executor_id', 'target_kind', 'binding_status')) \
+                or row['execution_session_id'] != runtime_session or row['runtime_epoch'] != runtime_epoch \
+                or row['binding_status'] != 'claimed':
+            raise ValueError('active task execution binding unavailable')
+        if row['target_id'] is not None and (not isinstance(row['target_id'], str) or not row['target_id']):
+            raise ValueError('invalid active task target')
+    required_discovery = ('endpoint', 'pid', 'process_birth_id', 'active_realm',
+                          'realm_root', 'runtime_instance_id', 'protocol_version')
+    if any(key not in discovery for key in required_discovery) or type(discovery['pid']) is not int \
+            or discovery['pid'] < 1 or discovery['protocol_version'] != 'workspace.v1' \
+            or discovery['active_realm'] != selected or Path(discovery['realm_root']).resolve(strict=True) != realm:
+        raise ValueError('Runtime discovery mismatch')
+    runtime_instance = discovery['runtime_instance_id']
+    if not isinstance(runtime_instance, str) or not runtime_instance \
+            or realm_row.get('readiness') != 'ready' or realm_row.get('runtime_instance_id') != runtime_instance \
+            or realm_row.get('runtime_epoch') != runtime_epoch:
+        raise ValueError('Runtime catalog owner mismatch')
+    for key, expected in (('pid', discovery['pid']), ('process_birth_id', discovery['process_birth_id']),
+                          ('runtime_instance_id', runtime_instance), ('realm_id', selected),
+                          ('realm_root', str(realm))):
+        if instance.get(key) != expected:
+            raise ValueError('Runtime instance owner mismatch')
+    endpoint = discovery['endpoint']
+    if not isinstance(endpoint, str) or not re.fullmatch(r'http://127\.0\.0\.1:[1-9][0-9]{0,4}', endpoint):
+        raise ValueError('Runtime endpoint mismatch')
+    port = int(endpoint.rsplit(':', 1)[1])
+    if port > 65535:
+        raise ValueError('Runtime endpoint mismatch')
+    proc = Path('/proc') / str(discovery['pid'])
+    stat_text = regular(proc / 'stat').decode()
+    stat_fields = stat_text[stat_text.rfind(')') + 2:].split()
+    if len(stat_fields) < 20 or (proc / 'exe').resolve() != installed['python']:
+        raise ValueError('Runtime process mismatch')
+    birth = discovery['process_birth_id']
+    boot_id = regular(Path('/proc/sys/kernel/random/boot_id')).decode().strip()
+    if not isinstance(birth, str) or not birth.startswith('proc-start-ticks:' + stat_fields[19]) \
+            or (';boot:' + boot_id) not in birth:
+        raise ValueError('Runtime process birth mismatch')
     watched = [installed['backend_root'] / 'current', installed['backend_root'] / 'install.json',
                installed['version_root'] / 'version.json', support / 'catalog.json', support / 'discovery.json',
                support / 'instance.lock', context['resource'] / 'pinokio/stop.js',
@@ -357,7 +500,10 @@ def protected_snapshot(context):
     stat = database.stat()
     return {'files': files, 'selected_realm_id_sha256': sha(str(selected).encode()),
             'realm_root_sha256': sha(os.fsencode(realm)), 'database_device': stat.st_dev,
-            'database_inode': stat.st_ino, 'active_tasks': rows}
+            'database_inode': stat.st_ino, 'runtime': {'pid': discovery['pid'],
+            'process_birth_id': birth, 'runtime_instance_id': runtime_instance,
+            'runtime_session_id': runtime_session, 'runtime_epoch': runtime_epoch,
+            'endpoint': endpoint, 'realm_id': selected}, 'active_tasks': rows}
 
 
 def validate_live_result(value, request, session):
@@ -430,20 +576,29 @@ def collect_authenticated(request, session, context):
     with os.fdopen(fd, 'wb') as output:
         output.write(canonical(control))
     proc = invoke_action(context['node'], control_path)
+    invocation = action_invocation(proc, request, session, context)
     if proc.returncode != 0:
-        raise ValueError('live action collection failed')
-    action = validate_live_result(decode(proc.stdout), request, session)
-    after = protected_snapshot(context)
-    if before != after:
-        raise ValueError('protected state changed')
-    if {row['task_id'] for row in before['active_tasks']} != {row['task_id'] for row in action['busy']['blockers']}:
-        raise ValueError('busy task census mismatch')
-    remove_control(control_dir)
+        raise ActionInvocationFailure(invocation)
+    try:
+        action = validate_live_result(decode(proc.stdout), request, session)
+        invocation['raw_result_validated'] = True
+        after = protected_snapshot(context)
+        if before != after:
+            raise ValueError('protected state changed')
+        if {row['task_id'] for row in before['active_tasks']} != {row['task_id'] for row in action['busy']['blockers']}:
+            raise ValueError('busy task census mismatch')
+        remove_control(control_dir)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ActionInvocationFailure(invocation) from error
+    invocation_sha = sha(canonical(invocation))
     common = {'schema': 'astrid.r24.live-observation.v1', 'request_sha256': sha(canonical(request)),
               'run_id': request['run_id'], 'session': session, 'engine': context['engine'],
-              'provider_ref': request['provider']['ref']}
+              'provider_ref': request['provider']['ref'], 'runtime': before['runtime'],
+              'runtime_execution_sources': BINDING['runtime_execution_sources'],
+              'action_invocation_sha256': invocation_sha}
     payloads = {
         'busy': {**common, 'kind': 'busy', 'engine_binding': action['binding'], 'busy': action['busy'],
+                 'action_invocation': invocation,
                  'protected_before': before, 'protected_after': after},
         'unknown': {**common, 'kind': 'unknown', 'unknown': action['unknown'],
                     'protected_before': before, 'protected_after': after},
@@ -459,20 +614,24 @@ def collect_authenticated(request, session, context):
             'request_sha256': common['request_sha256'], 'run_id': request['run_id'], 'session': session,
             'source': source, 'source_sha256': request['provider']['sources'][source],
             'evidence': evidence, 'evidence_sha256': sha(evidence)})
-    return observations
+    return CollectedObservations(observations, invocation)
 
 
 def run(request, config, export_destination=None):
     context = validate(request, config)
     session = secrets.token_hex(16)
+    action = {'end': 'observer-error', 'settlement': 'unknown'}
     try:
         observations = collect_authenticated(request, session, context)
+        action = getattr(observations, 'action', action)
         result = serialize_success(request, session, observations)
         if export_destination is not None:
             seal_observations(request, session, observations, export_destination)
         return result, None
+    except ActionInvocationFailure as error:
+        action = error.action
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
-        action = {'end': 'observer-error', 'settlement': 'unknown'}
+        pass
     # A failed live control, drain, state comparison, or export never becomes a
     # success result. External Actions/broker custody is evaluated separately.
     return None, {'schema': 'astrid.r24.producer-diagnostic.v1', 'request_sha256': sha(canonical(request)),

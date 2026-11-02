@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -43,8 +44,9 @@ class ProviderTests(unittest.TestCase):
         root = Path(self.tmp.name)
         paths = {name: root / name for name in ('app', 'agent', 'runtime', 'pinokio')}
         refs = {}
+        execution_source = b'fixture execution source'
         for name in ('agent', 'runtime'):
-            refs[name] = repo(paths[name], {'file': b'fixture'})
+            refs[name] = repo(paths[name], {'file': execution_source})
         stop = b'synthetic stop fixture'
         lifecycle = b'synthetic lifecycle fixture'
         refs['pinokio'] = repo(paths['pinokio'], {'pinokio/stop.js': stop, 'pinokio/lifecycle.mjs': lifecycle})
@@ -76,7 +78,10 @@ class ProviderTests(unittest.TestCase):
         self.binding = {'candidate': self.candidate, 'stop_sha256': r24.sha(stop),
                         'lifecycle_sha256': r24.sha(lifecycle), 'pterm_ref': pterm_ref,
                         'pinokiod_ref': daemon_ref,
-                        'pinokiod_sources': {name: r24.sha(data) for name, data in daemon_files.items()}}
+                        'pinokiod_sources': {name: r24.sha(data) for name, data in daemon_files.items()},
+                        'runtime_execution_sources': {
+                            'agent': {'file': r24.sha(execution_source)},
+                            'runtime': {'file': r24.sha(execution_source)}}}
         self.config = {'checkouts': {k: str(v) for k, v in paths.items()}, 'pterm': str(pterm),
                        'pinokiod': str(daemon), 'scratch_root': str(scratch),
                        'node': str(node), 'node_sha256': r24.sha(node.read_bytes()),
@@ -89,8 +94,10 @@ class ProviderTests(unittest.TestCase):
                         'config_sha256': r24.sha(r24.canonical(self.config)), 'run_id': 'a' * 32}
         installed = {'backend_root': resource / 'app/astrid', 'version_root': resource,
                      'python': node, 'python_sha256': r24.sha(node.read_bytes()), 'data_root': root}
+        engine_identity = {'pid': 123, 'boot_id': 'a' * 36, 'start_ticks': '7',
+                           'port': 42000, 'node_sha256': r24.sha(node.read_bytes())}
         self.patches = [patch.object(r24, 'BINDING', self.binding), patch.object(r24, 'BASE', provider),
-                        patch.object(r24, 'proc_identity', return_value={'pid': 123}),
+                        patch.object(r24, 'proc_identity', return_value=engine_identity),
                         patch.object(r24, 'installed_context', return_value=installed)]
         for p in self.patches:
             p.start()
@@ -125,6 +132,118 @@ class ProviderTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertNotIn('secret', json.dumps(diagnostic))
         self.assertEqual(diagnostic['action']['end'], 'observer-error')
+
+    def test_exact_inner_action_streams_exit_and_binding_are_preserved(self):
+        session = 'b' * 32
+        context = {'engine': {'pid': 123, 'boot_id': 'a' * 36, 'start_ticks': '7',
+                              'port': 42000, 'node_sha256': 'c' * 64}}
+        proc = subprocess.CompletedProcess(['node'], 7, b'{"raw":"result"}\n', b'actual action stderr\n')
+        record = r24.action_invocation(proc, self.request, session, context)
+        self.assertEqual(record['returncode'], 7)
+        self.assertEqual(record['exit_code'], 7)
+        self.assertIsNone(record['signal'])
+        self.assertEqual(r24.base64.b64decode(record['raw_result']['base64']), proc.stdout)
+        self.assertEqual(r24.base64.b64decode(record['stderr']['base64']), proc.stderr)
+        self.assertEqual(record['request_sha256'], r24.sha(r24.canonical(self.request)))
+        self.assertEqual(record['session'], session)
+        self.assertFalse(record['raw_result_validated'])
+        with patch.object(r24, 'collect_authenticated', side_effect=r24.ActionInvocationFailure(record)), \
+             patch.object(r24.secrets, 'token_hex', return_value=session):
+            result, diagnostic = r24.run(self.request, self.config)
+        self.assertIsNone(result)
+        self.assertEqual(diagnostic['action'], record)
+
+    def test_live_collection_retains_validated_raw_result_and_runtime_source(self):
+        session = 'b' * 32
+        context = r24.validate(self.request, self.config)
+        blocker = {'task_id': 'task-1', 'blocker_kind': 'running_task',
+                   'kind': 'render', 'state': 'running'}
+        fence = {'request_id': 'request', 'connect_observed': True,
+                 'disconnect_observed': True, 'idle_observed': True}
+        action = {'schema': 'astrid.r24.live-action-result.v1', 'session': session,
+                  'request_sha256': r24.sha(r24.canonical(self.request)),
+                  'binding': {'request_id': 'probe', 'results': 1,
+                              'stop_observed': True, 'disconnect_observed': True},
+                  'busy': {'task_count': 1, 'blockers': [blocker],
+                           'headline_sha256': 'd' * 64, 'stop_refused': True, 'fence': fence},
+                  'unknown': {'observer_lost': True,
+                              'preflight': {'child_pid': 45, 'python_sha256': 'e' * 64,
+                                            'armed': True, 'drained': True, 'signal': 'SIGKILL'},
+                              'fence': fence},
+                  'restoration': {'request_id': 'restore', 'results': 1,
+                                  'stop_observed': True, 'disconnect_observed': True,
+                                  'preflight': {'blockers': [blocker]}, 'observer_usable': True}}
+        snapshot = {'runtime': {'pid': 321, 'runtime_session_id': 'runtime-session'},
+                    'active_tasks': [{'task_id': 'task-1'}], 'files': {}}
+        proc = subprocess.CompletedProcess(['node'], 0, r24.canonical(action), b'inner warning\n')
+        with patch.object(r24, 'protected_snapshot', return_value=snapshot), \
+             patch.object(r24, 'invoke_action', return_value=proc), \
+             patch.object(r24.secrets, 'token_hex', return_value='1' * 16):
+            observations = r24.collect_authenticated(self.request, session, context)
+        self.assertIsInstance(observations, r24.CollectedObservations)
+        self.assertTrue(observations.action['raw_result_validated'])
+        self.assertEqual(r24.base64.b64decode(observations.action['stderr']['base64']), proc.stderr)
+        busy = next(row for row in observations if row['kind'] == 'busy')
+        evidence = json.loads(busy['evidence'])
+        self.assertEqual(evidence['action_invocation'], observations.action)
+        self.assertEqual(evidence['runtime'], snapshot['runtime'])
+        self.assertEqual(evidence['runtime_execution_sources'], self.binding['runtime_execution_sources'])
+
+    def test_protected_snapshot_binds_real_runtime_task_session_and_process(self):
+        root = Path(self.tmp.name) / 'runtime-state'
+        data, realm = root / 'data', root / 'realm'
+        support, backend, version = data / 'runtime', root / 'program', root / 'version'
+        resource = root / 'resource'
+        for directory in (support, realm, backend, version, resource / 'pinokio'):
+            directory.mkdir(parents=True, exist_ok=True)
+        pid = os.getpid()
+        stat = (Path('/proc') / str(pid) / 'stat').read_text()
+        ticks = stat[stat.rfind(')') + 2:].split()[19]
+        boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+        birth = f'proc-start-ticks:{ticks};boot:{boot}'
+        runtime_session = 'runtime-session-1'
+        catalog = {'selected_realm_id': 'realm-1', 'realms': [{
+            'realm_id': 'realm-1', 'data_root': str(realm), 'readiness': 'ready',
+            'runtime_instance_id': 'instance-1', 'runtime_epoch': 4}]}
+        discovery = {'endpoint': 'http://127.0.0.1:12345', 'pid': pid,
+            'process_birth_id': birth, 'active_realm': 'realm-1', 'realm_root': str(realm),
+            'runtime_instance_id': 'instance-1', 'protocol_version': 'workspace.v1'}
+        instance = {'pid': pid, 'process_birth_id': birth, 'runtime_instance_id': 'instance-1',
+                    'realm_id': 'realm-1', 'realm_root': str(realm)}
+        for path, value in ((support / 'catalog.json', catalog),
+                            (support / 'discovery.json', discovery),
+                            (support / 'instance.lock', instance)):
+            path.write_text(json.dumps(value))
+        for path in (backend / 'current', backend / 'install.json', version / 'version.json',
+                     resource / 'pinokio/stop.js', resource / 'pinokio/lifecycle.mjs'):
+            path.write_text('fixture')
+        database = realm / 'realm.sqlite3'
+        connection = sqlite3.connect(database)
+        connection.executescript('''
+            CREATE TABLE runtime_lifecycle(id INTEGER PRIMARY KEY, boot_id TEXT, runtime_epoch INTEGER);
+            CREATE TABLE tasks(id TEXT PRIMARY KEY, run_id TEXT, capability TEXT, status TEXT);
+            CREATE TABLE execution_bindings(binding_id TEXT, task_id TEXT, session_id TEXT,
+              runtime_epoch INTEGER, executor_id TEXT, target_kind TEXT, target_id TEXT, status TEXT);
+            INSERT INTO runtime_lifecycle VALUES(1, 'runtime-session-1', 4);
+            INSERT INTO tasks VALUES('task-1', 'run-1', 'rendering.render', 'running');
+            INSERT INTO execution_bindings VALUES('binding-1', 'task-1', 'runtime-session-1', 4,
+              'astrid-pack-host', 'profile', 'local-profile', 'claimed');
+        ''')
+        connection.commit()
+        connection.close()
+        context = {'installed': {'data_root': data, 'backend_root': backend, 'version_root': version,
+                                 'python': (Path('/proc') / str(pid) / 'exe').resolve()},
+                   'resource': resource}
+        snapshot = r24.protected_snapshot(context)
+        self.assertEqual(snapshot['runtime']['runtime_session_id'], runtime_session)
+        self.assertEqual(snapshot['active_tasks'][0]['binding_id'], 'binding-1')
+        self.assertEqual(snapshot['active_tasks'][0]['executor_id'], 'astrid-pack-host')
+        connection = sqlite3.connect(database)
+        connection.execute("UPDATE execution_bindings SET session_id='foreign'")
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(ValueError, 'active task execution binding unavailable'):
+            r24.protected_snapshot(context)
 
     def observations(self):
         session = 'b' * 32
