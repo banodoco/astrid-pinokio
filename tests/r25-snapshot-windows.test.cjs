@@ -2,6 +2,7 @@
 
 // Component checks only; these tests make no hosted qualification claim.
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const test = require('node:test');
 const provider = require('../pinokio/providers/r25-snapshot-windows.cjs');
 
@@ -38,6 +39,16 @@ test('validates the Windows profile and present observation', () => {
   assert.equal(provider.PROFILE.runner, 'windows-2022');
   assert.equal(provider.PROFILE.shell, 'powershell.exe');
   assert.equal(provider.validateObservation(value), value);
+});
+
+test('component workflow creates and cleans a disposable present task', () => {
+  const workflow = fs.readFileSync(require.resolve('../.github/workflows/r25-native-collectors.yml'), 'utf8');
+  assert.match(workflow, /New-ScheduledTaskAction/);
+  assert.match(workflow, /Register-ScheduledTask/);
+  assert.match(workflow, /R25_TASK_TARGET/);
+  assert.match(workflow, /scheduled_task_paths=\[os\.environ\['R25_TASK_TARGET'\]\]/);
+  assert.match(workflow, /Unregister-ScheduledTask/);
+  assert.match(workflow, /finally \{/);
 });
 
 test('retains absent and collection-error target rows', () => {

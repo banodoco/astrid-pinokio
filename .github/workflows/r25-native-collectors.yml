@@ -125,9 +125,33 @@ jobs:
           SNAPSHOT: ${{ runner.temp }}\r25-windows-component-snapshot.json
         run: |
           $ErrorActionPreference = 'Stop'
-          $env:PYTHONPATH = $env:AGENT_ROOT
-          python -c "import json; from scripts.pinokio_snapshot_windows import collect_windows_snapshot; print(json.dumps(collect_windows_snapshot(scheduled_task_paths=[r'\Astrid Runtime'], service_names=['AstridRuntime']), sort_keys=True, separators=(',', ':')))" | Set-Content -Encoding utf8 $env:SNAPSHOT
-          node -e "const fs=require('node:fs'); const p=require('./pinokio/providers/r25-snapshot-windows.cjs'); p.validateObservation(JSON.parse(fs.readFileSync(process.env.SNAPSHOT, 'utf8').replace(/^\uFEFF/, '')));"
+          $taskName = "Astrid R25 Present $env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $taskPath = '\' + $taskName
+          $taskRegistered = $false
+          try {
+            $action = New-ScheduledTaskAction `
+              -Execute "$env:SystemRoot\System32\cmd.exe" `
+              -Argument '/c exit 0'
+            $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddHours(1)
+            $definition = New-ScheduledTask -Action $action -Trigger $trigger `
+              -Description 'R-25 disposable present-task collector target'
+            Register-ScheduledTask -TaskName $taskName -TaskPath '\' `
+              -InputObject $definition -Force | Out-Null
+            $taskRegistered = $true
+            $env:R25_TASK_TARGET = $taskPath
+            $env:PYTHONPATH = $env:AGENT_ROOT
+            python -c "import json, os; from scripts.pinokio_snapshot_windows import collect_windows_snapshot; print(json.dumps(collect_windows_snapshot(scheduled_task_paths=[os.environ['R25_TASK_TARGET']], service_names=['AstridRuntime']), sort_keys=True, separators=(',', ':')))" | Set-Content -Encoding utf8 $env:SNAPSHOT
+            $collectorExit = $LASTEXITCODE
+            if ($collectorExit -ne 0) { throw "collector exit $collectorExit" }
+            node -e "const fs=require('node:fs'); const p=require('./pinokio/providers/r25-snapshot-windows.cjs'); p.validateObservation(JSON.parse(fs.readFileSync(process.env.SNAPSHOT, 'utf8').replace(/^\uFEFF/, '')));"
+            $validatorExit = $LASTEXITCODE
+            if ($validatorExit -ne 0) { throw "snapshot validator exit $validatorExit" }
+          } finally {
+            if ($taskRegistered) {
+              Unregister-ScheduledTask -TaskName $taskName -TaskPath '\' `
+                -Confirm:$false -ErrorAction SilentlyContinue
+            }
+          }
       - name: Retain component-only output
         if: always()
         uses: actions/upload-artifact@v4
