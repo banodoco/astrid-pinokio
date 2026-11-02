@@ -26,7 +26,11 @@ const appRoot = process.env.R21_APP_ROOT;
 const ptermRoot = process.env.R21_PTERM_ROOT;
 const home = process.env.R21_VENUE_HOME;
 const chromePath = process.env.R21_CHROME_PATH;
-if (!appRoot || !ptermRoot || !home || !chromePath) throw new Error('R21_APP_ROOT, R21_PTERM_ROOT, R21_VENUE_HOME, and R21_CHROME_PATH are required');
+const singleAction = process.env.R21_SINGLE_ACTION || null;
+if (![null, 'install'].includes(singleAction)) throw new Error('R21_SINGLE_ACTION must be install when set');
+if (!appRoot || !ptermRoot || !home || !chromePath && !singleAction) {
+  throw new Error('R21_APP_ROOT, R21_PTERM_ROOT, R21_VENUE_HOME, and R21_CHROME_PATH are required');
+}
 
 const { WebSocket } = require(path.join(ptermRoot, 'node_modules/unws'));
 const ACTION_TIMEOUT_MS = 20 * 60 * 1000;
@@ -232,6 +236,13 @@ async function main() {
   substage('install');
   const install = await observeAction('historical install', 'pinokio/install.js', INITIAL_INSTALL_TIMEOUT_MS);
   progress.install = install; retainProgress();
+  if (singleAction === 'install') {
+    // Local diagnosis deliberately stops here. It is not an acceptance route:
+    // the complete protected journey and verifier remain below unchanged.
+    write('r21-single-action.json', { schema: 1, action: 'install', inner_exit: install.inner_exit,
+      launcher_failure: install.launcher_failure, installer_success: install.installer_success });
+    return;
+  }
   substage('initial-install-validation');
   let installedBefore = false;
   try { installedBefore = await installedTupleMatches(appRoot, TUPLE); } catch {}
@@ -324,5 +335,11 @@ main().then(() => io.cleanup()).catch(async (error) => {
     let lastOperation = null;
     try { lastOperation = JSON.parse(fs.readFileSync(path.join(output, 'r21-observer-operation.json'), 'utf8')); } catch {}
     write('r21-failure.json', { schema: 1, status: 'blocked', category: /timeout/i.test(error.message) ? 'timeout' : 'engine-or-observer', action_failure: actionTracker.failure(), last_operation: lastOperation, readiness_trace: trace.snapshot() });
+    if (singleAction === 'install') {
+      const install = progress.install || null;
+      write('r21-single-action.json', { schema: 1, action: 'install',
+        inner_exit: install?.inner_exit || null, launcher_failure: install?.launcher_failure === true,
+        installer_success: install?.installer_success === true });
+    }
   } finally { await io.cleanup(); }
 });

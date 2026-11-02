@@ -11,6 +11,11 @@ if [[ "${1:-}" == --execute || "${1:-}" == --watchdog ]]; then
   mode=$1; shift
   deadline=4200
   if [[ "$mode" == --watchdog ]]; then deadline=${1:?deadline required}; shift; fi
+  single_action=''
+  if [[ "$mode" == --execute && "${1:-}" == --single-action ]]; then
+    single_action=${2:?single action required}; shift 2
+    [[ "$single_action" == install ]] || { echo 'only --single-action install is supported' >&2; exit 2; }
+  fi
   [[ "$deadline" =~ ^[1-9][0-9]*$ ]] || exit 2
   request=${1:?request required}
   : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
@@ -18,7 +23,11 @@ if [[ "${1:-}" == --execute || "${1:-}" == --watchdog ]]; then
   mkdir "$R21_PROGRESS_DIR"
   export R21_STARTED_MS
   R21_STARTED_MS=$(node -p 'Date.now()')
-  setsid bash "$0" --work "$request" &
+  if [[ -n "$single_action" ]]; then
+    R21_SINGLE_ACTION="$single_action" setsid bash "$0" --work "$request" &
+  else
+    env -u R21_SINGLE_ACTION setsid bash "$0" --work "$request" &
+  fi
   worker=$!
   sleep "$deadline" &
   timer=$!
@@ -63,42 +72,65 @@ fi
 if [[ "${1:-}" == --work ]]; then
   shift
   request=${1:?request required}
+  single_action=${R21_SINGLE_ACTION:-}
+  [[ -z "$single_action" || "$single_action" == install ]] || exit 2
+  cache_root=${R21_LOCAL_CACHE_ROOT:-}
   progress() {
     node -e 'const fs=require("node:fs");const [dir,start,stage,substage]=process.argv.slice(1);const p=`${dir}/progress.json`;fs.writeFileSync(`${p}.tmp`,JSON.stringify({stage,substage:substage||null,elapsed_ms:Math.max(0,Date.now()-Number(start))}));fs.renameSync(`${p}.tmp`,p);' "$R21_PROGRESS_DIR" "$R21_STARTED_MS" "$1" "${2:-}"
   }
   set +e
+  pinned_checkout() {
+    name=$1; repository=$2; revision=$3; npm_args=$4
+    if [[ -z "$cache_root" ]]; then
+      git clone --filter=blob:none "$repository" "$RUNNER_TEMP/$name"
+      git -C "$RUNNER_TEMP/$name" checkout --detach "$revision"
+      npm ci $npm_args --prefix "$RUNNER_TEMP/$name" --silent
+      return
+    fi
+    mkdir -p "$cache_root"
+    shared="$cache_root/$name-$revision"
+    if [[ ! -d "$shared/.git" ]]; then
+      staging="$cache_root/.$name-$revision-$$"
+      test ! -e "$staging"
+      git clone --filter=blob:none "$repository" "$staging"
+      git -C "$staging" checkout --detach "$revision"
+      npm ci $npm_args --prefix "$staging" --silent
+      test ! -e "$shared"
+      mv "$staging" "$shared"
+    fi
+    test "$(git -C "$shared" rev-parse HEAD)" = "$revision"
+    ln -s "$shared" "$RUNNER_TEMP/$name"
+  }
   (
     set -euo pipefail
     progress setup clone-pinokiod
-    git clone --filter=blob:none https://github.com/pinokiocomputer/pinokiod.git "$RUNNER_TEMP/pinokiod"
+    pinned_checkout pinokiod https://github.com/pinokiocomputer/pinokiod.git add4a674ad1ba95bb62ec427fce519fe5bf0e9bf '--omit=dev'
     progress setup checkout-pinokiod
-    git -C "$RUNNER_TEMP/pinokiod" checkout --detach add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
     progress setup install-pinokiod
-    npm ci --omit=dev --prefix "$RUNNER_TEMP/pinokiod" --silent
     progress setup clone-pterm
-    git clone --filter=blob:none https://github.com/pinokiocomputer/pterm.git "$RUNNER_TEMP/pterm"
+    pinned_checkout pterm https://github.com/pinokiocomputer/pterm.git 5be43718701c448b43daf0ce51d8935f170065bb '--omit=dev'
     progress setup checkout-pterm
-    git -C "$RUNNER_TEMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb
     progress setup install-pterm
-    npm ci --omit=dev --prefix "$RUNNER_TEMP/pterm" --silent
-    progress setup clone-candidate-app
-    git init --quiet "$RUNNER_TEMP/r21-candidate-app-source"
-    git -C "$RUNNER_TEMP/r21-candidate-app-source" remote add origin https://github.com/banodoco/astrid-app.git
-    git -C "$RUNNER_TEMP/r21-candidate-app-source" fetch --quiet --depth=1 --filter=blob:none origin \
-      933c53a6fb1a11e5f8a01335d6252016d703beec
-    git -C "$RUNNER_TEMP/r21-candidate-app-source" checkout --quiet --detach FETCH_HEAD
-    test "$(git -C "$RUNNER_TEMP/r21-candidate-app-source" rev-parse HEAD)" = '933c53a6fb1a11e5f8a01335d6252016d703beec'
-    progress setup install-candidate-app
-    npm ci --prefix "$RUNNER_TEMP/r21-candidate-app-source" --silent
-    progress setup build-candidate-app
-    env RAILWAY_GIT_COMMIT_SHA=933c53a6fb1a11e5f8a01335d6252016d703beec \
-      VITE_APP_BUILD=933c53a6fb1a11e5f8a01335d6252016d703beec NODE_OPTIONS=--max-old-space-size=4096 \
-      npm run --prefix "$RUNNER_TEMP/r21-candidate-app-source" build:hosted --silent
-    node .github/venue/r21-candidate-app-build.cjs \
-      --source "$RUNNER_TEMP/r21-candidate-app-source" \
-      --app 933c53a6fb1a11e5f8a01335d6252016d703beec \
-      --manifest b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f \
-      --output "$RUNNER_TEMP/r21-candidate-app-build.json"
+    if [[ "$single_action" != install ]]; then
+      progress setup clone-candidate-app
+      git init --quiet "$RUNNER_TEMP/r21-candidate-app-source"
+      git -C "$RUNNER_TEMP/r21-candidate-app-source" remote add origin https://github.com/banodoco/astrid-app.git
+      git -C "$RUNNER_TEMP/r21-candidate-app-source" fetch --quiet --depth=1 --filter=blob:none origin \
+        933c53a6fb1a11e5f8a01335d6252016d703beec
+      git -C "$RUNNER_TEMP/r21-candidate-app-source" checkout --quiet --detach FETCH_HEAD
+      test "$(git -C "$RUNNER_TEMP/r21-candidate-app-source" rev-parse HEAD)" = '933c53a6fb1a11e5f8a01335d6252016d703beec'
+      progress setup install-candidate-app
+      npm ci --prefix "$RUNNER_TEMP/r21-candidate-app-source" --silent
+      progress setup build-candidate-app
+      env RAILWAY_GIT_COMMIT_SHA=933c53a6fb1a11e5f8a01335d6252016d703beec \
+        VITE_APP_BUILD=933c53a6fb1a11e5f8a01335d6252016d703beec NODE_OPTIONS=--max-old-space-size=4096 \
+        npm run --prefix "$RUNNER_TEMP/r21-candidate-app-source" build:hosted --silent
+      node .github/venue/r21-candidate-app-build.cjs \
+        --source "$RUNNER_TEMP/r21-candidate-app-source" \
+        --app 933c53a6fb1a11e5f8a01335d6252016d703beec \
+        --manifest b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f \
+        --output "$RUNNER_TEMP/r21-candidate-app-build.json"
+    fi
   )
   status=$?
   printf '%s\n' "$status" > "$R21_PROGRESS_DIR/setup.exit"
@@ -115,6 +147,8 @@ request="${1:?usage: r21-real-engine.sh <r21-request.json>}"
 : "${R21_REQUEST_ID:?R21_REQUEST_ID is required}"
 : "${R21_RUNNER_REF:?R21_RUNNER_REF is required}"
 : "${R21_CONFIRMATION:?R21_CONFIRMATION is required}"
+single_action=${R21_SINGLE_ACTION:-}
+[[ -z "$single_action" || "$single_action" == install ]] || exit 2
 
 out="$RUNNER_TEMP/r21-evidence"
 venue_home="$RUNNER_TEMP/r21-pinokio-home"
@@ -130,6 +164,7 @@ candidate_app_ready="$RUNNER_TEMP/r21-candidate-app-server.json"
 bootstrap_trace="$RUNNER_TEMP/r21-bootstrap-strace.log"
 candidate_app_pid=''
 candidate_app_port=''
+candidate_app_spki=''
 candidate_app_nat=false
 stage='preflight'
 daemon_pid=''
@@ -141,7 +176,7 @@ progress() {
 progress "$stage"
 
 if [ -e "$out" ] || [ -e "$venue_home" ] || [ -e "$source_root" ] || [ -e "$agent_source" ] \
-    || [ ! -d "$candidate_app_source" ] || [ ! -d "$candidate_app_dist" ] || [ ! -f "$candidate_app_provenance" ]; then
+    || { [ "$single_action" != install ] && { [ ! -d "$candidate_app_source" ] || [ ! -d "$candidate_app_dist" ] || [ ! -f "$candidate_app_provenance" ]; }; }; then
   printf 'R-21 venue paths already exist; a fresh RUNNER_TEMP is required\n' >&2
   exit 1
 fi
@@ -192,15 +227,20 @@ stage='verify-native-inputs'
 progress "$stage"
 test "$(git rev-parse HEAD)" = "$R21_RUNNER_REF"
 git merge-base --is-ancestor 3a6a98ae251ca126505245286e2d3e760f4348e9 HEAD
-chrome_path=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser)
-test -x "$chrome_path"
+chrome_path=''
+if [ "$single_action" != install ]; then
+  chrome_path=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser)
+  test -x "$chrome_path"
+fi
 test "$(git -C "$RUNNER_TEMP/pinokiod" rev-parse HEAD)" = 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf'
 test "$(git -C "$RUNNER_TEMP/pterm" rev-parse HEAD)" = '5be43718701c448b43daf0ce51d8935f170065bb'
-node .github/venue/r21-candidate-app-build.cjs \
-  --source "$candidate_app_source" \
-  --app 933c53a6fb1a11e5f8a01335d6252016d703beec \
-  --manifest b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f \
-  --output "$candidate_app_provenance"
+if [ "$single_action" != install ]; then
+  node .github/venue/r21-candidate-app-build.cjs \
+    --source "$candidate_app_source" \
+    --app 933c53a6fb1a11e5f8a01335d6252016d703beec \
+    --manifest b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f \
+    --output "$candidate_app_provenance"
+fi
 node .github/venue/r21-inputs.cjs --output "$request"
 git init --quiet "$agent_source"
 git -C "$agent_source" remote add origin https://github.com/banodoco/astrid-agent.git
@@ -254,22 +294,23 @@ if (manifest?.runtime?.schema_digest !== 'sha256:9628bb5fd6e1dbbec392dd39f2e0103
 NODE
 rm -f "$manifest"
 
-stage='serve-candidate-app-build'
-progress "$stage"
-openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 \
-  -subj '/CN=astrid.haus' -addext 'subjectAltName=DNS:astrid.haus,IP:127.0.0.1' \
-  -keyout "$candidate_app_key" -out "$candidate_app_cert" >/dev/null 2>&1
-chmod 600 "$candidate_app_key"
-node .github/venue/r21-candidate-app-server.cjs --root "$candidate_app_dist" \
-  --key "$candidate_app_key" --cert "$candidate_app_cert" --ready "$candidate_app_ready" >/dev/null 2>&1 &
-candidate_app_pid=$!
-for _ in $(seq 1 50); do
-  if [ -f "$candidate_app_ready" ]; then break; fi
-  kill -0 "$candidate_app_pid" 2>/dev/null || exit 1
-  sleep 0.1
-done
-test -f "$candidate_app_ready"
-candidate_app_port=$(node - "$candidate_app_ready" <<'NODE'
+if [ "$single_action" != install ]; then
+  stage='serve-candidate-app-build'
+  progress "$stage"
+  openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 \
+    -subj '/CN=astrid.haus' -addext 'subjectAltName=DNS:astrid.haus,IP:127.0.0.1' \
+    -keyout "$candidate_app_key" -out "$candidate_app_cert" >/dev/null 2>&1
+  chmod 600 "$candidate_app_key"
+  node .github/venue/r21-candidate-app-server.cjs --root "$candidate_app_dist" \
+    --key "$candidate_app_key" --cert "$candidate_app_cert" --ready "$candidate_app_ready" >/dev/null 2>&1 &
+  candidate_app_pid=$!
+  for _ in $(seq 1 50); do
+    if [ -f "$candidate_app_ready" ]; then break; fi
+    kill -0 "$candidate_app_pid" 2>/dev/null || exit 1
+    sleep 0.1
+  done
+  test -f "$candidate_app_ready"
+  candidate_app_port=$(node - "$candidate_app_ready" <<'NODE'
 const fs = require('node:fs');
 const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (value?.schema !== 1 || value?.host !== '127.0.0.1' || value?.origin !== 'https://astrid.haus'
@@ -277,18 +318,19 @@ if (value?.schema !== 1 || value?.host !== '127.0.0.1' || value?.origin !== 'htt
 process.stdout.write(String(value.port));
 NODE
 )
-command -v sudo >/dev/null
-command -v strace >/dev/null
-sudo -n true
-sudo -n iptables -w -t nat -I OUTPUT 1 -p tcp -d 127.0.0.1 --dport 443 -j REDIRECT --to-ports "$candidate_app_port"
-candidate_app_nat=true
-curl --noproxy '*' --fail --silent --show-error --resolve astrid.haus:443:127.0.0.1 \
-  --cacert "$candidate_app_cert" https://astrid.haus/build.json --output "$RUNNER_TEMP/r21-served-build.json"
-cmp "$candidate_app_dist/build.json" "$RUNNER_TEMP/r21-served-build.json"
-rm -f "$RUNNER_TEMP/r21-served-build.json"
-candidate_app_spki=$(openssl x509 -in "$candidate_app_cert" -pubkey -noout \
-  | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64 -w0)
-test "$candidate_app_spki" != ''
+  command -v sudo >/dev/null
+  command -v strace >/dev/null
+  sudo -n true
+  sudo -n iptables -w -t nat -I OUTPUT 1 -p tcp -d 127.0.0.1 --dport 443 -j REDIRECT --to-ports "$candidate_app_port"
+  candidate_app_nat=true
+  curl --noproxy '*' --fail --silent --show-error --resolve astrid.haus:443:127.0.0.1 \
+    --cacert "$candidate_app_cert" https://astrid.haus/build.json --output "$RUNNER_TEMP/r21-served-build.json"
+  cmp "$candidate_app_dist/build.json" "$RUNNER_TEMP/r21-served-build.json"
+  rm -f "$RUNNER_TEMP/r21-served-build.json"
+  candidate_app_spki=$(openssl x509 -in "$candidate_app_cert" -pubkey -noout \
+    | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64 -w0)
+  test "$candidate_app_spki" != ''
+fi
 
 stage='start-native-engine'
 progress "$stage"
