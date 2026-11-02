@@ -3,7 +3,7 @@ name: R-25 authenticated six-action snapshot journey
 on:
   push:
     branches:
-      - lane/M-PIN/R-25-MACOS-SNAPSHOT-SESSION-R1
+      - lane/M-PIN/R-25-MAC-WORKFLOW-MODE-R1
   workflow_dispatch:
     inputs:
       agent_ref:
@@ -16,7 +16,7 @@ on:
         required: true
         default: pinokio-fully-local-macos
         type: choice
-        options: [pinokio-fully-local-macos]
+        options: [pinokio-backend-macos, pinokio-fully-local-macos]
 
 permissions:
   actions: read
@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   macos-six-action:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.slot_id == 'pinokio-fully-local-macos')
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.slot_id == 'pinokio-backend-macos' || inputs.slot_id == 'pinokio-fully-local-macos'))
     runs-on: macos-15
     timeout-minutes: 90
     env:
@@ -131,7 +131,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r25-snapshots-pinokio-fully-local-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: r25-snapshots-${{ env.SLOT_ID }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/r25-snapshot-output
           if-no-files-found: warn
           retention-days: 30
@@ -139,7 +139,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r25-snapshot-diagnostics-pinokio-fully-local-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: r25-snapshot-diagnostics-${{ env.SLOT_ID }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/r25-diagnostics
           if-no-files-found: warn
           retention-days: 30
