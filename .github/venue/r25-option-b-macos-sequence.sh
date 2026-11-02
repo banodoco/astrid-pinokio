@@ -4,6 +4,22 @@
 set -euo pipefail
 umask 077
 
+private_mode() {
+  stat -f '%Lp' "$1"
+}
+
+require_private_directory() {
+  test "$(private_mode "$1")" = 700
+}
+
+# The focused regression invokes only this preflight helper with a portable
+# stat fixture; the production route never takes this branch.
+if [ "${R25_PREFLIGHT_ONLY:-0}" = 1 ]; then
+  test "$#" -eq 1
+  require_private_directory "$1"
+  exit 0
+fi
+
 test "$(uname -s)" = Darwin
 test "$(id -un)" = astrid-runner
 command -v git >/dev/null
@@ -18,9 +34,10 @@ test ! -L "$run_parent"
 mkdir -p "$run_parent"
 run_uid="$(id -u)"
 test "$(stat -f '%u' "$run_parent")" = "$run_uid"
+require_private_directory "$run_parent"
 run_root="$(mktemp -d "$run_parent/run.XXXXXXXX")"
 test "$(stat -f '%u' "$run_root")" = "$run_uid"
-test "$(stat -f '%p' "$run_root")" = 700
+require_private_directory "$run_root"
 
 install_root="$run_root/installed"
 sources="$install_root/sources"
@@ -97,6 +114,9 @@ venue_ref=327d0fc29f0b63d58e6c6c3449c81af5912ac85c
 wrapper_ref=37e2337271cffe275374fe9a2eda73e8948ef17a
 wrapper_sha256=c9abcd60a839de2001195f207e63133632d457bc2c4fa921f3ba4c09efdd0570
 wrapper_url="https://raw.githubusercontent.com/banodoco/astrid-pinokio/$wrapper_ref/.github/venue/r25-local-macos-option-b.sh"
+install_ps1_digest=bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258
+stale_install_ps1_digest="${install_ps1_digest}f"
+corrected_wrapper_sha256=2f208fdf12154769f4ff524144cc83bf177ac341f7f2c4771f6bdd4b7b891ea1
 agent_ref=a6b68d5b5478326a4db1971966d33a2cfe61d091
 pinokiod_ref=add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
 pterm_ref=5be43718701c448b43daf0ce51d8935f170065bb
@@ -113,7 +133,9 @@ printf '%s\n' \
   "python_version_guard=explicitly-supported-3.11" \
   "pinokio_source_ref=$venue_ref" \
   "executed_wrapper_ref=$wrapper_ref" \
-  "executed_wrapper_sha256=$wrapper_sha256" \
+  "wrapper_source_sha256=$wrapper_sha256" \
+  "wrapper_normalization=public/install.ps1:$stale_install_ps1_digest->$install_ps1_digest" \
+  "executed_wrapper_sha256=$corrected_wrapper_sha256" \
   "pinokio_product_ref=$pinokio_product_ref" \
   "agent_ref=$agent_ref" \
   "pinokiod_ref=$pinokiod_ref" \
@@ -145,6 +167,17 @@ printf '%s  %s\n' "$wrapper_sha256" "$wrapper_download" | shasum -a 256 --check
 chmod 700 "$wrapper_download"
 mv -f "$wrapper_download" "$wrapper_path"
 printf '%s  %s\n' "$wrapper_sha256" "$wrapper_path" | shasum -a 256 --check
+
+# The pinned wrapper contains one stale 65-character install.ps1 digest. The
+# pinned app bytes establish the authoritative 64-character value below. Keep
+# the wrapper's source hash check above, then admit only this exact correction
+# and hash the corrected wrapper before execution.
+test "$(grep -F -c "$stale_install_ps1_digest" "$wrapper_path")" = 1
+wrapper_corrected="$run_root/r25-local-macos-option-b.sh.corrected"
+sed "s/$stale_install_ps1_digest/$install_ps1_digest/" "$wrapper_path" >"$wrapper_corrected"
+printf '%s  %s\n' "$corrected_wrapper_sha256" "$wrapper_corrected" | shasum -a 256 --check
+chmod 700 "$wrapper_corrected"
+mv -f "$wrapper_corrected" "$wrapper_path"
 
 npm ci --omit=dev --prefix "$sources/pinokiod" --silent
 npm ci --omit=dev --prefix "$sources/pterm" --silent
