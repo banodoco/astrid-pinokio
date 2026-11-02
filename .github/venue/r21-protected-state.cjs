@@ -96,11 +96,13 @@ async function requiredRegular(pathname, label) {
 }
 
 async function optionalRegular(pathname, label) {
-  try { await requiredRegular(pathname, label); }
+  let entry;
+  try { entry = await fsp.lstat(pathname); }
   catch (error) {
-    if (error.message === `protected installed ${label} is missing`) return;
+    if (error.code === 'ENOENT') return;
     throw error;
   }
+  if (entry.isSymbolicLink() || !entry.isFile()) throw new Error(`protected installed ${label} is not a regular file`);
 }
 
 async function protectedDataRoot(home, rawDataRoot) {
@@ -146,7 +148,8 @@ async function selectedVersion(root, current) {
   let record;
   try { record = JSON.parse(await fsp.readFile(versionPath, 'utf8')); }
   catch { throw new Error('selected installed version record cannot be read'); }
-  if (!record || typeof record !== 'object' || Array.isArray(record) || path.resolve(record.root || '') !== selectedRoot) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)
+      || typeof record.root !== 'string' || !path.isAbsolute(record.root) || path.resolve(record.root) !== selectedRoot) {
     throw new Error('selected installed version record does not bind its version root');
   }
   const realSelectedRoot = await fsp.realpath(selectedRoot);
