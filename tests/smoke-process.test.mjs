@@ -102,7 +102,7 @@ test('fully-local Update callback retains its complete installer diagnostic befo
     fs.rmSync(directory, { recursive: true, force: true });
   }
   assert.equal(fs.existsSync(logPath), false);
-  assert.ok(output.includes(logPath));
+  assert.ok(output.includes(JSON.stringify(logPath)));
   assert.ok(output.includes(`"sourceBytes":${bytes.length}`));
   assert.ok(output.includes(`"sha256":"${createHash('sha256').update(bytes).digest('hex')}"`));
   const chunks = [...output.matchAll(/^INSTALL_LOG_BASE64 (.*)$/gm)].map((match) => match[1]);
