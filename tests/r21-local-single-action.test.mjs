@@ -12,6 +12,8 @@ test('R-21 local execution exposes only the pinned Install single-action route',
   assert.equal(rejected.status, 2);
   assert.match(rejected.stderr, /only --single-action install is supported/);
   assert.match(runnerSource, /R21_LOCAL_CACHE_ROOT/);
+  assert.match(runnerSource, /R21_LOCAL_EXECUTION=1/);
+  assert.match(runnerSource, /GITHUB_EVENT_NAME=workflow_dispatch/);
   assert.match(runnerSource, /ln -s "\$shared" "\$RUNNER_TEMP\/\$name"/);
   assert.match(runnerSource, /if \[\[ "\$single_action" != install \]\]; then/);
 });

@@ -19,14 +19,37 @@ if [[ "${1:-}" == --execute || "${1:-}" == --watchdog ]]; then
   [[ "$deadline" =~ ^[1-9][0-9]*$ ]] || exit 2
   request=${1:?request required}
   : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
+  local_dispatch=false
+  if [[ "$mode" == --execute && -z "${GITHUB_EVENT_NAME:-}" ]]; then
+    : "${R21_RUNNER_REF:?R21_RUNNER_REF is required for local execution}"
+    local_dispatch=true
+  fi
   export R21_PROGRESS_DIR="$RUNNER_TEMP/r21-watchdog"
   mkdir "$R21_PROGRESS_DIR"
   export R21_STARTED_MS
   R21_STARTED_MS=$(node -p 'Date.now()')
   if [[ -n "$single_action" ]]; then
-    R21_SINGLE_ACTION="$single_action" setsid bash "$0" --work "$request" &
+    if [[ "$local_dispatch" == true ]]; then
+      env R21_LOCAL_EXECUTION=1 R21_SINGLE_ACTION="$single_action" \
+        GITHUB_EVENT_NAME=workflow_dispatch \
+        GITHUB_REF=refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-PROOF-R1 \
+        GITHUB_SHA="$R21_RUNNER_REF" GITHUB_WORKFLOW_SHA="$R21_RUNNER_REF" \
+        GITHUB_WORKFLOW_REF=banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-PROOF-R1 \
+        setsid bash "$0" --work "$request" &
+    else
+      R21_SINGLE_ACTION="$single_action" setsid bash "$0" --work "$request" &
+    fi
   else
-    env -u R21_SINGLE_ACTION setsid bash "$0" --work "$request" &
+    if [[ "$local_dispatch" == true ]]; then
+      env -u R21_SINGLE_ACTION R21_LOCAL_EXECUTION=1 \
+        GITHUB_EVENT_NAME=workflow_dispatch \
+        GITHUB_REF=refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-PROOF-R1 \
+        GITHUB_SHA="$R21_RUNNER_REF" GITHUB_WORKFLOW_SHA="$R21_RUNNER_REF" \
+        GITHUB_WORKFLOW_REF=banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-PROOF-R1 \
+        setsid bash "$0" --work "$request" &
+    else
+      env -u R21_SINGLE_ACTION setsid bash "$0" --work "$request" &
+    fi
   fi
   worker=$!
   sleep "$deadline" &
