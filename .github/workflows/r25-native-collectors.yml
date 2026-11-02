@@ -1,6 +1,11 @@
 name: R-25 native collector route
 
 on:
+  # This is the one immutable ref allowed to launch the native component
+  # probes without a default-branch workflow_dispatch registration.
+  push:
+    branches:
+      - venue/M-PIN-R-25-NATIVE-PROBE-R1
   workflow_dispatch:
     inputs:
       tuple_json:
@@ -30,13 +35,16 @@ permissions:
 
 jobs:
   macos:
-    if: inputs.target_os == 'macos' || inputs.target_os == 'both'
+    if: github.event_name == 'push' || inputs.target_os == 'macos' || inputs.target_os == 'both'
     runs-on: macos-14
     timeout-minutes: 15
     env:
-      TUPLE_JSON: ${{ inputs.tuple_json }}
-      SOURCE_REF: ${{ inputs.source_ref }}
-      MODE: ${{ inputs.mode }}
+      # A push has no workflow_dispatch inputs.  Its candidate tuple and
+      # source identity are deliberately fixed here; manual dispatch remains
+      # available for an explicitly supplied canonical tuple.
+      TUPLE_JSON: ${{ github.event_name == 'push' && '{"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f"}' || inputs.tuple_json }}
+      SOURCE_REF: ${{ github.event_name == 'push' && '47059b072889b489b2db20d3a3e86acf02e5a3d4' || inputs.source_ref }}
+      MODE: ${{ github.event_name == 'push' && 'both' || inputs.mode }}
       SOURCE_ROOT: ${{ runner.temp }}/r25-macos-source
     steps:
       - uses: actions/checkout@v4
@@ -89,13 +97,14 @@ jobs:
           retention-days: 30
 
   windows:
-    if: inputs.target_os == 'windows' || inputs.target_os == 'both'
+    if: github.event_name == 'push' || inputs.target_os == 'windows' || inputs.target_os == 'both'
     runs-on: windows-2022
     timeout-minutes: 20
     env:
-      TUPLE_JSON: ${{ inputs.tuple_json }}
-      SOURCE_REF: ${{ inputs.source_ref }}
-      MODE: ${{ inputs.mode }}
+      # Keep this byte-for-byte identical to the macOS push binding.
+      TUPLE_JSON: ${{ github.event_name == 'push' && '{"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f"}' || inputs.tuple_json }}
+      SOURCE_REF: ${{ github.event_name == 'push' && '47059b072889b489b2db20d3a3e86acf02e5a3d4' || inputs.source_ref }}
+      MODE: ${{ github.event_name == 'push' && 'both' || inputs.mode }}
       SOURCE_ROOT: ${{ runner.temp }}\r25-windows-source
     steps:
       - uses: actions/checkout@v4
