@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "status": "blocked",
+  "category": "timeout",
+  "last_operation": {
+    "operation": "runtime",
+    "category": "error",
+    "timestamp": "2026-11-02T03:12:17.879Z"
+  }
+}
