@@ -11,7 +11,7 @@ const wrapperPath = path.join(__dirname, '..', '.github', 'venue', 'r25-local-ma
 const sequence = fs.readFileSync(sequencePath, 'utf8');
 const wrapper = fs.readFileSync(wrapperPath, 'utf8');
 
-const venueRef = '327d0fc29f0b63d58e6c6c3449c81af5912ac85c';
+const venueRef = '5ad7ef974f5f11643ba19da95c20fbaeb9fca442';
 const wrapperRef = '5ad7ef974f5f11643ba19da95c20fbaeb9fca442';
 const wrapperSha256 = '2f208fdf12154769f4ff524144cc83bf177ac341f7f2c4771f6bdd4b7b891ea1';
 

@@ -93,7 +93,7 @@ test -x "$python_actual_executable"
 # The local wrapper accepts this real, explicitly supported Python 3.11
 # interpreter. No alternate executable is installed.
 
-venue_ref=327d0fc29f0b63d58e6c6c3449c81af5912ac85c
+venue_ref=5ad7ef974f5f11643ba19da95c20fbaeb9fca442
 wrapper_ref=5ad7ef974f5f11643ba19da95c20fbaeb9fca442
 wrapper_sha256=2f208fdf12154769f4ff524144cc83bf177ac341f7f2c4771f6bdd4b7b891ea1
 wrapper_url="https://raw.githubusercontent.com/banodoco/astrid-pinokio/$wrapper_ref/.github/venue/r25-local-macos-option-b.sh"
