@@ -4,9 +4,10 @@
 App ref occurrences replaced by `ae95eb455408b8c0e185bfded67798e2b307a6f6`.
 The manifest digest was already the published `15ea3a2e0a4067773b727635e4eaa4b894eceb10f73aaa88cd29896a2364bd77`.
 This is a **template, not an executor config**: its reserved runner/provider
-paths and runtime identities remain unresolved. Do not dispatch it. Every OS
-object explicitly has `source_override_test_mode: false`; source override is
-also forbidden in executable command inputs. The intended Linux candidate is:
+paths and runtime identities remain unresolved. Do not dispatch it. The binding
+policy is `source_override: false`. Every OS object explicitly has the
+harness field `source_override_test_mode: false`; source override is also
+forbidden in executable command inputs. The intended Linux candidate is:
 
 - Pinokio `89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4`
 - Agent `dd6b48192c720c5346e6f140184e313b2cf84f31`
