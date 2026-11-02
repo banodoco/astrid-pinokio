@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { URLSearchParams } = require('node:url');
+const { createObserverIO } = require('./r21-observer-io.cjs');
 const {
   ACTIONS, ENDPOINT, FIRST_REFUSAL, TUPLE, verifyReceipt,
 } = require('./r21-verify.cjs');
@@ -24,10 +24,7 @@ const home = process.env.R21_VENUE_HOME;
 if (!appRoot || !ptermRoot || !home) throw new Error('R21_APP_ROOT, R21_PTERM_ROOT, and R21_VENUE_HOME are required');
 
 const { WebSocket } = require(path.join(ptermRoot, 'node_modules/unws'));
-const WS_URL = 'ws://127.0.0.1:42000';
-const HTTP_URL = 'http://127.0.0.1:42000';
 const ACTION_TIMEOUT_MS = 20 * 60 * 1000;
-const POLL_TIMEOUT_MS = 4 * 60 * 1000;
 let actionNumber = 0;
 const progress = {};
 function substage(value) {
@@ -110,73 +107,9 @@ async function digestProtectedState() {
   };
 }
 
-function openSocket() {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(WS_URL, { headers: { 'x-pinokio-client': 'r21-venue-observer' } });
-    socket.addEventListener('open', () => resolve(socket));
-    socket.addEventListener('error', () => reject(new Error('engine websocket connection failed')));
-  });
-}
-
-async function status(localPath) {
-  const socket = await openSocket();
-  try {
-    return await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('engine status timeout')), 15000);
-      socket.addEventListener('message', (event) => {
-        let packet;
-        try { packet = JSON.parse(String(event.data)); }
-        catch { clearTimeout(timer); reject(new Error('engine status packet was not JSON')); return; }
-        clearTimeout(timer);
-        resolve(typeof packet.data === 'boolean' ? packet.data : 'unknown');
-      });
-      socket.send(JSON.stringify({ uri: localPath, status: true }));
-    });
-  } finally {
-    socket.close();
-  }
-}
-
-async function waitForStatus(localPath, expected, label) {
-  const deadline = Date.now() + POLL_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (await status(localPath) === expected) return;
-    await delay(1000);
-  }
-  throw new Error(`${label} did not reach explicit engine status ${expected}`);
-}
-
-async function engineResourceReady() {
-  const response = await fetch(`${HTTP_URL}/pinokio/resource/status?${new URLSearchParams({ ref: ENDPOINT })}`);
-  if (!response.ok) return false;
-  const body = await response.json().catch(() => null);
-  return Boolean(isObject(body) && typeof body.path === 'string' && body.path === appRoot
-    && Array.isArray(body.running_scripts) && body.running_scripts.includes('pinokio/start.js'));
-}
-
-async function runtimeReady() {
-  try {
-    const response = await fetch('http://127.0.0.1:17340/api/runtime/v1/health', { signal: AbortSignal.timeout(5000) });
-    const body = await response.json().catch(() => null);
-    return response.status === 200 && body?.protocol === 'workspace.v1';
-  } catch { return false; }
-}
-
-async function applicationReady() {
-  try {
-    const response = await fetch('https://astrid.haus/?connect=1', { signal: AbortSignal.timeout(10000), redirect: 'follow' });
-    return response.ok;
-  } catch { return false; }
-}
-
-async function waitForReadiness() {
-  const deadline = Date.now() + POLL_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (await engineResourceReady() && await runtimeReady() && await applicationReady()) return;
-    await delay(1500);
-  }
-  throw new Error('independent Runtime/application readiness timeout');
-}
+const io = createObserverIO({ WebSocket, fetch, spawn, appRoot, ptermRoot, home, endpoint: ENDPOINT,
+  record: value => write('r21-observer-operation.json', value) });
+const { openSocket, status, waitForReadiness, runtimeReady, applicationReady, startOldLauncher } = io;
 
 function ptermExit(child, label) {
   return new Promise((resolve, reject) => {
@@ -240,23 +173,12 @@ async function observeAction(label, script) {
     'historical Stop': 'stop', 'fresh Update retry': 'retry', 'bounded cleanup Stop': 'cleanup' }[label];
   progress[progressKey] = observation;
   retainProgress();
-  await Promise.race([done, delay(5000)]);
-  socket.close();
+  let disconnectTimer;
+  await Promise.race([done, new Promise(resolve => { disconnectTimer = setTimeout(resolve, 5000); })]);
+  clearTimeout(disconnectTimer);
+  io.disposeSocket(socket);
   observation.running_after = await status(localPath);
   return observation;
-}
-
-async function startOldLauncher() {
-  const script = 'pinokio/start.js';
-  const child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', ENDPOINT], {
-    cwd: home, env: process.env, stdio: ['ignore', 'ignore', 'ignore'],
-  });
-  // PTerm deliberately remains attached to a running daemon action.  Do not
-  // treat this setup client or its output as R-21 evidence.
-  child.once('error', () => {});
-  await waitForStatus(path.join(appRoot, script), true, 'historical Start');
-  await waitForReadiness();
-  return child;
 }
 
 async function lockFree() {
@@ -362,11 +284,15 @@ async function main() {
   write('r21-verdict.json', verifyReceipt(receipt));
 }
 
-main().catch((error) => {
+main().then(() => io.cleanup()).catch(async (error) => {
   // Hosted job logs retain diagnostics for the venue owner.  Artifacts remain
   // sanitised: no raw daemon, installer, user-data, or command output leaves
   // the runner on failure.
-  fs.mkdirSync(output, { recursive: true });
-  write('r21-failure.json', { schema: 1, status: 'blocked', category: /timeout/i.test(error.message) ? 'timeout' : 'engine-or-observer' });
   process.exitCode = 1;
+  try {
+    fs.mkdirSync(output, { recursive: true });
+    let lastOperation = null;
+    try { lastOperation = JSON.parse(fs.readFileSync(path.join(output, 'r21-observer-operation.json'), 'utf8')); } catch {}
+    write('r21-failure.json', { schema: 1, status: 'blocked', category: /timeout/i.test(error.message) ? 'timeout' : 'engine-or-observer', last_operation: lastOperation });
+  } finally { await io.cleanup(); }
 });
