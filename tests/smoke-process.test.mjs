@@ -69,7 +69,9 @@ test('fully-local Update callback retains its bounded installer diagnostic befor
   const astridHome = path.join(directory, 'selected');
   const home = path.join(directory, 'home');
   const appDirectory = path.join(directory, 'app');
-  const logPath = path.join(astridHome, '.local', 'state', 'astrid-runtime', 'logs', 'install.log');
+  const logPath = process.platform === 'win32'
+    ? path.join(astridHome, 'Astrid Runtime', 'logs', 'install.log')
+    : path.join(astridHome, '.local', 'state', 'astrid-runtime', 'logs', 'install.log');
   const bytes = Buffer.from(`${'x'.repeat(70 * 1024)}\nowner pid=4242\n`);
   const tail = bytes.subarray(-64 * 1024);
   const expectedError = new Error('another installer owns the installation lifetime lock');
@@ -90,9 +92,11 @@ test('fully-local Update callback retains its bounded installer diagnostic befor
   let output = '';
   const write = process.stdout.write;
   try {
-    process.stdout.write = function (chunk, ...args) { output += chunk.toString(); return true; };
+    process.stdout.write = function (chunk) { output += chunk.toString(); return true; };
     try {
-      await assert.rejects(invokeAction('update', app, appDirectory, { ASTRID_HOME: astridHome, HOME: home }, directory,
+      await assert.rejects(invokeAction('update', app, appDirectory, { ASTRID_HOME: astridHome, HOME: home, LOCALAPPDATA: astridHome }, directory,
+        () => null, async () => {}), (error) => error === expectedError);
+      await assert.rejects(invokeAction('update', app, appDirectory, {}, directory,
         () => null, async () => {}), (error) => error === expectedError);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
@@ -106,6 +110,7 @@ test('fully-local Update callback retains its bounded installer diagnostic befor
   assert.ok(output.includes(`65536/${bytes.length} trailing bytes retained from offset ${bytes.length - tail.length}`));
   assert.ok(output.includes(`sha256 of retained bytes ${createHash('sha256').update(tail).digest('hex')}; truncated`));
   assert.ok(output.includes(`--- installer log begin ---\n${tail.toString()}\n--- installer log end ---`));
+  assert.ok(output.includes('Installer diagnostic: absent (checked no configured locations)'));
 });
 
 test('failed Update callback reports absent and unreadable installer logs', { skip: process.platform !== 'linux' }, async () => {

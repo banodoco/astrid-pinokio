@@ -85,7 +85,10 @@ function quoteBash(value) {
 }
 
 function installLogCandidates(environment) {
-  if (windows) return [path.join(environment.LOCALAPPDATA || environment.USERPROFILE, 'Astrid Runtime', 'logs', 'install.log')];
+  if (windows) {
+    const root = environment.LOCALAPPDATA || environment.USERPROFILE;
+    return root ? [path.join(root, 'Astrid Runtime', 'logs', 'install.log')] : [];
+  }
   const roots = [environment.ASTRID_HOME, environment.HOME].filter(Boolean);
   return [...new Set([
     ...roots.map((root) => path.join(root, '.local', 'state', 'astrid-runtime', 'logs', 'install.log')),
