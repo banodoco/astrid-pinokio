@@ -13,11 +13,11 @@ test('native Install step activity and terminal errors are timestamped, bounded 
   const recorder = createInstallDiagnostics(binding, value => { evidence = value; }, () => clock);
   recorder.packet({ type: 'start', data: { current: 2, total: 4, method: 'shell.run', secret: 'secret-command' } });
   clock += 1000;
-  recorder.packet({ type: 'stream', index: 2, total: 4, data: { raw: 'secret-output' }, rpc: { method: 'shell.run' } });
+  recorder.packet({ type: 'stream', index: 2, total: 4, data: { raw: 'token=secret-output' }, rpc: { method: 'shell.run' } });
   clock += 1000;
-  recorder.packet({ type: 'stream', index: 2, total: 4, data: { raw: 'another-secret' }, rpc: { method: 'shell.run' } });
+  recorder.packet({ type: 'stream', index: 2, total: 4, data: { raw: 'password=another-secret' }, rpc: { method: 'shell.run' } });
   clock += 1000;
-  recorder.packet({ type: 'error', data: 'secret-error', rpc: { current: 2, total: 4, method: 'shell.run' } });
+  recorder.packet({ type: 'error', data: 'api_key=secret-error', rpc: { current: 2, total: 4, method: 'shell.run' } });
   recorder.packet({ type: 'event', data: 'stop' });
   recorder.packet({ type: 'disconnect' });
   assert.deepEqual(evidence.events.map(x => x.kind), ['start', 'stream', 'error', 'stop', 'disconnect']);
@@ -32,11 +32,12 @@ test('native Install step activity and terminal errors are timestamped, bounded 
   assert.equal(evidence.first_error.kind, 'error');
   assert.equal(evidence.last_terminal.kind, 'disconnect');
   assert.equal(evidence.last_activity.index, 99);
-  recorder.packet({ type: 'stream', index: 2, data: { raw: 'ASTRID_PINOKIO_FAILURE secret-details' } });
+  recorder.packet({ type: 'stream', index: 2, data: { raw: 'ASTRID_PINOKIO_FAILURE token=secret-details' } });
   assert.equal(evidence.last_error.kind, 'installer-failure-marker');
   assert.doesNotMatch(JSON.stringify(evidence), /secret/);
   assert.deepEqual(evidence.binding, binding);
-  assert.deepEqual(evidence.child, { spawn_error_at: null, exited_at: null, code: null, signal: null, signal_observed: null });
+  assert.deepEqual(evidence.child, { spawn_error_at: null, exited_at: null, code: null, signal: null, signal_observed: null,
+    close_at: null, close_code: null, close_signal: null, close_observed: null });
 });
 
 test('timer timeout records fire and unknown child until an actual exit is observed', async () => {
@@ -51,10 +52,13 @@ test('timer timeout records fire and unknown child until an actual exit is obser
   assert.equal(evidence.child.exited_at, null);
   assert.equal(evidence.child.signal_observed, null);
   child.emit('exit', null, 'SIGTERM');
+  child.emit('close', null, 'SIGTERM');
   assert.ok(evidence.child.exited_at);
   assert.equal(evidence.child.code, null);
   assert.equal(evidence.child.signal, 'SIGTERM');
   assert.equal(evidence.child.signal_observed, true);
+  assert.equal(evidence.child.close_signal, 'SIGTERM');
+  assert.equal(evidence.child.close_observed, true);
 });
 
 test('normal exit and spawn error stay distinct and projection rejects arbitrary payloads', async () => {
@@ -63,10 +67,12 @@ test('normal exit and spawn error stay distinct and projection rejects arbitrary
   const child = new EventEmitter();
   const pending = ptermExit(child, 'historical install', 1000, recorder.pterm);
   child.emit('exit', 0, null);
+  child.emit('close', 0, null);
   assert.deepEqual(await pending, { code: 0, signal: null });
   assert.equal(evidence.timer.fired_at, null);
   assert.equal(evidence.child.code, 0);
   assert.equal(evidence.child.signal_observed, false);
+  assert.equal(evidence.child.close_code, 0);
   const failed = new EventEmitter();
   const failure = ptermExit(failed, 'historical install', 1000, recorder.pterm);
   failed.emit('error', new Error('secret-error'));
@@ -118,7 +124,7 @@ test('Install listener captures native packets while PTerm is pending', async ()
       const child = new EventEmitter();
       queueMicrotask(() => {
         packet({ type: 'start', data: { current: 2, total: 4, method: 'shell.run', params: 'sensitive' } });
-        packet({ type: 'stream', index: 2, total: 4, data: { raw: 'sensitive' }, rpc: { method: 'shell.run' } });
+        packet({ type: 'stream', index: 2, total: 4, data: { raw: 'token=sensitive' }, rpc: { method: 'shell.run' } });
         packet({ type: 'result', index: 2, total: 4, data: 'sensitive' });
         packet({ type: 'event', data: 'stop' });
         packet({ type: 'disconnect' });
@@ -163,19 +169,45 @@ test('split installer failure marker and the latest sampled operation are retain
   let clock = Date.parse('2026-01-01T00:00:00.000Z');
   let evidence;
   const recorder = createInstallDiagnostics(binding, value => { evidence = value; }, () => clock);
-  recorder.packet({ type: 'stream', index: 2, data: { raw: 'credential ASTRID_PINOKIO_' }, rpc: { method: 'shell.run' } });
+  recorder.packet({ type: 'stream', index: 2, data: { raw: 'token=credential ASTRID_PINOKIO_' }, rpc: { method: 'shell.run' } });
   clock += 1;
-  recorder.packet({ type: 'stream', index: 2, data: { raw: 'FAILURE more credential' }, rpc: { method: 'shell.run' } });
+  recorder.packet({ type: 'stream', index: 2, data: { raw: 'FAILURE more password=credential' }, rpc: { method: 'shell.run' } });
   assert.equal(evidence.last_error.kind, 'installer-failure-marker');
   assert.equal(evidence.last_native_event.kind, 'installer-failure-marker');
   clock += 1;
-  recorder.packet({ type: 'stream', index: 3, data: { raw: 'credential' }, rpc: { method: 'shell.run' } });
+  recorder.packet({ type: 'stream', index: 3, data: { raw: 'token=credential' }, rpc: { method: 'shell.run' } });
   clock += 1;
-  recorder.packet({ type: 'stream', index: 3, data: { raw: 'credential' }, rpc: { method: 'shell.run' } });
+  recorder.packet({ type: 'stream', index: 3, data: { raw: 'token=credential' }, rpc: { method: 'shell.run' } });
   recorder.pterm('timer-fire', { at: clock });
   assert.equal(evidence.last_native_event.index, 3);
   assert.equal(evidence.last_native_event.timestamp, new Date(clock).toISOString());
   assert.equal(evidence.last_result, null);
   assert.equal(evidence.last_error.kind, 'installer-failure-marker');
   assert.doesNotMatch(JSON.stringify(evidence), /credential|ASTRID_PINOKIO_FAILURE/);
+});
+
+test('pre-timeout observation completes before cleanup signal and retains only bounded fixed facts', async () => {
+  let evidence;
+  const order = [];
+  const recorder = createInstallDiagnostics(binding, value => { evidence = value; });
+  const child = new EventEmitter();
+  child.pid = 321;
+  child.kill = signal => { order.push(`kill:${signal}`); return true; };
+  await assert.rejects(ptermExit(child, 'historical install', 5, {
+    pterm: recorder.pterm,
+    async beforeTimeout(value) {
+      order.push('snapshot:start');
+      await new Promise(resolve => setTimeout(resolve, 5));
+      recorder.stage('process-snapshot-before-timeout');
+      recorder.beforeTimeout({ at: value.at, pterm_pid: value.pid, pterm_ppid: value.ppid,
+        daemon_pid: 222, daemon_ppid: 111, process_snapshot: 'captured', installer_output: 'unavailable',
+        pterm_output: 'captured', daemon_output: 'captured' });
+      order.push('snapshot:end');
+    },
+  }), /PTerm timeout/);
+  assert.deepEqual(order, ['snapshot:start', 'snapshot:end', 'kill:SIGTERM']);
+  assert.equal(evidence.pre_cleanup.pterm_pid, 321);
+  assert.equal(evidence.pre_cleanup.process_snapshot, 'captured');
+  assert.equal(evidence.pre_cleanup.installer_output, 'unavailable');
+  assert.equal(evidence.stages.some(item => item.stage === 'process-snapshot-before-timeout'), true);
 });

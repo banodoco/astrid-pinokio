@@ -8,6 +8,7 @@ on:
       - release-1
       - 'int/**'
       - 'lane/M-PIN/**'
+      - '!lane/M-PIN/R-PIN-WINDOWS-CAPTURE'
     paths:
       - '.github/workflows/**'
       - '.github/venue/**'

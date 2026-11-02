@@ -35,17 +35,31 @@ function createActionTracker() {
   };
 }
 function ptermExit(child, label, timeoutMs, diagnostic = null) {
-  const note = (event, value) => { try { diagnostic?.(event, value); } catch {} };
+  const note = (event, value) => { try { (typeof diagnostic === 'function' ? diagnostic : diagnostic?.pterm)?.(event, value); } catch {} };
+  const beforeTimeout = async value => { try { await diagnostic?.beforeTimeout?.(value); } catch {} };
   const started = Date.now();
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    let settled = false;
+    const timer = setTimeout(async () => {
       const fired = Date.now();
-      child.kill('SIGTERM');
-      reject(new Error(`${label} PTerm timeout`));
       note('timer-fire', { at: fired });
+      await beforeTimeout({ at: fired, pid: child?.pid, ppid: process.pid });
+      if (settled) return;
+      settled = true;
+      try { child.kill('SIGTERM'); } catch {}
+      reject(new Error(`${label} PTerm timeout`));
     }, timeoutMs);
-    child.once('error', () => { clearTimeout(timer); reject(new Error(`${label} PTerm spawn failed`)); note('spawn-error'); });
-    child.once('exit', (code, signal) => { clearTimeout(timer); resolve({ code, signal: signal || null }); note('child-exit', { code, signal }); });
+    child.once('error', () => {
+      clearTimeout(timer);
+      note('spawn-error');
+      if (!settled) { settled = true; reject(new Error(`${label} PTerm spawn failed`)); }
+    });
+    child.once('exit', (code, signal) => {
+      clearTimeout(timer);
+      note('child-exit', { code, signal });
+      if (!settled) { settled = true; resolve({ code, signal: signal || null }); }
+    });
+    child.once('close', (code, signal) => note('child-close', { code, signal: signal || null }));
     note('timer-start', { started, deadline: started + timeoutMs });
   });
 }
@@ -94,15 +108,45 @@ async function terminateChild(child, termGraceMs = 2000, killGraceMs = 1000) {
 // The pinned engine emits start.data.current/total/method, and stream/result
 // index/total. Never retain packet content, arbitrary method names, or errors.
 const INSTALL_TRACE_LIMIT = 40;
+const INSTALL_STAGE_LIMIT = 40;
+const INSTALL_TEXT_LIMIT = 4096;
 const installKinds = ['start', 'stream', 'result', 'error', 'installer-failure-marker', 'stop', 'disconnect'];
 const installMethods = ['shell.run', 'local.set', 'script.start', 'input'];
-const shellKinds = ['shell-child-spawn', 'shell-child-error', 'shell-child-exit', 'shell-child-close', 'bootstrap-stage'];
+const installStages = ['daemon-spawn-start', 'daemon-spawn', 'daemon-ready', 'daemon-error', 'observer-open', 'observer-subscribe',
+  'pterm-spawn', 'pterm-timer-start', 'pterm-timer-fire', 'pterm-exit', 'pterm-close',
+  'process-snapshot-before-timeout', 'installer-output-before-timeout', 'setup-complete', 'cleanup-start'];
+const shellKinds = ['shell-helper-start', 'shell-child-spawn', 'shell-child-error', 'shell-child-exit', 'shell-child-close', 'bootstrap-stage'];
+const snapshotErrors = ['unsupported-platform', 'invalid-request', 'timeout', 'process-limit', 'output-limit', 'command-error', 'malformed-output'];
 const shellStages = ['bootstrap.download-installer', 'bootstrap.download-manifest', 'bootstrap.invoke-installer', 'bootstrap.cleanup'];
 const shellStatuses = ['start', 'complete'];
 const timestamp = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
   && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value ? value : null;
 const boundedIndex = value => Number.isInteger(value) && value >= 0 && value <= 10000 ? value : null;
+const boundedPid = value => Number.isInteger(value) && value > 0 && value <= 0xffffffff ? value : null;
+const boundedCode = value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff ? value : null;
 const shellTimestamp = value => typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? new Date(value).toISOString() : null;
+
+function redactDiagnosticText(value, limit = INSTALL_TEXT_LIMIT) {
+  if (!Number.isSafeInteger(limit) || limit < 64 || limit > 64 * 1024) return null;
+  let text = typeof value === 'string' ? value : value instanceof Error ? value.message
+    : typeof value?.message === 'string' ? value.message : typeof value?.error === 'string' ? value.error : '';
+  if (!text) return null;
+  text = text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+  text = text.replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]*PRIVATE KEY-----/gi, '[REDACTED PRIVATE KEY]');
+  text = text.replace(/(authorization\s*[:=]\s*(?:bearer|basic)\s+)[^\s,;]+/gi, '$1[REDACTED]');
+  text = text.replace(/((?:token|password|passwd|secret|api[-_ ]?key|client[-_ ]?secret|access[-_ ]?key)\s*[=:]\s*["']?)[^\s,"';}]+/gi, '$1[REDACTED]');
+  text = text.replace(/((?:--?(?:token|password|passwd|secret|api[-_ ]?key)|bearer)\s+)[^\s,;]+/gi, '$1[REDACTED]');
+  text = text.replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[REDACTED]@');
+  text = text.replace(/(https?:\/\/[^\s?#]+)\?[^\s#]*/gi, '$1?[REDACTED]');
+  text = text.replace(/\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16})\b/g, '[REDACTED TOKEN]');
+  if (Buffer.byteLength(text, 'utf8') <= limit) return text;
+  const suffix = '\n…[TRUNCATED]';
+  const budget = limit - Buffer.byteLength(suffix, 'utf8');
+  let kept = text;
+  while (kept && Buffer.byteLength(kept, 'utf8') > budget) kept = kept.slice(1);
+  return `${suffix.slice(1)}\n${kept}`;
+}
+
 function projectShellEvent(value) {
   if (!shellKinds.includes(value?.kind) || !shellTimestamp(value.at)) return null;
   const result = { at: shellTimestamp(value.at), kind: value.kind };
@@ -110,12 +154,13 @@ function projectShellEvent(value) {
     if (!shellStages.includes(value.stage) || !shellStatuses.includes(value.status)) return null;
     result.stage = value.stage;
     result.status = value.status;
-  } else if (value.kind === 'shell-child-spawn') {
-    result.pid = Number.isInteger(value.pid) && value.pid > 0 && value.pid <= 2147483647 ? value.pid : null;
+  } else if (value.kind === 'shell-helper-start' || value.kind === 'shell-child-spawn') {
+    result.pid = boundedPid(value.pid);
+    result.ppid = boundedPid(value.ppid);
   } else if (value.kind === 'shell-child-error') {
     result.error = value.error === true;
   } else {
-    result.code = Number.isInteger(value.code) && value.code >= 0 && value.code <= 255 ? value.code : null;
+    result.code = boundedCode(value.code);
     result.signal = ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', 'SIGABRT', 'SIGSEGV'].includes(value.signal) ? value.signal : null;
   }
   return result;
@@ -126,10 +171,16 @@ function projectInstallEvidence(raw, binding) {
   const projectEvent = item => !installKinds.includes(item?.kind) || !timestamp(item.timestamp) ? null :
     { timestamp: timestamp(item.timestamp), kind: item.kind,
       index: boundedIndex(item.index), total: boundedIndex(item.total),
-      method: installMethods.includes(item.method) ? item.method : null };
+      method: installMethods.includes(item.method) ? item.method : null,
+      ...(redactDiagnosticText(item.text) ? { text: redactDiagnosticText(item.text) } : {}) };
   const selectEvent = (item, kinds) => kinds.includes(item?.kind) ? projectEvent(item) : null;
   const events = Array.isArray(raw?.events) ? raw.events.slice(-INSTALL_TRACE_LIMIT).map(projectEvent).filter(Boolean) : [];
   const shellEvents = Array.isArray(raw?.shell_events) ? raw.shell_events.slice(-INSTALL_TRACE_LIMIT).map(projectShellEvent).filter(Boolean) : [];
+  const stages = Array.isArray(raw?.stages) ? raw.stages.slice(-INSTALL_STAGE_LIMIT).map(item => {
+    if (!installStages.includes(item?.stage) || !timestamp(item?.timestamp)) return null;
+    return { stage: item.stage, timestamp: item.timestamp, pid: boundedPid(item.pid), ppid: boundedPid(item.ppid) };
+  }).filter(Boolean) : [];
+  const preCleanup = raw?.pre_cleanup || {};
   return { schema: 1, binding, events, shell_events: shellEvents, last_activity: projectEvent(raw?.last_activity),
     last_native_event: selectEvent(raw?.last_native_event, ['start', 'stream', 'result', 'error', 'installer-failure-marker']),
     last_start: selectEvent(raw?.last_start, ['start']),
@@ -137,14 +188,33 @@ function projectInstallEvidence(raw, binding) {
     first_error: selectEvent(raw?.first_error, ['error', 'installer-failure-marker']),
     last_error: selectEvent(raw?.last_error, ['error', 'installer-failure-marker']),
     last_terminal: selectEvent(raw?.last_terminal, ['stop', 'disconnect']),
+    terminal_text: {
+      last_stream: redactDiagnosticText(raw?.terminal_text?.last_stream),
+      first_error: redactDiagnosticText(raw?.terminal_text?.first_error),
+      last_error: redactDiagnosticText(raw?.terminal_text?.last_error),
+    },
+    stages,
+    pre_cleanup: {
+      timestamp: timestamp(preCleanup.timestamp),
+      pterm_pid: boundedPid(preCleanup.pterm_pid), pterm_ppid: boundedPid(preCleanup.pterm_ppid),
+      daemon_pid: boundedPid(preCleanup.daemon_pid), daemon_ppid: boundedPid(preCleanup.daemon_ppid),
+      process_snapshot: ['captured', 'error'].includes(preCleanup.process_snapshot) ? preCleanup.process_snapshot : null,
+      process_snapshot_error: snapshotErrors.includes(preCleanup.process_snapshot_error) ? preCleanup.process_snapshot_error : null,
+      installer_output: ['captured', 'unavailable'].includes(preCleanup.installer_output) ? preCleanup.installer_output : null,
+      pterm_output: ['captured', 'unavailable'].includes(preCleanup.pterm_output) ? preCleanup.pterm_output : null,
+      daemon_output: ['captured', 'unavailable'].includes(preCleanup.daemon_output) ? preCleanup.daemon_output : null,
+    },
     timer: { started_at: timestamp(timer.started_at), deadline_at: timestamp(timer.deadline_at), fired_at: timestamp(timer.fired_at) },
     child: { spawn_error_at: timestamp(child.spawn_error_at), exited_at: timestamp(child.exited_at),
-      code: Number.isInteger(child.code) && child.code >= 0 && child.code <= 255 ? child.code : null,
+      code: boundedCode(child.code),
       signal: ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', 'SIGABRT', 'SIGSEGV'].includes(child.signal) ? child.signal : null,
-      signal_observed: typeof child.signal_observed === 'boolean' ? child.signal_observed : null } };
+      signal_observed: typeof child.signal_observed === 'boolean' ? child.signal_observed : null,
+      close_at: timestamp(child.close_at), close_code: boundedCode(child.close_code),
+      close_signal: ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', 'SIGABRT', 'SIGSEGV'].includes(child.close_signal) ? child.close_signal : null,
+      close_observed: typeof child.close_observed === 'boolean' ? child.close_observed : null } };
 }
 function createInstallDiagnostics(binding, save, now = () => Date.now()) {
-  const state = { events: [], shell_events: [], timer: {}, child: {} };
+  const state = { events: [], shell_events: [], stages: [], timer: {}, child: {}, terminal_text: {}, pre_cleanup: {} };
   let lastStreamWrite = -Infinity;
   // Only a transient suffix is used to recognize a marker split across packets.
   // It is never included in the retained projection.
@@ -163,8 +233,11 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
       if (!installKinds.includes(kind)) return;
       const ms = now();
       const rpc = packet.type === 'start' ? packet.data : packet.rpc;
+      const text = kind === 'stream' || kind === 'installer-failure-marker' ? raw
+        : kind === 'error' ? redactDiagnosticText(packet.data) : null;
       const item = { timestamp: iso(ms), kind, index: boundedIndex(packet.index ?? rpc?.current),
-        total: boundedIndex(packet.total ?? rpc?.total), method: installMethods.includes(rpc?.method) ? rpc.method : null };
+        total: boundedIndex(packet.total ?? rpc?.total), method: installMethods.includes(rpc?.method) ? rpc.method : null,
+        ...(text ? { text: redactDiagnosticText(text) } : {}) };
       // Consecutive stream samples represent the latest observed activity, so
       // keep step boundaries and errors instead of filling the ring with output.
       const previous = state.events.at(-1);
@@ -174,8 +247,11 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
       if (!['stop', 'disconnect'].includes(kind)) state.last_native_event = item;
       if (kind === 'start') state.last_start = item;
       if (kind === 'result') state.last_result = item;
+      if (kind === 'stream') state.terminal_text.last_stream = text;
       if (kind === 'error' || kind === 'installer-failure-marker') {
         if (!state.first_error) state.first_error = item;
+        if (!state.terminal_text.first_error) state.terminal_text.first_error = text;
+        state.terminal_text.last_error = text;
         state.last_error = item;
       }
       if (kind === 'stop' || kind === 'disconnect') state.last_terminal = item;
@@ -195,6 +271,27 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
       if (event === 'spawn-error') state.child.spawn_error_at = at;
       if (event === 'child-exit') { state.child.exited_at = at; state.child.code = value.code;
         state.child.signal = value.signal; state.child.signal_observed = value.signal !== null && value.signal !== undefined; }
+      if (event === 'child-close') { state.child.close_at = at; state.child.close_code = value.code;
+        state.child.close_signal = value.signal; state.child.close_observed = true; }
+      const stage = { 'timer-start': 'pterm-timer-start', 'timer-fire': 'pterm-timer-fire',
+        'child-exit': 'pterm-exit', 'child-close': 'pterm-close' }[event];
+      if (stage) {
+        state.stages.push({ stage, timestamp: at });
+        if (state.stages.length > INSTALL_STAGE_LIMIT) state.stages.shift();
+      }
+      persist();
+    },
+    stage(name, fields = {}) {
+      if (!installStages.includes(name)) return;
+      state.stages.push({ stage: name, timestamp: iso(now()), pid: fields.pid, ppid: fields.ppid });
+      if (state.stages.length > INSTALL_STAGE_LIMIT) state.stages.shift();
+      persist();
+    },
+    beforeTimeout(value = {}) {
+      state.pre_cleanup = { timestamp: iso(value.at || now()), pterm_pid: value.pterm_pid, pterm_ppid: value.pterm_ppid,
+        daemon_pid: value.daemon_pid, daemon_ppid: value.daemon_ppid, process_snapshot: value.process_snapshot,
+        process_snapshot_error: value.process_snapshot_error, installer_output: value.installer_output,
+        pterm_output: value.pterm_output, daemon_output: value.daemon_output };
       persist();
     },
     shell(file) {
@@ -239,4 +336,5 @@ function createTrace() {
     snapshot() { return entries.slice(); },
   };
 }
-module.exports = { TRACE_LIMIT, transportFailure, projectOperation, createTrace, actionPhase, projectActionFailure, createActionTracker, ptermExit, childExitValue, waitForChildExit, terminateChild, INSTALL_TRACE_LIMIT, projectInstallEvidence, createInstallDiagnostics };
+module.exports = { TRACE_LIMIT, transportFailure, projectOperation, createTrace, actionPhase, projectActionFailure, createActionTracker, ptermExit, childExitValue, waitForChildExit, terminateChild,
+  INSTALL_TRACE_LIMIT, INSTALL_STAGE_LIMIT, INSTALL_TEXT_LIMIT, redactDiagnosticText, projectInstallEvidence, createInstallDiagnostics };

@@ -9,7 +9,8 @@ const crypto = require('node:crypto');
 const { execFileSync, spawn } = require('node:child_process');
 const binding = require('../../pinokio/providers/r25-native-collector-binding.cjs');
 const { createObserverIO } = require('./r21-observer-io.cjs');
-const { ptermExit, createInstallDiagnostics, terminateChild } = require('./r21-observer-diagnostics.cjs');
+const { ptermExit, createInstallDiagnostics, terminateChild, redactDiagnosticText } = require('./r21-observer-diagnostics.cjs');
+const { captureWindowsProcessTree } = require('./r25-windows-process-snapshot.cjs');
 
 const AGENT_REF = binding.AGENT_SOURCE_REF;
 const PINOKIO_SOURCE_REF = '95aafb5a029c3f53cb2268d8596909eab0deb3c4';
@@ -50,6 +51,65 @@ function fail(message, extra = {}) {
   const file = path.join(process.env.R25_DIAGNOSTICS || process.cwd(), 'r25-failure.json');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(diagnostics, null, 2)}\n`, { encoding: 'utf8', flag: 'w', mode: 0o600 });
+}
+
+const DIAGNOSTIC_CAPTURE_LIMIT = 64 * 1024;
+function createBoundedCapture(file, limit = DIAGNOSTIC_CAPTURE_LIMIT) {
+  if (!Number.isSafeInteger(limit) || limit < 64 || limit > DIAGNOSTIC_CAPTURE_LIMIT) throw new Error('diagnostic capture limit is invalid');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '', { encoding: 'utf8', flag: 'w', mode: 0o600 });
+  const rawLimit = limit * 2;
+  let raw = Buffer.alloc(0);
+  let rawTruncated = false;
+  let closed = false;
+  let last = { bytes: 0, truncated: false };
+  const flush = () => {
+    const safe = redactDiagnosticText(raw.toString('utf8'), limit) || '';
+    fs.writeFileSync(file, safe, { encoding: 'utf8', flag: 'w', mode: 0o600 });
+    last = { bytes: Buffer.byteLength(safe, 'utf8'), truncated: rawTruncated || Buffer.byteLength(raw, 'utf8') > limit };
+    return { ...last };
+  };
+  return {
+    append(value) {
+      if (closed || value === undefined || value === null) return;
+      raw = Buffer.concat([raw, Buffer.from(String(value), 'utf8')]);
+      if (raw.length > rawLimit) { raw = raw.subarray(raw.length - rawLimit); rawTruncated = true; }
+    },
+    flush,
+    close() { if (!closed) { flush(); closed = true; } return { ...last }; },
+    stats() { return { ...last, closed }; },
+  };
+}
+
+function flushCaptures(captures) {
+  if (!captures) return 'unavailable';
+  captures.stdout.flush();
+  captures.stderr.flush();
+  return 'captured';
+}
+
+function copyBoundedTail(source, destination, limit = DIAGNOSTIC_CAPTURE_LIMIT) {
+  try {
+    const size = fs.statSync(source).size;
+    const length = Math.min(size, limit * 2);
+    const buffer = Buffer.alloc(length);
+    const fd = fs.openSync(source, 'r');
+    try { fs.readSync(fd, buffer, 0, length, Math.max(0, size - length)); } finally { fs.closeSync(fd); }
+    const capture = createBoundedCapture(destination, limit);
+    capture.append(buffer);
+    const stats = capture.close();
+    return { status: 'captured', ...stats };
+  } catch {
+    return { status: 'unavailable', bytes: 0, truncated: false };
+  }
+}
+
+function copyFirstInstallerLog(candidates, destination, limit = DIAGNOSTIC_CAPTURE_LIMIT) {
+  for (const candidate of [...new Set(candidates.filter(Boolean))]) {
+    const result = copyBoundedTail(candidate, destination, limit);
+    if (result.status === 'captured') return result;
+  }
+  return { status: 'unavailable', bytes: 0, truncated: false };
 }
 
 async function githubJson(url) {
@@ -135,6 +195,7 @@ async function filesystemState(home, appRoot) {
 
 async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, action, timeoutMs = 30 * 60 * 1000, diagnostic = null }) {
   const socket = await io.openSocket();
+  diagnostic?.stage?.('observer-open');
   let child;
   let terminal = { stop: false, disconnect: false, error: false };
   let firstError = null;
@@ -153,14 +214,25 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
   socket.addEventListener('message', onMessage);
   try {
     socket.send(JSON.stringify({ uri: path.join(appRoot, script), mode: 'listen' }));
+    diagnostic?.stage?.('observer-subscribe');
+    const stdio = diagnostic?.stdio || null;
     child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', endpoint], {
-      cwd: home, env: process.env, stdio: ['ignore', 'ignore', 'ignore'],
+      cwd: home, env: process.env, stdio: stdio ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'ignore', 'ignore'],
     });
-    const innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs, diagnostic?.pterm);
+    diagnostic?.stage?.('pterm-spawn', { pid: child.pid, ppid: process.pid });
+    if (stdio) {
+      child.stdout.on('data', chunk => stdio.stdout.append(chunk));
+      child.stderr.on('data', chunk => stdio.stderr.append(chunk));
+      child.stdout.on('close', () => stdio.stdout.close());
+      child.stderr.on('close', () => stdio.stderr.close());
+    }
+    const innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs, diagnostic
+      ? { pterm: diagnostic.pterm, beforeTimeout: diagnostic.beforeTimeout } : null);
     await new Promise(resolve => setTimeout(resolve, 500));
     return { script, inner_exit: innerExit, terminal, first_error: firstError, status_after: await io.status(path.join(appRoot, script), `${action}-status`) };
   } finally {
     const shellDiagnosticFile = path.join(appRoot, '_r25-setup-shell-diagnostics.jsonl');
+    flushCaptures(diagnostic?.stdio);
     diagnostic?.shell?.(shellDiagnosticFile);
     await terminateChild(child);
     diagnostic?.shell?.(shellDiagnosticFile);
@@ -207,29 +279,14 @@ async function main() {
   const environment = path.join(appRoot, '_ENVIRONMENT');
   fs.writeFileSync(environment, '# R-25 run-owned candidate pin\nASTRID_APP_REF=lane/M-APP/PINOKIO-APP-BINDING\n', { encoding: 'utf8', flag: 'w', mode: 0o600 });
   fs.writeFileSync(requestPath, `${JSON.stringify(request, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-  fs.mkdirSync(path.join(home, 'user-home'), { recursive: true });
+  const userHome = path.join(home, 'user-home');
+  fs.mkdirSync(userHome, { recursive: true });
   fs.mkdirSync(path.join(home, 'data'), { recursive: true });
-  const daemon = spawn(process.execPath, [path.join(pinokiodRoot, 'script', 'index.js')], {
-    cwd: pinokiodRoot,
-    // The daemon owns shell.run and snapshots its environment at spawn. Seed
-    // the bounded setup-only capture here so the overlaid shell can emit its
-    // child/stage trace; setting process.env after readiness cannot reach it.
-    env: { ...process.env, HOME: path.join(home, 'user-home'), XDG_DATA_HOME: path.join(home, 'data'), PINOKIO_HOME: home, PINOKIO_HTTPS_ACTIVE: '0', PINOKIO_NETWORK_ACTIVE: '0',
-      ...(setupOnly ? { ASTRID_R25_SETUP_DIAGNOSTICS: '1' } : {}) },
-    stdio: ['ignore', 'ignore', 'ignore'],
-  });
-  process.once('exit', () => { if (daemon.exitCode === null) daemon.kill(); });
-  let daemonReady = false;
-  for (let attempt = 0; attempt < 90; attempt += 1) {
-    if (daemon.exitCode !== null) break;
-    try { const response = await fetch('http://127.0.0.1:42000/pinokio/version'); if (response.ok) { daemonReady = true; break; } } catch {}
-    await new Promise(resolve => setTimeout(resolve, 1000));
-  }
-  if (!daemonReady) throw new Error('native pinokiod did not reach readiness');
-  const { WebSocket } = require(path.join(ptermRoot, 'node_modules', 'unws'));
-  const trace = createObserverIO({ WebSocket, fetch, spawn, record: () => {}, appRoot, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', pollMs: 120000 });
+  // Create the recorder and its first fixed-label stage before the daemon
+  // snapshots its environment. This boundary must remain observable even if
+  // daemon spawn/readiness is the first failure.
   const setupDiagnostics = createInstallDiagnostics({
-    schema: 'astrid.r25.pinokio-setup-diagnostics.v1',
+    schema: 'astrid.r25.pinokio-setup-diagnostics.v2',
     run_id: process.env.GITHUB_RUN_ID || null,
     run_attempt: process.env.GITHUB_RUN_ATTEMPT || null,
     phase: 'setup-install',
@@ -242,6 +299,76 @@ async function main() {
     fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(`${file}.tmp`, file);
   });
+  const daemonEnv = { ...process.env, HOME: userHome, XDG_DATA_HOME: path.join(home, 'data'), PINOKIO_HOME: home,
+    PINOKIO_HTTPS_ACTIVE: '0', PINOKIO_NETWORK_ACTIVE: '0',
+    ...(setupOnly ? { ASTRID_R25_SETUP_DIAGNOSTICS: '1' } : {}) };
+  const daemonOutput = setupOnly ? {
+    stdout: createBoundedCapture(path.join(diagnostics, 'daemon.stdout.log')),
+    stderr: createBoundedCapture(path.join(diagnostics, 'daemon.stderr.log')),
+  } : null;
+  setupDiagnostics.stage('daemon-spawn-start', { pid: process.pid, ppid: process.ppid });
+  let daemonSpawnFailed = false;
+  const daemon = spawn(process.execPath, [path.join(pinokiodRoot, 'script', 'index.js')], {
+    cwd: pinokiodRoot,
+    // The daemon owns shell.run and snapshots its environment at spawn. Seed
+    // the bounded setup-only capture here so the overlaid shell can emit its
+    // child/stage trace; setting process.env after readiness cannot reach it.
+    env: daemonEnv,
+    stdio: daemonOutput ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'ignore', 'ignore'],
+  });
+  setupDiagnostics.stage('daemon-spawn', { pid: daemon.pid, ppid: process.pid });
+  daemon.once('error', () => { daemonSpawnFailed = true; setupDiagnostics.stage('daemon-error', { pid: daemon.pid, ppid: process.pid }); });
+  if (daemonOutput) {
+    daemon.stdout.on('data', chunk => daemonOutput.stdout.append(chunk));
+    daemon.stderr.on('data', chunk => daemonOutput.stderr.append(chunk));
+    daemon.stdout.on('close', () => daemonOutput.stdout.close());
+    daemon.stderr.on('close', () => daemonOutput.stderr.close());
+  }
+  process.once('exit', () => { if (daemon.exitCode === null) daemon.kill(); });
+  let daemonReady = false;
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    if (daemonSpawnFailed || daemon.exitCode !== null) break;
+    try { const response = await fetch('http://127.0.0.1:42000/pinokio/version'); if (response.ok) { daemonReady = true; break; } } catch {}
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  if (!daemonReady) {
+    flushCaptures(daemonOutput);
+    await terminateChild(daemon);
+    daemonOutput?.stdout.close();
+    daemonOutput?.stderr.close();
+    throw new Error('native pinokiod did not reach readiness');
+  }
+  setupDiagnostics.stage('daemon-ready', { pid: daemon.pid, ppid: process.pid });
+  const { WebSocket } = require(path.join(ptermRoot, 'node_modules', 'unws'));
+  const trace = createObserverIO({ WebSocket, fetch, spawn, record: () => {}, appRoot, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', pollMs: 120000 });
+  const ptermOutput = setupOnly ? {
+    stdout: createBoundedCapture(path.join(diagnostics, 'pterm.stdout.log')),
+    stderr: createBoundedCapture(path.join(diagnostics, 'pterm.stderr.log')),
+  } : null;
+  const installerCandidates = [
+    path.join(daemonEnv.LOCALAPPDATA || path.join(userHome, 'AppData', 'Local'), 'Astrid Runtime', 'logs', 'install.log'),
+    path.join(userHome, 'AppData', 'Local', 'Astrid Runtime', 'logs', 'install.log'),
+  ];
+  const shellDiagnosticFile = path.join(appRoot, '_r25-setup-shell-diagnostics.jsonl');
+  const setupDiagnosticView = setupOnly ? Object.assign({}, setupDiagnostics, {
+    stdio: ptermOutput,
+    async beforeTimeout(value) {
+      setupDiagnostics.shell(shellDiagnosticFile);
+      const ptermStatus = flushCaptures(ptermOutput);
+      const daemonStatus = flushCaptures(daemonOutput);
+      const snapshot = await captureWindowsProcessTree({ rootPids: [...new Set([value.pid, daemon.pid].filter(Number.isInteger))] });
+      fs.writeFileSync(path.join(diagnostics, 'process-tree-before-timeout.json'), `${JSON.stringify(snapshot, null, 2)}\n`, {
+        encoding: 'utf8', flag: 'w', mode: 0o600,
+      });
+      setupDiagnostics.stage('process-snapshot-before-timeout');
+      const installerOutput = copyFirstInstallerLog(installerCandidates, path.join(diagnostics, 'installer-output.log'));
+      setupDiagnostics.stage('installer-output-before-timeout');
+      setupDiagnostics.beforeTimeout({ at: value.at, pterm_pid: value.pid, pterm_ppid: value.ppid,
+        daemon_pid: daemon.pid, daemon_ppid: process.pid, process_snapshot: snapshot.status,
+        process_snapshot_error: snapshot.error, installer_output: installerOutput.status,
+        pterm_output: ptermStatus, daemon_output: daemonStatus });
+    },
+  }) : setupDiagnostics;
   let worker;
   const results = [];
   try {
@@ -256,12 +383,16 @@ async function main() {
     process.env.ASTRID_R25_SETUP_DIAGNOSTICS = '1';
     let preparation;
     try {
-      preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: 'pinokio/install.js', action: 'setup-install', timeoutMs: setupTimeoutMs, diagnostic: setupDiagnostics });
+      preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: 'pinokio/install.js', action: 'setup-install', timeoutMs: setupTimeoutMs, diagnostic: setupDiagnosticView });
     } finally {
       if (priorDiagnosticFlag === undefined) delete process.env.ASTRID_R25_SETUP_DIAGNOSTICS;
       else process.env.ASTRID_R25_SETUP_DIAGNOSTICS = priorDiagnosticFlag;
     }
+    flushCaptures(ptermOutput);
+    flushCaptures(daemonOutput);
+    copyFirstInstallerLog(installerCandidates, path.join(diagnostics, 'installer-output.log'));
     if (preparation.first_error || preparation.inner_exit.code !== 0 || preparation.terminal.error) throw new Error('disposable Pinokio install preparation failed');
+    setupDiagnostics.stage('setup-complete');
     if (setupOnly) {
       writeCanonical(path.join(diagnostics, 'r25-setup-result.json'), {
         schema: 'astrid.r25.pinokio-setup-result.v1', status: 'completed', setup_timeout_ms: setupTimeoutMs,
@@ -298,10 +429,18 @@ async function main() {
     for (const item of plans) writeCanonical(path.join(output, 'actions', `${String(item.plan.action_index).padStart(2, '0')}-${item.plan.action}.json`), item.plan);
     for (const record of results) writeCanonical(path.join(output, 'filesystem', `${record.action}.json`), record);
   } finally {
+    setupDiagnostics.stage('cleanup-start');
     await trace.cleanup();
     if (worker && worker.exitCode === null) worker.kill();
     await terminateChild(daemon);
+    ptermOutput?.stdout.close();
+    ptermOutput?.stderr.close();
+    daemonOutput?.stdout.close();
+    daemonOutput?.stderr.close();
   }
 }
 
-main().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });
+module.exports = { actionPlan, createBoundedCapture, copyBoundedTail, copyFirstInstallerLog };
+if (require.main === module) {
+  main().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });
+}

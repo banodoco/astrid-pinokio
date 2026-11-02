@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import policy from './environment.js';
 
 const DIAGNOSTIC_KINDS = new Set([
-  'shell-child-spawn', 'shell-child-error', 'shell-child-exit', 'shell-child-close',
+  'shell-helper-start', 'shell-child-spawn', 'shell-child-error', 'shell-child-exit', 'shell-child-close',
   'bootstrap-stage',
 ]);
 const DIAGNOSTIC_SIGNALS = new Set(['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', 'SIGABRT', 'SIGSEGV']);
@@ -23,6 +23,10 @@ function boundedCode(value) {
 
 function boundedSignal(value) {
   return DIAGNOSTIC_SIGNALS.has(value) ? value : null;
+}
+
+function boundedPid(value) {
+  return Number.isInteger(value) && value > 0 && value <= 0xffffffff ? value : null;
 }
 
 function appendDiagnostic(file, kind, fields = {}) {
@@ -95,8 +99,9 @@ export function runShell({ appDirectory, message, explicit = {}, platform = proc
     : ['--noprofile', '--norc', '-c', `set -eu\nunset PWD\n${message}`];
   // Nested installer shells recreate PWD. Run them outside Pinokio's home;
   // every launcher command uses absolute paths (including Git's -C).
+  appendDiagnostic(diagnosticFile, 'shell-helper-start', { pid: boundedPid(process.pid), ppid: boundedPid(process.ppid) });
   const child = spawnProcess(shell, args, { env, cwd: env.HOME || env.USERPROFILE, stdio: 'inherit' });
-  appendDiagnostic(diagnosticFile, 'shell-child-spawn', { pid: Number.isInteger(child?.pid) ? child.pid : null });
+  appendDiagnostic(diagnosticFile, 'shell-child-spawn', { pid: boundedPid(child?.pid), ppid: boundedPid(process.pid) });
   return new Promise((resolve, reject) => {
     child.once('error', () => {
       appendDiagnostic(diagnosticFile, 'shell-child-error', { error: true });

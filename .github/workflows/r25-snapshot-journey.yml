@@ -6,6 +6,7 @@ on:
       - lane/M-PIN/R-25-WINDOWS-LF-ROUTE-R1
       - lane/M-PIN/R-PIN-WINDOWS-EXISTING-VENUE
       - lane/M-PIN/R-PIN-WINDOWS-BOUNDED
+      - lane/M-PIN/R-PIN-WINDOWS-CAPTURE
   workflow_dispatch:
     inputs:
       agent_ref:
@@ -26,14 +27,14 @@ permissions:
 
 jobs:
   windows-six-action:
-    if: (github.event_name == 'push' && (github.ref_name == 'lane/M-PIN/R-25-WINDOWS-LF-ROUTE-R1' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-EXISTING-VENUE' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-BOUNDED')) || (github.event_name == 'workflow_dispatch' && inputs.slot_id == 'pinokio-fully-local-windows')
+    if: (github.event_name == 'push' && (github.ref_name == 'lane/M-PIN/R-25-WINDOWS-LF-ROUTE-R1' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-EXISTING-VENUE' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-BOUNDED' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-CAPTURE')) || (github.event_name == 'workflow_dispatch' && inputs.slot_id == 'pinokio-fully-local-windows')
     runs-on: windows-2022
     timeout-minutes: 90
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       AGENT_REF: ${{ github.event_name == 'push' && 'a6b68d5b5478326a4db1971966d33a2cfe61d091' || inputs.agent_ref }}
       SLOT_ID: ${{ github.event_name == 'push' && 'pinokio-fully-local-windows' || inputs.slot_id }}
-      SETUP_ONLY: ${{ github.event_name == 'push' && (github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-EXISTING-VENUE' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-BOUNDED') }}
+      SETUP_ONLY: ${{ github.event_name == 'push' && (github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-EXISTING-VENUE' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-BOUNDED' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-CAPTURE') }}
       PINOKIOD_REF: add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
       PTERM_REF: 5be43718701c448b43daf0ce51d8935f170065bb
       R25_SETUP_TIMEOUT_MS: 600000
@@ -113,12 +114,13 @@ jobs:
           node pinokio/providers/r25-native-collector-binding.cjs `
             --validate-source-only true --agent-ref $env:AGENT_REF `
             --agent-root $env:AGENT_ROOT --pinokio-root $env:GITHUB_WORKSPACE
-          node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-windows.test.cjs
+          node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-windows.test.cjs tests/r25-windows-process-snapshot.test.cjs tests/r25-setup-diagnostics.test.mjs
           python -m py_compile `
             "$env:AGENT_ROOT\scripts\pinokio_snapshot_collector.py" `
             "$env:AGENT_ROOT\scripts\pinokio_snapshot_windows.py"
           node --check .github/venue/r25-snapshot-runner.cjs
           node --check .github/venue/r21-observer-diagnostics.cjs
+          node --check .github/venue/r25-windows-process-snapshot.cjs
           node --check pinokio/shell.mjs
       - name: Run bounded Windows setup diagnostic or six-action session
         shell: pwsh

@@ -8,6 +8,7 @@ import { instrumentWindowsBootstrap } from '../pinokio/shell.mjs';
 
 const require = createRequire(import.meta.url);
 const { createInstallDiagnostics } = require('../.github/venue/r21-observer-diagnostics.cjs');
+const { createBoundedCapture, copyBoundedTail } = require('../.github/venue/r25-snapshot-runner.cjs');
 const runner = fs.readFileSync(new URL('../.github/venue/r25-snapshot-runner.cjs', import.meta.url), 'utf8');
 
 const bootstrap = [
@@ -34,21 +35,23 @@ test('leaves an unknown native message unchanged', () => {
 
 test('seeds setup-only diagnostics in the daemon environment before shell.run', () => {
   const setupOnly = runner.indexOf("const setupOnly = cli['setup-only'] === 'true';");
+  const recorder = runner.indexOf('const setupDiagnostics = createInstallDiagnostics', setupOnly);
+  const daemonFlag = runner.indexOf("...(setupOnly ? { ASTRID_R25_SETUP_DIAGNOSTICS: '1' } : {})", recorder);
   const daemon = runner.indexOf('const daemon = spawn', setupOnly);
-  const daemonFlag = runner.indexOf("...(setupOnly ? { ASTRID_R25_SETUP_DIAGNOSTICS: '1' } : {})", daemon);
   const setupAction = runner.indexOf('preparation = await observeAction', daemonFlag);
   assert.ok(setupOnly >= 0);
-  assert.ok(daemon > setupOnly);
-  assert.ok(daemonFlag > daemon);
+  assert.ok(recorder > setupOnly);
+  assert.ok(daemonFlag > recorder);
+  assert.ok(daemon > daemonFlag);
   assert.ok(setupAction > daemonFlag);
 });
 
 test('retains bounded shell child lifecycle and bootstrap stage evidence', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-setup-diagnostic-'));
   const shellLog = path.join(root, 'shell.jsonl');
-  const output = path.join(root, 'diagnostics.json');
   fs.writeFileSync(shellLog, [
-    JSON.stringify({ schema: 'astrid.r25.setup-shell.v1', at: '2026-11-02T22:00:00.000Z', kind: 'shell-child-spawn', pid: 42 }),
+    JSON.stringify({ schema: 'astrid.r25.setup-shell.v1', at: '2026-11-02T21:59:59.000Z', kind: 'shell-helper-start', pid: 41, ppid: 40 }),
+    JSON.stringify({ schema: 'astrid.r25.setup-shell.v1', at: '2026-11-02T22:00:00.000Z', kind: 'shell-child-spawn', pid: 42, ppid: 41 }),
     JSON.stringify({ schema: 'astrid.r25.setup-shell.v1', at: '2026-11-02T22:00:01.000Z', kind: 'bootstrap-stage', stage: 'bootstrap.invoke-installer', status: 'start' }),
     JSON.stringify({ schema: 'astrid.r25.setup-shell.v1', at: '2026-11-02T22:00:02.000Z', kind: 'shell-child-exit', code: null, signal: 'SIGTERM' }),
     JSON.stringify({ schema: 'astrid.r25.setup-shell.v1', at: '2026-11-02T22:00:02.000Z', kind: 'shell-child-close', code: null, signal: 'SIGTERM' }),
@@ -56,8 +59,42 @@ test('retains bounded shell child lifecycle and bootstrap stage evidence', () =>
   let saved;
   const diagnostics = createInstallDiagnostics({ schema: 'astrid.r25.pinokio-setup-diagnostics.v1' }, value => { saved = value; });
   diagnostics.shell(shellLog);
-  assert.deepEqual(saved.shell_events.map(item => item.kind), ['shell-child-spawn', 'bootstrap-stage', 'shell-child-exit', 'shell-child-close']);
-  assert.equal(saved.shell_events[2].signal, 'SIGTERM');
-  assert.equal(saved.shell_events[1].stage, 'bootstrap.invoke-installer');
+  assert.deepEqual(saved.shell_events.map(item => item.kind), ['shell-helper-start', 'shell-child-spawn', 'bootstrap-stage', 'shell-child-exit', 'shell-child-close']);
+  assert.deepEqual(saved.shell_events[0], { at: '2026-11-02T21:59:59.000Z', kind: 'shell-helper-start', pid: 41, ppid: 40 });
+  assert.equal(saved.shell_events[3].signal, 'SIGTERM');
+  assert.equal(saved.shell_events[2].stage, 'bootstrap.invoke-installer');
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('daemon and PTerm output capture is byte-bounded and redacts secrets split across chunks', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-setup-output-'));
+  try {
+    const file = path.join(root, 'pterm.stdout.log');
+    const capture = createBoundedCapture(file, 128);
+    capture.append('x'.repeat(300));
+    capture.append('installer: token=super-');
+    capture.append('secret\nhttps://example.test/install?credential=private\n');
+    const stats = capture.close();
+    const output = fs.readFileSync(file, 'utf8');
+    assert.ok(Buffer.byteLength(output, 'utf8') <= 128);
+    assert.equal(stats.truncated, true);
+    assert.doesNotMatch(output, /super-secret|credential=private/);
+    assert.match(output, /\[REDACTED\]/);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('installer output copy keeps only a bounded redacted tail', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-installer-output-'));
+  try {
+    const source = path.join(root, 'install.log');
+    const destination = path.join(root, 'diagnostics', 'installer-output.log');
+    fs.writeFileSync(source, `${'old\n'.repeat(100)}password=private\ninstaller frame 42\n`);
+    const result = copyBoundedTail(source, destination, 128);
+    const output = fs.readFileSync(destination, 'utf8');
+    assert.equal(result.status, 'captured');
+    assert.ok(Buffer.byteLength(output, 'utf8') <= 128);
+    assert.doesNotMatch(output, /password=private/);
+    assert.match(output, /installer frame 42/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
