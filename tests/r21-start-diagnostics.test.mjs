@@ -7,11 +7,19 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { createStartDiagnostics, projectStartDiagnostics, runBoundedRuntimeStatus, probePort17340 } =
+const { createStartDiagnostics, projectStartDiagnostics, requireInitialInstallForStart, runBoundedRuntimeStatus, probePort17340 } =
   require('../.github/venue/r21-start-diagnostics.cjs');
 const { publish } = require('../.github/venue/r21-publish.cjs');
 
 const binding = { request_id: 'R-21-PUBLISHED-TUPLE-R1', runner_ref: 'a'.repeat(40), run_id: '100', run_attempt: '1' };
+
+test('initial Start requires settled Install, exact tuple, and authentic success marker', () => {
+  const install = { inner_exit: { code: 0, signal: null }, terminal: { stop: true, disconnect: true }, installer_success: true };
+  assert.doesNotThrow(() => requireInitialInstallForStart({ install, installedTuplePresent: true }));
+  assert.throws(() => requireInitialInstallForStart({ install, installedTuplePresent: false }), /lacks the published tuple/);
+  assert.throws(() => requireInitialInstallForStart({ install: { ...install, installer_success: false }, installedTuplePresent: true }), /installer success marker/);
+  assert.throws(() => requireInitialInstallForStart({ install: { ...install, inner_exit: { code: 1, signal: null } }, installedTuplePresent: true }), /did not settle/);
+});
 
 test('first Start diagnostic retains only its five typed facts', () => {
   let evidence;

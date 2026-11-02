@@ -135,8 +135,8 @@ test('R-21 dispatch binding accepts only the exact dedicated request or self-ser
   const manualEnvironment = {
     ...environment,
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-VENUE-REF-BINDING-R1',
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-VENUE-REF-BINDING-R1',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-INSTALL-ABSENT-DIAG-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-INSTALL-ABSENT-DIAG-R1',
   };
   const manualInput = { request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) };
   const manual = validateDispatch(manualInput, manualEnvironment);
@@ -152,7 +152,7 @@ test('R-21 dispatch binding accepts only the exact dedicated request or self-ser
 });
 
 test('R-21 dedicated request admits only this lane at its exact checked-out head', () => {
-  const lane = 'lane/M-PIN/R-21-VENUE-REF-BINDING-R1';
+  const lane = 'lane/M-PIN/R-21-INSTALL-ABSENT-DIAG-R1';
   const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   assert.equal(execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim(), lane);
   const ref = `refs/heads/${lane}`;
@@ -203,7 +203,8 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
     sample.retry.served_app_runtime.served_build.secret = sample.secret;
     fs.writeFileSync(path.join(input, 'r21-receipt.json'), JSON.stringify(sample));
     fs.writeFileSync(path.join(input, 'r21-install-diagnostics.json'), JSON.stringify({ binding: { request_id: REQUEST_ID, runner_ref: 'a'.repeat(40), run_id: '100', run_attempt: '1', secret: 'spoof' },
-      events: [{ kind: 'stream', timestamp: '2026-01-01T00:00:00.000Z', index: 2, total: 4, method: 'shell.run', raw: sample.secret }], secret: sample.secret }));
+      events: [{ kind: 'stream', timestamp: '2026-01-01T00:00:00.000Z', index: 2, total: 4, method: 'shell.run', raw: sample.secret }],
+      shell_result: { observed: true, class: 'object', secret: sample.secret }, secret: sample.secret }));
     const out = path.join(root, 'out');
     assert.equal(publish({ env: environment, evidenceDir: input, destination: out, setupExit: 0, journeyExit: 0 }).status, 'ACCEPTED');
     assert.equal(fs.readFileSync(path.join(out, 'r21-receipt.json'), 'utf8').includes(sample.secret), false);
@@ -212,6 +213,7 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
     assert.doesNotMatch(diagnosticText, /must-never-leave-runner|spoof/);
     assert.deepEqual(diagnostic.binding, { request_id: REQUEST_ID, runner_ref: 'a'.repeat(40), run_id: '100', run_attempt: '1' });
     assert.equal(diagnostic.events[0].index, 2);
+    assert.deepEqual(diagnostic.shell_result, { observed: true, class: 'object' });
     assert.match(fs.readFileSync(path.join(out, 'SHA256SUMS'), 'utf8'), /  install-diagnostics\.json/);
     const wrongBinding = JSON.parse(fs.readFileSync(path.join(input, 'r21-install-diagnostics.json')));
     wrongBinding.binding.run_id = '999';
@@ -229,6 +231,9 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
     fs.writeFileSync(path.join(root, 'r21-watchdog', 'progress.json'), JSON.stringify({ stage: 'run-r21-journey', substage: 'secret payload', elapsed_ms: 10 }));
     const redacted = publish({ env: environment, evidenceDir: input, destination: path.join(root, 'redacted'), setupExit: null, journeyExit: null });
     assert.deepEqual(redacted.progress, { stage: 'run-r21-journey', substage: null, elapsed_ms: 10 });
+    fs.writeFileSync(path.join(root, 'r21-watchdog', 'progress.json'), JSON.stringify({ stage: 'run-r21-journey', substage: 'initial-install-validation', elapsed_ms: 11 }));
+    const bounded = publish({ env: environment, evidenceDir: input, destination: path.join(root, 'bounded'), setupExit: null, journeyExit: null });
+    assert.deepEqual(bounded.progress, { stage: 'run-r21-journey', substage: 'initial-install-validation', elapsed_ms: 11 });
     const { spawnSync } = await import('node:child_process');
     const cliDest = path.join(root, 'missing-outputs');
     const cli = spawnSync(process.execPath, ['.github/venue/r21-publish.cjs', input, cliDest, '', ''], { env: { ...process.env, ...environment }, encoding: 'utf8' });

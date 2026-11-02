@@ -62,6 +62,7 @@ const firstErrorCodes = ['ENOENT', 'EACCES', 'EPERM', 'ENOSPC', 'EEXIST', 'ECONN
   'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'];
 const firstErrorReasons = ['unknown', 'installer_failure_marker', 'command_not_found',
   'file_not_found', 'permission_denied'];
+const shellResultClasses = ['empty', 'object', 'other'];
 const FIRST_ERROR_SCAN_LIMIT = 8192;
 const failureMarker = 'ASTRID_PINOKIO_FAILURE';
 function classifyError(data) {
@@ -92,6 +93,7 @@ function projectInstallEvidence(raw, binding) {
       method: installMethods.includes(item.method) ? item.method : null };
   const selectEvent = (item, kinds) => kinds.includes(item?.kind) ? projectEvent(item) : null;
   const events = Array.isArray(raw?.events) ? raw.events.slice(-INSTALL_TRACE_LIMIT).map(projectEvent).filter(Boolean) : [];
+  const shellResult = raw?.shell_result || {};
   return { schema: 1, binding, events, last_activity: projectEvent(raw?.last_activity),
     last_native_event: selectEvent(raw?.last_native_event, ['start', 'stream', 'result', 'error', 'installer-failure-marker']),
     last_start: selectEvent(raw?.last_start, ['start']),
@@ -99,6 +101,8 @@ function projectInstallEvidence(raw, binding) {
     last_error: selectEvent(raw?.last_error, ['error', 'installer-failure-marker']),
     first_error: projectFirstError(raw?.first_error),
     last_terminal: selectEvent(raw?.last_terminal, ['stop', 'disconnect']),
+    shell_result: { observed: shellResult.observed === true,
+      class: shellResultClasses.includes(shellResult.class) ? shellResult.class : null },
     timer: { started_at: timestamp(timer.started_at), deadline_at: timestamp(timer.deadline_at), fired_at: timestamp(timer.fired_at) },
     child: { spawn_error_at: timestamp(child.spawn_error_at), exited_at: timestamp(child.exited_at),
       code: Number.isInteger(child.code) && child.code >= 0 && child.code <= 255 ? child.code : null,
@@ -150,6 +154,14 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
       if (!['stop', 'disconnect'].includes(kind)) state.last_native_event = item;
       if (kind === 'start') state.last_start = item;
       if (kind === 'result') state.last_result = item;
+      // The exact historical Install has four steps and step 2 is shell.run.
+      // Retain only the result shape: the pinned engine returns an empty string
+      // if the parent action is inactive and an object for a launched shell.
+      // Neither shape proves that an inner installer subcommand succeeded.
+      if (kind === 'result' && item.index === 2 && item.total === 4) {
+        state.shell_result = { observed: true, class: packet.data === '' ? 'empty' :
+          packet.data && typeof packet.data === 'object' && !Array.isArray(packet.data) ? 'object' : 'other' };
+      }
       if (kind === 'error' || kind === 'installer-failure-marker') state.last_error = item;
       if (kind === 'stop' || kind === 'disconnect') state.last_terminal = item;
       state.events.push(item);

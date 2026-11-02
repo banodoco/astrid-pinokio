@@ -378,7 +378,7 @@ test('observer records the install socket failure through its real failure handl
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('observer failure handler writes sanitized failure and reaps its real Start client', async () => {
+test('observer stops before Start when the Install tuple and success marker are absent', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r21-observer-main-'));
   try {
     const pterm = path.join(root, 'pterm'); const output = path.join(root, 'evidence'); const moduleDir = path.join(pterm, 'node_modules', 'unws');
@@ -401,17 +401,15 @@ exports.WebSocket = class extends EventTarget {
     assert.deepEqual(result, { code: 1, signal: null });
     const failure = JSON.parse(fs.readFileSync(path.join(output, 'r21-failure.json')));
     assert.equal(failure.category, 'engine-or-observer');
-    assert.equal(failure.last_operation.operation, 'start-status');
-    assert.equal(failure.last_operation.category, 'error');
-    assert.deepEqual(failure.readiness_trace.at(-1), failure.last_operation);
+    assert.equal(failure.last_operation, null);
+    assert.deepEqual(failure.readiness_trace, []);
     const startDiagnostics = JSON.parse(fs.readFileSync(path.join(output, 'r21-start-diagnostics.json')));
     assert.deepEqual(startDiagnostics.installed_tuple_present, false);
     assert.deepEqual(startDiagnostics.install_marker_observed, false);
-    assert.deepEqual(startDiagnostics.start, { engine_error: false, terminal_stop: true, terminal_disconnect: true });
-    assert.deepEqual(startDiagnostics.runtime_status, { class: 'unavailable', code: null });
-    assert.equal(typeof startDiagnostics.port_17340_listener, 'boolean');
-    const pid = Number(fs.readFileSync(path.join(root, 'start.pid'), 'utf8'));
-    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    assert.deepEqual(startDiagnostics.start, { engine_error: null, terminal_stop: null, terminal_disconnect: null });
+    assert.deepEqual(startDiagnostics.runtime_status, { class: 'pending', code: null });
+    assert.equal(startDiagnostics.port_17340_listener, null);
+    assert.equal(fs.existsSync(path.join(root, 'start.pid')), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

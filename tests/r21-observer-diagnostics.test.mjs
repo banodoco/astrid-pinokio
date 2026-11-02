@@ -80,6 +80,7 @@ test('normal exit and spawn error stay distinct and projection rejects arbitrary
   assert.equal(safe.events[0].method, null);
   assert.equal(safe.events[0].index, null);
   assert.equal(safe.child.signal, null);
+  assert.deepEqual(safe.shell_result, { observed: false, class: null });
 });
 
 test('Install listener captures native packets while PTerm is pending', async () => {
@@ -116,6 +117,8 @@ test('Install listener captures native packets while PTerm is pending', async ()
   const result = await vm.runInContext("observeAction('historical install', 'pinokio/install.js')", context);
   assert.equal(result.inner_exit.code, 0);
   assert.equal(result.installer_success, true);
+  assert.equal(result.installer_dispatch, true);
+  assert.deepEqual(evidence.shell_result, { observed: true, class: 'other' });
   assert.deepEqual(evidence.events.map(event => event.kind), ['start', 'stream', 'error', 'result', 'stop', 'disconnect']);
   assert.equal(evidence.first_error.code, 'ENOENT');
   assert.equal(evidence.first_error.reason, 'file_not_found');
@@ -123,6 +126,44 @@ test('Install listener captures native packets while PTerm is pending', async ()
   assert.ok(evidence.timer.started_at);
   assert.ok(evidence.child.exited_at);
   assert.doesNotMatch(JSON.stringify(evidence), /sensitive/);
+});
+
+test('Install command echo is not installer dispatch and empty shell result is retained as a shape only', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const vm = await import('node:vm');
+  const diagnostics = createRequire(import.meta.url)('../.github/venue/r21-observer-diagnostics.cjs');
+  const source = fs.readFileSync('.github/venue/r21-observe.cjs', 'utf8');
+  const constants = source.slice(source.indexOf('const ACTION_TIMEOUT_MS'), source.indexOf('let actionNumber'));
+  const action = source.slice(source.indexOf('async function observeAction('), source.indexOf('\nasync function lockFree('));
+  let handler;
+  let evidence;
+  const recorder = createInstallDiagnostics(binding, value => { evidence = value; });
+  const packet = value => handler({ data: JSON.stringify(value) });
+  const context = vm.createContext({ path, appRoot: '/app', ptermRoot: '/pterm', home: '/home', ENDPOINT: 'pinokio://test',
+    FIRST_REFUSAL: 'refusal', actionNumber: 0, progress: {}, process, installDiagnostics: recorder,
+    openSocket: async () => ({ addEventListener: (_, callback) => { handler = callback; }, send: () => {} }),
+    delay: async () => {}, isObject: value => value && typeof value === 'object',
+    spawn: () => {
+      const child = new EventEmitter();
+      queueMicrotask(() => {
+        packet({ type: 'start', data: { current: 2, total: 4, method: 'shell.run' } });
+        packet({ type: 'stream', index: 2, total: 4, data: { raw: 'sh bootstrap --managed-by pinokio' }, rpc: { method: 'shell.run' } });
+        packet({ type: 'result', index: 2, total: 4, data: '' });
+        packet({ type: 'event', data: 'stop' });
+        packet({ type: 'disconnect' });
+        child.emit('exit', 0, null);
+      });
+      return child;
+    }, setTimeout, clearTimeout, retainProgress: () => {}, io: { disposeSocket: () => {} }, status: async () => false,
+    actionPhase: diagnostics.actionPhase, actionTracker: diagnostics.createActionTracker(), ptermExit });
+  vm.runInContext(`${constants}\n${action}`, context);
+  const result = await vm.runInContext("observeAction('historical install', 'pinokio/install.js')", context);
+  assert.equal(result.inner_exit.code, 0);
+  assert.equal(result.installer_dispatch, false);
+  assert.equal(result.installer_success, false);
+  assert.deepEqual(evidence.shell_result, { observed: true, class: 'empty' });
+  assert.doesNotMatch(JSON.stringify(evidence), /managed-by|bootstrap/);
 });
 
 test('first error classifications are allowlisted, bounded, and never replaced', () => {
@@ -178,6 +219,7 @@ test('last native operation survives settlement; result is observed, not inferre
   assert.deepEqual(evidence.last_native_event, evidence.last_result);
   assert.equal(evidence.last_terminal.kind, 'disconnect');
   assert.equal(evidence.last_error, null);
+  assert.deepEqual(evidence.shell_result, { observed: true, class: 'object' });
   assert.doesNotMatch(JSON.stringify(evidence), /credential|success/);
 });
 

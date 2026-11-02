@@ -68,6 +68,15 @@ function createStartDiagnostics(binding, save) {
   };
 }
 
+function requireInitialInstallForStart({ install, installedTuplePresent }) {
+  if (install?.inner_exit?.code !== 0 || install?.terminal?.disconnect !== true || install?.terminal?.stop !== true) {
+    throw new Error('historical installation did not settle');
+  }
+  if (installedTuplePresent !== true || install.installer_success !== true) {
+    throw new Error('historical installation lacks the published tuple or installer success marker');
+  }
+}
+
 // The supplied spec remains private.  This terminates only the observer's
 // independent status child; it cannot alter the retained old launcher.
 function runBoundedRuntimeStatus({ spawn, spec, timeoutMs = RUNTIME_STATUS_TIMEOUT_MS,
@@ -135,4 +144,4 @@ function probePort17340({ connect = net.createConnection, timeoutMs = PORT_LISTE
 }
 
 module.exports = { RUNTIME_STATUS_TIMEOUT_MS, PORT_LISTENER_TIMEOUT_MS, projectStartDiagnostics,
-  createStartDiagnostics, runBoundedRuntimeStatus, probePort17340 };
+  createStartDiagnostics, requireInitialInstallForStart, runBoundedRuntimeStatus, probePort17340 };

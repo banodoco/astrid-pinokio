@@ -72,7 +72,7 @@ function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
   const substages = {
     setup: ['clone-pinokiod', 'checkout-pinokiod', 'install-pinokiod', 'clone-pterm', 'checkout-pterm', 'install-pterm',
       'clone-candidate-app', 'install-candidate-app', 'build-candidate-app'],
-    'run-r21-journey': ['install', 'initial-start-readiness', 'state-before', 'first-click', 'state-after-first-click', 'stop', 'retry', 'retry-start-readiness', 'candidate-app-browser', 'state-after-retry', 'cleanup', 'verify-receipt'],
+    'run-r21-journey': ['install', 'initial-install-validation', 'initial-start-readiness', 'state-before', 'first-click', 'state-after-first-click', 'stop', 'retry', 'retry-start-readiness', 'candidate-app-browser', 'state-after-retry', 'cleanup', 'verify-receipt'],
   };
   const stages = ['setup','preflight','verify-native-inputs','retain-historical-launcher','verify-published-app-manifest',
     'serve-candidate-app-build','start-native-engine','run-r21-journey','complete'];

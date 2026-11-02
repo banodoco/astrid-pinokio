@@ -10,7 +10,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createTrace, actionPhase, createActionTracker, ptermExit, createInstallDiagnostics } = require('./r21-observer-diagnostics.cjs');
-const { createStartDiagnostics, runBoundedRuntimeStatus, probePort17340 } = require('./r21-start-diagnostics.cjs');
+const { createStartDiagnostics, requireInitialInstallForStart, runBoundedRuntimeStatus, probePort17340 } = require('./r21-start-diagnostics.cjs');
 const { createObserverIO } = require('./r21-observer-io.cjs');
 const { observeCandidateAppInteraction } = require('./r21-app-browser.cjs');
 const { verifyCandidateAppProvenance } = require('./r21-candidate-app-build.cjs');
@@ -102,9 +102,11 @@ async function observeAction(label, script, timeoutMs = ACTION_TIMEOUT_MS) {
         const window = streamTail + raw;
         if (window.includes('ASTRID_PINOKIO_FAILURE')) observation.launcher_failure = true;
         if (window.includes('Astrid is updated and running.')
-            || progressKey === 'install' && window.includes(INITIAL_INSTALL_SUCCESS)) observation.installer_success = true;
+            || progressKey === 'install' && window.includes(INITIAL_INSTALL_SUCCESS)) {
+          observation.installer_success = true;
+          if (progressKey === 'install') observation.installer_dispatch = true;
+        }
         streamTail = window.slice(-128);
-        if (raw.includes('--managed-by') && raw.includes('pinokio')) observation.installer_dispatch = true;
         if (raw.includes(FIRST_REFUSAL)) observation.terminal.expected_refusal = true;
       }
       if (packet.type === 'result' && isObject(packet.data)) {
@@ -202,15 +204,14 @@ async function main() {
   substage('install');
   const install = await observeAction('historical install', 'pinokio/install.js', INITIAL_INSTALL_TIMEOUT_MS);
   progress.install = install; retainProgress();
+  substage('initial-install-validation');
   let installedBefore = false;
   try { installedBefore = await installedTupleMatches(appRoot, TUPLE); } catch {}
   // The marker remains a protected acceptance predicate elsewhere.  This is a
   // failure-side observation only and never turns a settled PTerm exit into a
   // successful Install.
   startDiagnostics.install({ installedTuplePresent: installedBefore, installMarkerObserved: install.installer_success });
-  if (install.inner_exit.code !== 0 || install.terminal.disconnect !== true || install.terminal.stop !== true) {
-    throw new Error('historical installation did not settle');
-  }
+  requireInitialInstallForStart({ install, installedTuplePresent: installedBefore });
   substage('initial-start-readiness');
   await startOldLauncher({ onStartPacket: packet => startDiagnostics.startPacket(packet),
     onStartListener: () => startDiagnostics.startListener(), afterStartSpawn: initialStartProbe });
