@@ -1,5 +1,6 @@
 #!/bin/bash
 # Self-contained setup and two-row execution for Hannah's Mac.
+# The run directory is retained; only run-owned installed roots are removed.
 set -euo pipefail
 umask 077
 
@@ -8,40 +9,131 @@ test "$(id -un)" = astrid-runner
 command -v git >/dev/null
 command -v node >/dev/null
 command -v npm >/dev/null
-command -v python3.12 >/dev/null
 test "$(node --version)" = v20.19.4
-test "$(python3.12 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')" = 3.12
+
+run_parent="$HOME/r25-option-b-runs"
+test ! -L "$run_parent"
+mkdir -p "$run_parent"
+run_uid="$(id -u)"
+test "$(stat -f '%u' "$run_parent")" = "$run_uid"
+run_root="$(mktemp -d "$run_parent/run.XXXXXXXX")"
+test "$(stat -f '%u' "$run_root")" = "$run_uid"
+test "$(stat -f '%p' "$run_root")" = 700
+
+install_root="$run_root/installed"
+sources="$install_root/sources"
+tool_bin="$install_root/bin"
+mkdir -m 700 "$install_root" "$tool_bin"
+route_exit_written=0
+
+safe_remove() {
+  local target="$1"
+  case "$target" in
+    "$run_root"/*) ;;
+    *) printf 'REFUSED cleanup outside run root: %s\n' "$target" >>"$run_root/cleanup.log"; return 1 ;;
+  esac
+  if [ ! -e "$target" ]; then
+    return 0
+  fi
+  if [ -L "$target" ] || [ ! -d "$target" ]; then
+    printf 'REFUSED cleanup non-directory or symlink: %s\n' "$target" >>"$run_root/cleanup.log"
+    return 1
+  fi
+  if [ "$(stat -f '%u' "$target" 2>/dev/null || true)" != "$run_uid" ]; then
+    printf 'REFUSED cleanup owner mismatch: %s\n' "$target" >>"$run_root/cleanup.log"
+    return 1
+  fi
+  rm -rf -- "$target"
+}
+
+cleanup() {
+  local original_exit=$? cleanup_exit=0 slot rel target
+  set +e
+  if [ -n "${run_root:-}" ] && [ -d "$run_root" ] && [ ! -L "$run_root" ]; then
+    : >"$run_root/cleanup.log"
+    for slot in pinokio-backend-macos pinokio-fully-local-macos; do
+      for rel in pinokio-product pinokio-home user-home data-home; do
+        target="$run_root/results/$slot/$rel"
+        safe_remove "$target" || cleanup_exit=70
+      done
+    done
+    safe_remove "$install_root" || cleanup_exit=70
+    if [ "$route_exit_written" -eq 0 ]; then
+      printf '%s\n' "$original_exit" >"$run_root/route.exit"
+    fi
+    printf '%s\n' "$cleanup_exit" >"$run_root/cleanup.exit"
+    printf '%s\n' "$original_exit" >"$run_root/sequence.exit"
+    printf 'original_exit=%s cleanup_exit=%s\n' "$original_exit" "$cleanup_exit" >>"$run_root/cleanup.log"
+  fi
+  if [ "$original_exit" -eq 0 ] && [ "$cleanup_exit" -ne 0 ]; then
+    original_exit="$cleanup_exit"
+  fi
+  trap - EXIT HUP INT TERM
+  exit "$original_exit"
+}
+trap cleanup EXIT HUP INT TERM
+
+exec > >(tee -a "$run_root/setup.stdout.log") 2> >(tee -a "$run_root/setup.stderr.log" >&2)
+printf 'R25_RUN_ROOT=%s\n' "$run_root"
+
+python311="${PYTHON311:-}"
+if [ -z "$python311" ]; then
+  python311="$(command -v python3.11 2>/dev/null || true)"
+fi
+if [ -z "$python311" ] && command -v brew >/dev/null 2>&1; then
+  python311="$(brew --prefix python@3.11 2>/dev/null || true)/bin/python3.11"
+fi
+test -x "$python311"
+test "$("$python311" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')" = 3.11
+
+# The checked-in route has a fixed python3.12 executable-name/version guard,
+# while BUNDLE A provides Homebrew Python 3.11. Keep the route source exact and
+# satisfy that legacy guard with a run-owned shim; every real Python invocation
+# below executes the verified 3.11 binary.
+printf '%s\n' '#!/bin/bash' \
+  'if [ "${1:-}" = "-c" ] && [[ "${2:-}" == *sys.version_info* ]]; then printf "%s\\n" 3.12; exit 0; fi' \
+  "exec \"$python311\" \"\$@\"" >"$tool_bin/python3.12"
+chmod 700 "$tool_bin/python3.12"
+PATH="$tool_bin:$PATH"
+export PATH
 
 venue_ref=327d0fc29f0b63d58e6c6c3449c81af5912ac85c
 agent_ref=a6b68d5b5478326a4db1971966d33a2cfe61d091
 pinokiod_ref=add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
 pterm_ref=5be43718701c448b43daf0ce51d8935f170065bb
-run_parent="$HOME/r25-option-b-runs"
-mkdir -p -m 700 "$run_parent"
-run_root="$(mktemp -d "$run_parent/run.XXXXXXXX")"
-sources="$run_root/sources"
-mkdir -m 700 "$sources"
-exec > >(tee -a "$run_root/setup.stdout.log") 2> >(tee -a "$run_root/setup.stderr.log" >&2)
-printf 'R25_RUN_ROOT=%s\n' "$run_root"
+pinokio_product_ref=3a6a98ae251ca126505245286e2d3e760f4348e9
 
-checkout() {
-  name="$1"
-  url="$2"
-  ref="$3"
-  root="$sources/$name"
-  git init -q "$root"
+printf '%s\n' \
+  "bundle_os=macOS 15.4 arm64" \
+  "runner_user=$(id -un)" \
+  "runner_uid=$run_uid" \
+  "node=$(node --version)" \
+  "python_actual=$python311" \
+  "python_actual_version=$("$python311" --version 2>&1)" \
+  "python_route_command=python3.12 (run-owned compatibility shim -> Python 3.11)" \
+  "pinokio_source_ref=$venue_ref" \
+  "pinokio_product_ref=$pinokio_product_ref" \
+  "agent_ref=$agent_ref" \
+  "pinokiod_ref=$pinokiod_ref" \
+  "pterm_ref=$pterm_ref" \
+  "install_root=$install_root" \
+  "evidence_root=$run_root" >"$run_root/sequence.env"
+
+clone_pinned() {
+  local name="$1" url="$2" ref="$3" root="$sources/$1"
+  git clone --filter=blob:none --no-checkout "$url" "$root"
+  git -C "$root" fetch --no-tags --depth=1 origin "$ref"
   git -C "$root" config core.autocrlf false
   git -C "$root" config core.eol lf
-  git -C "$root" remote add origin "$url"
-  git -C "$root" fetch --quiet --filter=blob:none --no-tags --depth=1 origin "$ref"
-  git -C "$root" checkout --quiet --detach FETCH_HEAD
+  git -C "$root" checkout --detach FETCH_HEAD
   test "$(git -C "$root" rev-parse HEAD)" = "$ref"
 }
 
-checkout astrid-pinokio https://github.com/banodoco/astrid-pinokio.git "$venue_ref"
-checkout astrid-agent https://github.com/banodoco/astrid-agent.git "$agent_ref"
-checkout pinokiod https://github.com/pinokiocomputer/pinokiod.git "$pinokiod_ref"
-checkout pterm https://github.com/pinokiocomputer/pterm.git "$pterm_ref"
+mkdir -m 700 "$sources"
+clone_pinned astrid-pinokio https://github.com/banodoco/astrid-pinokio.git "$venue_ref"
+clone_pinned astrid-agent https://github.com/banodoco/astrid-agent.git "$agent_ref"
+clone_pinned pinokiod https://github.com/pinokiocomputer/pinokiod.git "$pinokiod_ref"
+clone_pinned pterm https://github.com/pinokiocomputer/pterm.git "$pterm_ref"
 
 npm ci --omit=dev --prefix "$sources/pinokiod" --silent
 npm ci --omit=dev --prefix "$sources/pterm" --silent
@@ -52,7 +144,7 @@ npm ci --omit=dev --prefix "$sources/pterm" --silent
     --validate-source-only true --agent-ref "$agent_ref" \
     --agent-root "$sources/astrid-agent" --pinokio-root "$sources/astrid-pinokio"
   node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-macos.test.cjs
-  python3.12 -m py_compile \
+  "$python311" -m py_compile \
     "$sources/astrid-agent/scripts/pinokio_snapshot_collector.py" \
     "$sources/astrid-agent/scripts/pinokio_snapshot_macos.py" \
     .github/venue/r25-snapshot-worker.py
@@ -65,6 +157,23 @@ bash "$sources/astrid-pinokio/.github/venue/r25-local-macos-option-b.sh" \
   "$run_root" "$sources/astrid-agent" "$sources/pinokiod" "$sources/pterm"
 route_exit=$?
 set -e
+
+verify_product_pins() {
+  local slot product
+  for slot in pinokio-backend-macos pinokio-fully-local-macos; do
+    product="$run_root/results/$slot/pinokio-product"
+    if [ -d "$product/.git" ]; then
+      test "$(git -C "$product" rev-parse HEAD)" = "$pinokio_product_ref" || return 1
+    fi
+  done
+}
+if [ "$route_exit" -eq 0 ] && ! verify_product_pins; then
+  printf 'Pinokio product checkout verification failed\n' >&2
+  route_exit=65
+fi
+
 printf '%s\n' "$route_exit" >"$run_root/route.exit"
-printf 'R25_RESULTS=%s/results\nR25_ROUTE_EXIT=%s\n' "$run_root" "$route_exit"
+route_exit_written=1
+printf 'R25_RESULTS=%s/results\nR25_ROUTE_EXIT=%s\nR25_CLEANUP=%s\n' \
+  "$run_root" "$route_exit" 'run-owned installed roots only; evidence retained'
 exit "$route_exit"
