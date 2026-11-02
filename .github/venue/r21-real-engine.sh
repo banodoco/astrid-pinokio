@@ -62,7 +62,12 @@ if [[ "${1:-}" == --execute || "${1:-}" == --watchdog ]]; then
   if [[ "$finished" == "$timer" ]]; then
     # Always escalate, even if the leader exits on TERM: descendants may not.
     kill -TERM -- "-$worker" 2>/dev/null || true
-    sleep 5
+    # A local diagnostic has no hosted job deadline, so let its private-trace
+    # reducer finish its bounded cleanup before escalation. Hosted behavior
+    # retains its established five-second grace.
+    cleanup_grace=5
+    if [[ "${R21_LOCAL_EXECUTION:-}" == 1 ]]; then cleanup_grace=10; fi
+    sleep "$cleanup_grace"
     kill -KILL -- "-$worker" 2>/dev/null || true
     # Do not let a task stuck in uninterruptible kernel sleep block publication.
     for _ in 1 2; do
@@ -238,6 +243,10 @@ failure_receipt() {
       --trace "$bootstrap_trace" --request "$request" \
       --install "$out/r21-install-diagnostics.json" \
       --output "$out/r21-bootstrap-diagnostics.json" || diagnostic_status=$?
+    # The reducer deletes its private trace in its own finally block. Keep a
+    # second exact-path cleanup here for a reducer failure; it is never a
+    # publishable artifact.
+    rm -f "$bootstrap_trace"
     if [ "$diagnostic_status" -ne 0 ] && [ "$status" -eq 0 ]; then status=$diagnostic_status; fi
   fi
   if [ -d "$out" ]; then
