@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 # Standalone measurement of the pinned daemon on an ephemeral hosted VM.
 set -u
+# Match the local-address and process fields on the same ss TCP LISTEN row.
+match_listener() {
+  local owner=$1
+  [[ "$owner" =~ ^[1-9][0-9]*$ ]] || return 1
+  awk -v pid="$owner" '
+    $1 == "LISTEN" && ($4 == "*:42000" || $4 == "0.0.0.0:42000") {
+      for (i = 6; i <= NF; i++)
+        if ($i ~ ("(^|[,(])pid=" pid "[,)]")) found = 1
+    }
+    END { exit !found }
+  '
+}
+if [[ "${1:-}" == --match-listener ]]; then
+  [[ $# == 2 ]] || exit 1
+  match_listener "$2"
+  exit $?
+fi
 umask 077
 out="$RUNNER_TEMP/r21-bind-evidence"
 mkdir -p "$out"
@@ -40,8 +57,8 @@ PY
 }
 trap finish EXIT
 trap 'exit 1' TERM INT
-# A single venue-only commit must descend directly from the requested candidate.
-if [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" && "$(git rev-parse HEAD^)" == "$CANDIDATE_SHA" && "${GITHUB_WORKFLOW_SHA:-}" == "$GITHUB_SHA" ]]; then binding_exit=0; else binding_exit=1; fi
+# Bind the repair to its exact venue base and that base to the requested candidate.
+if [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" && "$(git rev-parse HEAD^)" == 69fa7602ef0bd296dedfd8f8efc7e1be14666fe4 && "$(git rev-parse HEAD^^)" == "$CANDIDATE_SHA" && "${GITHUB_WORKFLOW_SHA:-}" == "$GITHUB_SHA" ]]; then binding_exit=0; else binding_exit=1; fi
 curl -fsS --max-time 20 -o /dev/null 'https://github.com/pinokiocomputer/pinokiod.git/info/refs?service=git-upload-pack'; outbound_exit=$?
 if [[ "$binding_exit" != 0 || "$outbound_exit" != 0 ]]; then exit 1; fi
 timeout 120 git clone -q --filter=blob:none https://github.com/pinokiocomputer/pinokiod.git "$work/daemon" >/dev/null 2>&1; daemon_clone_exit=$?
@@ -70,5 +87,5 @@ for i in {1..90}; do
 done
 ss -ltnp '( sport = :42000 )' > "$out/listener.txt" 2>&1; listener_capture_exit=$?
 listener_owner_exit=1
-if [[ "$listener_capture_exit" == 0 ]] && awk -v pid="$pid" '$4 == "0.0.0.0:42000" && index($0,"pid=" pid ",") { found=1 } END { exit !found }' "$out/listener.txt"; then listener_owner_exit=0; fi
+if [[ "$listener_capture_exit" == 0 ]] && match_listener "$pid" < "$out/listener.txt"; then listener_owner_exit=0; fi
 exit 0
