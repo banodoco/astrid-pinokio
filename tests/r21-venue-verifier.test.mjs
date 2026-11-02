@@ -91,16 +91,18 @@ test('R-21 dispatch binding accepts only the exact product dispatch or self-serv
   const manualEnvironment = {
     ...environment,
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-START-OBSERVABILITY-R1',
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-START-OBSERVABILITY-R1',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-INSTALL-TIMEOUT-R2',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-INSTALL-TIMEOUT-R2',
   };
   const manualInput = { request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) };
   const manual = validateDispatch(manualInput, manualEnvironment);
   assert.equal(manual.workflow.event, 'workflow_dispatch');
   assert.throws(() => validateDispatch({ ...manualInput, runner_ref: 'b'.repeat(40) }, manualEnvironment), /runner_ref\/GITHUB_SHA binding/);
-  assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-R13' }), /GitHub ref/);
+  assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-START-OBSERVABILITY-R1' }), /GitHub ref/);
+  assert.throws(() => validateDispatch({ ...manualInput, confirmation: 'wrong' }, manualEnvironment), /confirmation/);
+  assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_EVENT_NAME: 'pull_request' }), /GitHub event/);
   assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R13' }), /workflow source/);
-  assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/other.yml@refs/heads/lane/M-PIN/R-21-START-OBSERVABILITY-R1' }), /workflow source/);
+  assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/other.yml@refs/heads/lane/M-PIN/R-21-INSTALL-TIMEOUT-R2' }), /workflow source/);
 });
 
 test('publisher binds the run and only retains sanitized evidence with inner exits', async () => {

@@ -27,10 +27,10 @@ if (!appRoot || !ptermRoot || !home) throw new Error('R21_APP_ROOT, R21_PTERM_RO
 const { WebSocket } = require(path.join(ptermRoot, 'node_modules/unws'));
 const ACTION_TIMEOUT_MS = 20 * 60 * 1000;
 // The first historical Install provisions a fresh venue and exceeded the
-// ordinary action bound in run 41376447995. Allow 35 minutes for it while the
+// 35-minute bound in run 41391568748. Allow 45 minutes for it while the
 // 70-minute overall watchdog still bounds setup, later actions, and cleanup;
 // the 90-minute job limit retains separate result-publication headroom.
-const INITIAL_INSTALL_TIMEOUT_MS = 35 * 60 * 1000;
+const INITIAL_INSTALL_TIMEOUT_MS = 45 * 60 * 1000;
 let actionNumber = 0;
 const progress = {};
 function substage(value) {
