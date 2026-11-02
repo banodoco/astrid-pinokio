@@ -96,11 +96,17 @@ jobs:
           AGENT_ROOT: ${{ runner.temp }}\astrid-agent
         run: |
           $ErrorActionPreference = 'Stop'
+          function Assert-NativeExit([string]$Command) {
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) { throw "$Command failed with exit code $exitCode" }
+          }
           function Assert-GitBlobBytes([string]$Root, [string]$Relative) {
             $blob = (git -C $Root rev-parse "HEAD:${Relative}").Trim()
-            if ($LASTEXITCODE -ne 0) { throw "Cannot resolve Git blob: $Root $Relative" }
+            $gitExitCode = $LASTEXITCODE
+            if ($gitExitCode -ne 0) { throw "Cannot resolve Git blob: $Root $Relative" }
             $actual = (git -C $Root hash-object --no-filters -- $Relative).Trim()
-            if ($LASTEXITCODE -ne 0 -or $actual -ne $blob) {
+            $gitExitCode = $LASTEXITCODE
+            if ($gitExitCode -ne 0 -or $actual -ne $blob) {
               throw "Git blob bytes changed after checkout: $Root $Relative ($actual != $blob)"
             }
           }
@@ -114,14 +120,21 @@ jobs:
           node pinokio/providers/r25-native-collector-binding.cjs `
             --validate-source-only true --agent-ref $env:AGENT_REF `
             --agent-root $env:AGENT_ROOT --pinokio-root $env:GITHUB_WORKSPACE
+          Assert-NativeExit 'Source validation'
           node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-windows.test.cjs tests/r25-windows-process-snapshot.test.cjs tests/r25-setup-diagnostics.test.mjs
+          Assert-NativeExit 'Focused route tests'
           python -m py_compile `
             "$env:AGENT_ROOT\scripts\pinokio_snapshot_collector.py" `
             "$env:AGENT_ROOT\scripts\pinokio_snapshot_windows.py"
+          Assert-NativeExit 'Python syntax checks'
           node --check .github/venue/r25-snapshot-runner.cjs
+          Assert-NativeExit 'r25 snapshot runner syntax check'
           node --check .github/venue/r21-observer-diagnostics.cjs
+          Assert-NativeExit 'r21 observer diagnostics syntax check'
           node --check .github/venue/r25-windows-process-snapshot.cjs
+          Assert-NativeExit 'Windows process snapshot syntax check'
           node --check pinokio/shell.mjs
+          Assert-NativeExit 'Pinokio shell syntax check'
       - name: Run bounded Windows setup diagnostic or six-action session
         shell: pwsh
         env:
