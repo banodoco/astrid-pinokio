@@ -376,7 +376,7 @@ test('observer failure handler writes sanitized failure and reaps its real Start
     fs.mkdirSync(moduleDir, { recursive: true }); fs.mkdirSync(output);
     fs.writeFileSync(path.join(moduleDir, 'index.js'), `let count = 0;
 exports.WebSocket = class extends EventTarget {
-  constructor() { super(); this.number = ++count; setTimeout(() => this.dispatchEvent(new Event(this.number === 3 ? 'error' : 'open')), this.number === 3 ? 150 : 1); }
+  constructor() { super(); this.number = ++count; setTimeout(() => this.dispatchEvent(new Event(this.number === 4 ? 'error' : 'open')), this.number === 4 ? 150 : 1); }
   send(raw) { const value = JSON.parse(raw); if (value.mode === 'listen') {
     for (const packet of [{type:'event', data:'stop'}, {type:'disconnect'}]) { const e = new Event('message'); e.data = JSON.stringify(packet); this.dispatchEvent(e); }
   } else { const e = new Event('message'); e.data = JSON.stringify({data:false}); setImmediate(() => this.dispatchEvent(e)); } }
@@ -395,6 +395,12 @@ exports.WebSocket = class extends EventTarget {
     assert.equal(failure.last_operation.operation, 'start-status');
     assert.equal(failure.last_operation.category, 'error');
     assert.deepEqual(failure.readiness_trace.at(-1), failure.last_operation);
+    const startDiagnostics = JSON.parse(fs.readFileSync(path.join(output, 'r21-start-diagnostics.json')));
+    assert.deepEqual(startDiagnostics.installed_tuple_present, false);
+    assert.deepEqual(startDiagnostics.install_marker_observed, false);
+    assert.deepEqual(startDiagnostics.start, { engine_error: false, terminal_stop: true, terminal_disconnect: true });
+    assert.deepEqual(startDiagnostics.runtime_status, { class: 'unavailable', code: null });
+    assert.equal(typeof startDiagnostics.port_17340_listener, 'boolean');
     const pid = Number(fs.readFileSync(path.join(root, 'start.pid'), 'utf8'));
     assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

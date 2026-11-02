@@ -236,6 +236,17 @@ test('R-21 requires accepted initial Install evidence', () => {
   }
 });
 
+test('R-21 Start diagnostics cannot weaken the initial Install predicate', () => {
+  const value = receipt();
+  value.install.installer_success = false;
+  value.start_diagnostics = {
+    installed_tuple_present: true, install_marker_observed: true,
+    start: { engine_error: false, terminal_stop: false, terminal_disconnect: false },
+    runtime_status: { class: 'exit', code: 0 }, port_17340_listener: true,
+  };
+  assert.throws(() => verifyReceipt(value), /install/i);
+});
+
 test('R-21 requires candidate App-to-Runtime readiness after retry', () => {
   const value = receipt(); value.retry.candidate_app_runtime_ready = false;
   assert.throws(() => verifyReceipt(value), /App-to-Runtime/);

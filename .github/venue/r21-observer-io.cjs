@@ -180,8 +180,22 @@ function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot,
     }
     throw new Error('independent Runtime/application readiness timeout');
   }
-  async function startOldLauncher() {
+  async function startOldLauncher({ onStartPacket, onStartListener, afterStartSpawn } = {}) {
     const script = 'pinokio/start.js';
+    // Start is a daemon action, so waiting for its PTerm client would change
+    // the journey.  Subscribe separately and retain only its terminal/error
+    // packet classes through the caller's typed projection.
+    let startSocket;
+    if (typeof onStartPacket === 'function') {
+      try {
+        startSocket = await openSocket();
+        startSocket.addEventListener('message', event => {
+          try { onStartPacket(JSON.parse(String(event.data))); } catch {}
+        });
+        onStartListener?.();
+        startSocket.send(JSON.stringify({ uri: path.join(appRoot, script), mode: 'listen' }));
+      } catch { if (startSocket) disposeSocket(startSocket); startSocket = null; }
+    }
     note('start-client', 'pending');
     const child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', endpoint], {
       cwd: home, env: process.env, stdio: ['ignore', 'ignore', 'ignore'],
@@ -194,9 +208,12 @@ function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot,
       const error = await Promise.race([promise.then(() => null), failure]);
       if (error) { note('start-client', 'error'); throw error; }
     };
-    await phase(waitForStatus(path.join(appRoot, script), true, 'historical Start'));
-    await phase(waitForReadiness());
-    return child;
+    try {
+      await phase(typeof afterStartSpawn === 'function' ? afterStartSpawn() : Promise.resolve());
+      await phase(waitForStatus(path.join(appRoot, script), true, 'historical Start'));
+      await phase(waitForReadiness());
+      return child;
+    } finally { if (startSocket) disposeSocket(startSocket); }
   }
   async function cleanup() {
     cancelled.abort();

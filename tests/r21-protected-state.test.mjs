@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { digestProtectedState, installedTupleMatches } = require('../.github/venue/r21-protected-state.cjs');
+const { digestProtectedState, installedTupleMatches, runtimeStatusSpec } = require('../.github/venue/r21-protected-state.cjs');
 
 function fixture() {
   const home = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-protected-'));
@@ -56,11 +56,15 @@ test('installed tuple observation binds the selected manifest and rejects escape
   try {
     assert.equal(await installedTupleMatches(f.appRoot, { agent: 'a'.repeat(40), runtime: 'b'.repeat(40) }), true);
     assert.equal(await installedTupleMatches(f.appRoot, { agent: 'c'.repeat(40), runtime: 'b'.repeat(40) }), false);
+    const status = await runtimeStatusSpec(f.appRoot, f.home);
+    assert.deepEqual(status.args.slice(0, 4), ['-I', '-m', 'astrid_runtime', 'status']);
+    assert.equal(status.cwd, f.root);
     fs.writeFileSync(path.join(f.root, 'current'), '../outside\n');
     await assert.rejects(digestProtectedState(f.appRoot, f.home), /selection is invalid/);
     fs.writeFileSync(path.join(f.root, 'current'), 'candidate\n');
     fs.writeFileSync(path.join(f.root, 'install.json'), JSON.stringify({ data_root: path.dirname(f.home) }));
     await assert.rejects(digestProtectedState(f.appRoot, f.home), /escaped/);
+    await assert.rejects(runtimeStatusSpec(f.appRoot, f.home), /escaped/);
   } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
 });
 

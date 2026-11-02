@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { TRACE_LIMIT, projectOperation, projectActionFailure, projectInstallEvidence } = require('./r21-observer-diagnostics.cjs');
+const { projectStartDiagnostics } = require('./r21-start-diagnostics.cjs');
 const { validateDispatch, verifyReceipt, TUPLE, ENDPOINT, REQUEST_ID } = require('./r21-verify.cjs');
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const bool = value => value === true ? true : value === false ? false : null;
@@ -96,6 +97,10 @@ function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
     run_id: env.GITHUB_RUN_ID, run_attempt: env.GITHUB_RUN_ATTEMPT };
   if (installDiagnostics && Object.entries(diagnosticBinding).every(([key, value]) => installDiagnostics.binding?.[key] === value)) {
     files['install-diagnostics.json'] = projectInstallEvidence(installDiagnostics, diagnosticBinding);
+  }
+  const startDiagnostics = read(path.join(evidenceDir, 'r21-start-diagnostics.json'));
+  if (startDiagnostics && Object.entries(diagnosticBinding).every(([key, value]) => startDiagnostics.binding?.[key] === value)) {
+    files['start-diagnostics.json'] = projectStartDiagnostics(startDiagnostics, diagnosticBinding);
   }
   const obsFailure = read(path.join(evidenceDir, 'r21-failure.json'));
   if (obsFailure && ['timeout','engine-or-observer'].includes(obsFailure.category)) {

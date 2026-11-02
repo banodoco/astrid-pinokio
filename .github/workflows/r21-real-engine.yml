@@ -73,7 +73,7 @@ jobs:
           git -C "$result" config user.name 'github-actions[bot]'
           git -C "$result" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git -C "$result" add request.json verdict.json SHA256SUMS
-          for file in r21-receipt.json runner-failure.json observer-failure.json install-diagnostics.json; do
+          for file in r21-receipt.json runner-failure.json observer-failure.json install-diagnostics.json start-diagnostics.json; do
             if [ -f "$result/$file" ]; then git -C "$result" add "$file"; fi
           done
           git -C "$result" commit --quiet -m "R-21 sanitized hosted result"
@@ -114,10 +114,12 @@ jobs:
             ${{ runner.temp }}/r21-evidence/r21-observer-operation.json
             ${{ runner.temp }}/r21-evidence/r21-failure.json
             ${{ runner.temp }}/r21-evidence/r21-install-diagnostics.json
+            ${{ runner.temp }}/r21-evidence/r21-start-diagnostics.json
             ${{ runner.temp }}/r21-result/request.json
             ${{ runner.temp }}/r21-result/verdict.json
             ${{ runner.temp }}/r21-result/r21-receipt.json
             ${{ runner.temp }}/r21-result/runner-failure.json
             ${{ runner.temp }}/r21-result/observer-failure.json
             ${{ runner.temp }}/r21-result/install-diagnostics.json
+            ${{ runner.temp }}/r21-result/start-diagnostics.json
             ${{ runner.temp }}/r21-result/SHA256SUMS

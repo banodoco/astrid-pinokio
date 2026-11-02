@@ -10,9 +10,10 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createTrace, actionPhase, createActionTracker, ptermExit, createInstallDiagnostics } = require('./r21-observer-diagnostics.cjs');
+const { createStartDiagnostics, runBoundedRuntimeStatus, probePort17340 } = require('./r21-start-diagnostics.cjs');
 const { createObserverIO } = require('./r21-observer-io.cjs');
 const { observeCandidateAppInteraction } = require('./r21-app-browser.cjs');
-const { digestProtectedState, installedTupleMatches } = require('./r21-protected-state.cjs');
+const { digestProtectedState, installedTupleMatches, runtimeStatusSpec } = require('./r21-protected-state.cjs');
 const {
   ACTIONS, APP_RUNTIME, ENDPOINT, FIRST_REFUSAL, TUPLE, verifyReceipt,
 } = require('./r21-verify.cjs');
@@ -57,6 +58,7 @@ const isObject = (value) => value && typeof value === 'object' && !Array.isArray
 const trace = createTrace();
 const actionTracker = createActionTracker();
 let installDiagnostics = null;
+let startDiagnostics = null;
 const io = createObserverIO({ WebSocket, fetch, spawn, appRoot, ptermRoot, home, endpoint: ENDPOINT, appRuntime: APP_RUNTIME,
   record: value => { trace.record(value); write('r21-observer-operation.json', trace.snapshot().at(-1)); } });
 const { openSocket, status, waitForReadiness, runtimeReady, applicationReady, candidateAppRuntimeObservation, startOldLauncher } = io;
@@ -174,6 +176,18 @@ async function lockFree() {
   return result === 0;
 }
 
+async function initialStartProbe() {
+  let spec;
+  try { spec = await runtimeStatusSpec(appRoot, home); }
+  catch { startDiagnostics.runtimeStatus({ class: 'unavailable' }); }
+  const [status, listener] = await Promise.all([
+    spec ? runBoundedRuntimeStatus({ spawn, spec }) : null,
+    probePort17340(),
+  ]);
+  if (status) startDiagnostics.runtimeStatus(status);
+  startDiagnostics.listener(listener);
+}
+
 async function main() {
   await fsp.mkdir(output, { recursive: true });
   const request = JSON.parse(await fsp.readFile(requestPath, 'utf8'));
@@ -182,16 +196,24 @@ async function main() {
   }
   installDiagnostics = createInstallDiagnostics({ request_id: request.request_id, runner_ref: request.runner_ref,
     run_id: request.workflow?.run_id ?? null, run_attempt: request.workflow?.run_attempt ?? null }, value => write('r21-install-diagnostics.json', value));
+  startDiagnostics = createStartDiagnostics({ request_id: request.request_id, runner_ref: request.runner_ref,
+    run_id: request.workflow?.run_id ?? null, run_attempt: request.workflow?.run_attempt ?? null }, value => write('r21-start-diagnostics.json', value));
   substage('install');
   const install = await observeAction('historical install', 'pinokio/install.js', INITIAL_INSTALL_TIMEOUT_MS);
   progress.install = install; retainProgress();
+  let installedBefore = false;
+  try { installedBefore = await installedTupleMatches(appRoot, TUPLE); } catch {}
+  // The marker remains a protected acceptance predicate elsewhere.  This is a
+  // failure-side observation only and never turns a settled PTerm exit into a
+  // successful Install.
+  startDiagnostics.install({ installedTuplePresent: installedBefore, installMarkerObserved: install.installer_success });
   if (install.inner_exit.code !== 0 || install.terminal.disconnect !== true || install.terminal.stop !== true) {
     throw new Error('historical installation did not settle');
   }
   substage('initial-start-readiness');
-  await startOldLauncher();
+  await startOldLauncher({ onStartPacket: packet => startDiagnostics.startPacket(packet),
+    onStartListener: () => startDiagnostics.startListener(), afterStartSpawn: initialStartProbe });
   substage('state-before');
-  const installedBefore = await installedTupleMatches(appRoot, TUPLE);
   const before = await digestProtectedState(appRoot, home);
   substage('first-click');
   const first = await observeAction('first Update', 'pinokio/update.js');

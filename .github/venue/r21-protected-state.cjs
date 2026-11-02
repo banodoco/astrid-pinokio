@@ -159,4 +159,25 @@ async function installedTupleMatches(appRoot, tuple) {
   return manifest?.agent?.sha === tuple.agent && manifest?.runtime?.sha === tuple.runtime;
 }
 
-module.exports = { digestProtectedState, digestTree, installedTupleMatches };
+// This private command specification is used only by the R-21 diagnostic
+// observer.  Callers must never retain it: it contains installed paths.  Keep
+// its selected-tree and venue-home checks alongside the structural observer so
+// an arbitrary install record cannot turn the diagnostic into an arbitrary
+// command launcher.
+async function runtimeStatusSpec(appRoot, home) {
+  const root = path.join(appRoot, 'app', 'astrid');
+  const selected = await selectedVersion(root, await fsp.readFile(path.join(root, 'current')));
+  let record;
+  let install;
+  try {
+    record = JSON.parse(await fsp.readFile(path.join(selected.selectedRoot, 'version.json'), 'utf8'));
+    install = JSON.parse(await fsp.readFile(path.join(root, 'install.json'), 'utf8'));
+  } catch { throw new Error('installed Runtime status record cannot be read'); }
+  const python = path.resolve(record?.python || '');
+  const data = path.resolve(install?.data_root || '');
+  if (!inside(selected.selectedRoot, python)) throw new Error('installed Runtime Python escaped its version root');
+  if (!inside(path.resolve(home), data)) throw new Error('installed Runtime data root escaped the disposable Pinokio home');
+  return { command: python, args: ['-I', '-m', 'astrid_runtime', 'status', '--data-root', data, '--json'], cwd: root };
+}
+
+module.exports = { digestProtectedState, digestTree, installedTupleMatches, runtimeStatusSpec };
