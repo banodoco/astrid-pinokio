@@ -19,6 +19,12 @@ function fixture() {
   fs.writeFileSync(path.join(root, 'current'), 'candidate\n');
   fs.writeFileSync(path.join(root, 'install.json'), JSON.stringify({ data_root: data }));
   fs.writeFileSync(path.join(version, 'manifest.json'), JSON.stringify({ agent: { sha: 'a'.repeat(40) }, runtime: { sha: 'b'.repeat(40) } }));
+  fs.mkdirSync(path.join(version, 'bin'));
+  const python = path.join(version, 'bin', 'python');
+  const profile = path.join(version, 'profile.json');
+  fs.writeFileSync(python, 'selected-python');
+  fs.writeFileSync(profile, '{}');
+  fs.writeFileSync(path.join(version, 'version.json'), JSON.stringify({ root: version, python, profile, env: {} }));
   fs.writeFileSync(path.join(version, 'program.bin'), 'installed-program-v1');
   fs.writeFileSync(path.join(data, 'project.bin'), 'user-data-v1');
   return { home, appRoot, root, version, data };
@@ -55,5 +61,45 @@ test('installed tuple observation binds the selected manifest and rejects escape
     fs.writeFileSync(path.join(f.root, 'current'), 'candidate\n');
     fs.writeFileSync(path.join(f.root, 'install.json'), JSON.stringify({ data_root: path.dirname(f.home) }));
     await assert.rejects(digestProtectedState(f.appRoot, f.home), /escaped/);
+  } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
+});
+
+test('protected state rejects a missing selected version or required selected file', async () => {
+  const f = fixture();
+  try {
+    fs.rmSync(f.version, { recursive: true });
+    await assert.rejects(digestProtectedState(f.appRoot, f.home), /selected installed version root is missing/);
+  } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
+
+  const missing = fixture();
+  try {
+    fs.rmSync(path.join(missing.version, 'bin', 'python'));
+    await assert.rejects(digestProtectedState(missing.appRoot, missing.home), /selected installed Python is missing/);
+  } finally { fs.rmSync(missing.home, { recursive: true, force: true }); }
+});
+
+test('deleting a selected installed file changes the protected digest and is rejected by comparison', async () => {
+  const f = fixture();
+  try {
+    const before = await digestProtectedState(f.appRoot, f.home);
+    fs.rmSync(path.join(f.version, 'program.bin'));
+    const after = await digestProtectedState(f.appRoot, f.home);
+    assert.notEqual(after.installed_bytes, before.installed_bytes);
+  } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
+});
+
+test('installed-byte digest binds symlink target bytes and rejects dangling links', { skip: process.platform === 'win32' }, async () => {
+  const f = fixture();
+  try {
+    const external = path.join(f.home, 'external-program');
+    const link = path.join(f.version, 'linked-program');
+    fs.writeFileSync(external, 'external-v1');
+    fs.symlinkSync(external, link);
+    const before = await digestProtectedState(f.appRoot, f.home);
+    fs.writeFileSync(external, 'external-v2');
+    const changed = await digestProtectedState(f.appRoot, f.home);
+    assert.notEqual(changed.installed_bytes, before.installed_bytes);
+    fs.rmSync(external);
+    await assert.rejects(digestProtectedState(f.appRoot, f.home), /dangling link/);
   } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
 });

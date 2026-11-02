@@ -9,6 +9,7 @@ import { test } from 'node:test';
 
 const require = createRequire(import.meta.url);
 const { createObserverIO } = require('../.github/venue/r21-observer-io.cjs');
+const { validateCandidateAppInteraction } = require('../.github/venue/r21-app-browser.cjs');
 const { publish } = require('../.github/venue/r21-publish.cjs');
 const { APP_RUNTIME } = require('../.github/venue/r21-verify.cjs');
 const { TRACE_LIMIT, createTrace, actionPhase, createActionTracker, ptermExit } = require('../.github/venue/r21-observer-diagnostics.cjs');
@@ -182,7 +183,9 @@ test('Runtime diagnostics distinguish transport, HTTP failure, protocol mismatch
 
 test('candidate App readiness exercises its exact browser-door health, CORS, handshake and realm contract', async () => {
   const f = fixture();
-  assert.equal(await f.io.candidateAppRuntimeReady(), true);
+  assert.deepEqual(await f.io.candidateAppRuntimeObservation(), {
+    ready: true, runtime_instance_id: 'runtime-1', realm_id: 'realm-1',
+  });
   assert.deepEqual(f.requests.map(({ url, method }) => [new URL(url).pathname, method]), [
     ['/api/runtime/v1/health', 'GET'],
     ['/api/runtime/v1/handshake', 'OPTIONS'],
@@ -200,6 +203,57 @@ test('candidate App readiness exercises its exact browser-door health, CORS, han
     assert.equal(await rejected.io.candidateAppRuntimeReady(), false, mode);
     assert.equal(rejected.notes.at(-1).category, 'not-ready', mode);
     await rejected.io.cleanup();
+  }
+});
+
+function servedAppObservation() {
+  return {
+    page: { origin: APP_RUNTIME.origin, build_status: 200, build_app: 'a'.repeat(40), build_release: 1 },
+    requests: {
+      health: { initiated_by_app: true, status: 200, body: {
+        status: 'ok', protocol: APP_RUNTIME.protocol, schema_digest: APP_RUNTIME.schema_digest,
+        runtime_instance_id: 'runtime-1',
+      } },
+      realm: { initiated_by_app: true, status: 200, body: { realm_id: 'realm-1' } },
+      handshake: { initiated_by_app: true, status: 200, request: {
+        protocol: APP_RUNTIME.protocol, client_name: APP_RUNTIME.client_name,
+        client_version: APP_RUNTIME.client_version, requested_scopes: [...APP_RUNTIME.requested_scopes],
+      }, body: {
+        protocol: APP_RUNTIME.protocol, schema_digest: APP_RUNTIME.schema_digest,
+        session_id: 'session-1', actor_id: 'astrid-product', realm_id: 'realm-1',
+        scopes: [...APP_RUNTIME.requested_scopes], capabilities: [APP_RUNTIME.capability],
+      } },
+    },
+  };
+}
+
+test('served candidate App observation binds its exact build to this Runtime interaction', () => {
+  const expected = {
+    appRuntime: APP_RUNTIME, appSha: 'a'.repeat(40),
+    expectedRuntimeInstanceId: 'runtime-1', expectedRealmId: 'realm-1',
+  };
+  assert.deepEqual(validateCandidateAppInteraction(servedAppObservation(), expected), {
+    app: 'a'.repeat(40), origin: APP_RUNTIME.origin, app_release: 1,
+    health: true, realm: true, handshake: true,
+    runtime_instance_digest: '168957e8d7dc810a091762d5cd16db9da1a4a817f39c580ed44cdd1bf8b87e7f',
+    realm_digest: '17961365c4a44198bfaa8ec85245cbc86498765e5f3b72e970a6973c4bb21ba0',
+  });
+});
+
+test('served candidate App observation rejects wrong, broken, or other-Runtime Apps', () => {
+  const expected = {
+    appRuntime: APP_RUNTIME, appSha: 'a'.repeat(40),
+    expectedRuntimeInstanceId: 'runtime-1', expectedRealmId: 'realm-1',
+  };
+  for (const [label, mutate] of [
+    ['wrong App', value => { value.page.build_app = 'b'.repeat(40); }],
+    ['broken App', value => { delete value.requests.handshake; }],
+    ['observer-authored request', value => { value.requests.health.initiated_by_app = false; }],
+    ['other Runtime', value => { value.requests.health.body.runtime_instance_id = 'runtime-2'; }],
+    ['other realm', value => { value.requests.realm.body.realm_id = 'realm-2'; }],
+  ]) {
+    const value = servedAppObservation(); mutate(value);
+    assert.throws(() => validateCandidateAppInteraction(value, expected), /served candidate App/i, label);
   }
 });
 
@@ -245,7 +299,7 @@ test('successful Start still requires explicit engine, runtime and application r
 
 test('publisher allows only timestamped fixed operation and category fields', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r21-observer-publish-'));
-  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
   try {
     const evidenceDir = path.join(root, 'evidence'); const destination = path.join(root, 'result'); fs.mkdirSync(evidenceDir);
     const put = last_operation => fs.writeFileSync(path.join(evidenceDir, 'r21-failure.json'), JSON.stringify({ category: 'timeout', last_operation }));
@@ -305,7 +359,7 @@ test('observer records the install socket failure through its real failure handl
     const request = path.join(root, 'request.json');
     fs.writeFileSync(request, JSON.stringify({ endpoint: ENDPOINT, tuple: TUPLE }));
     const observer = realSpawn(process.execPath, ['.github/venue/r21-observe.cjs', request, output], {
-      cwd: process.cwd(), stdio: 'ignore', env: { ...process.env, R21_APP_ROOT: root, R21_PTERM_ROOT: pterm, R21_VENUE_HOME: root },
+      cwd: process.cwd(), stdio: 'ignore', env: { ...process.env, R21_APP_ROOT: root, R21_PTERM_ROOT: pterm, R21_VENUE_HOME: root, R21_CHROME_PATH: process.execPath },
     });
     const result = await new Promise(resolve => observer.once('close', (code, signal) => resolve({ code, signal })));
     assert.deepEqual(result, { code: 1, signal: null });
@@ -331,7 +385,7 @@ exports.WebSocket = class extends EventTarget {
     fs.writeFileSync(path.join(pterm, 'index.js'), `if (process.argv[3] === 'pinokio/start.js') { require('fs').writeFileSync(process.env.TEST_START_PID, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); }`);
     const { ENDPOINT, TUPLE } = require('../.github/venue/r21-verify.cjs');
     const request = path.join(root, 'request.json'); fs.writeFileSync(request, JSON.stringify({ endpoint: ENDPOINT, tuple: TUPLE }));
-    const observer = realSpawn(process.execPath, ['.github/venue/r21-observe.cjs', request, output], { cwd: process.cwd(), stdio: 'ignore', env: { ...process.env, R21_APP_ROOT: root, R21_PTERM_ROOT: pterm, R21_VENUE_HOME: root, TEST_START_PID: path.join(root, 'start.pid') } });
+    const observer = realSpawn(process.execPath, ['.github/venue/r21-observe.cjs', request, output], { cwd: process.cwd(), stdio: 'ignore', env: { ...process.env, R21_APP_ROOT: root, R21_PTERM_ROOT: pterm, R21_VENUE_HOME: root, R21_CHROME_PATH: process.execPath, TEST_START_PID: path.join(root, 'start.pid') } });
     const timeout = setTimeout(() => observer.kill('SIGKILL'), 6000);
     const result = await new Promise(resolve => observer.once('close', (code, signal) => resolve({ code, signal })));
     clearTimeout(timeout);
@@ -349,7 +403,7 @@ exports.WebSocket = class extends EventTarget {
 test('publisher retains only a bound, reprojected first Install error', () => {
   const { createInstallDiagnostics } = require('../.github/venue/r21-observer-diagnostics.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r21-first-error-publish-'));
-  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1', GITHUB_RUN_ID: '101', GITHUB_RUN_ATTEMPT: '2', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1', GITHUB_RUN_ID: '101', GITHUB_RUN_ATTEMPT: '2', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
   try {
     const evidenceDir = path.join(root, 'evidence'); fs.mkdirSync(evidenceDir);
     const binding = { request_id: env.R21_REQUEST_ID, runner_ref: env.R21_RUNNER_REF, run_id: env.GITHUB_RUN_ID, run_attempt: env.GITHUB_RUN_ATTEMPT };
@@ -383,7 +437,7 @@ test('publisher retains only a bound, reprojected first Install error', () => {
 test('publisher retains bounded native Install event and PTerm facts on failure', () => {
   const { createInstallDiagnostics, INSTALL_TRACE_LIMIT } = require('../.github/venue/r21-observer-diagnostics.cjs');
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-install-publish-'));
-  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
   try {
     const input = path.join(root, 'evidence'); const destination = path.join(root, 'result');
     fs.mkdirSync(input);

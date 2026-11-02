@@ -34,6 +34,11 @@ function receipt() {
     retry: {
       action_id: 4, action_uri: ACTIONS.update, inner_exit: innerExit(), terminal: terminal(),
       installer_dispatch: true, installer_success: true, engine_error: false, launcher_failure: false, running_after: false, runtime_ready: true, application_ready: true, candidate_app_runtime_ready: true, start_running_after_retry: true, start_to_ready: true,
+      served_app_runtime: {
+        app: TUPLE.app, origin: APP_RUNTIME.origin, app_release: 1,
+        health: true, realm: true, handshake: true,
+        runtime_instance_digest: '1'.repeat(64), realm_digest: '2'.repeat(64),
+      },
     },
     cleanup: {
       action_id: 5, action_uri: ACTIONS.stop, inner_exit: innerExit(), terminal: terminal(),
@@ -97,10 +102,10 @@ test('R-21 venue verifier rejects a successful-looking wrapper with a nonzero in
 test('R-21 dispatch binding accepts only the exact product dispatch or self-serve venue ref', () => {
   const environment = {
     GITHUB_EVENT_NAME: 'push',
-    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1',
+    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1',
     GITHUB_SHA: 'a'.repeat(40),
     GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1',
     GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1',
   };
   const bound = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment);
@@ -116,8 +121,8 @@ test('R-21 dispatch binding accepts only the exact product dispatch or self-serv
   const manualEnvironment = {
     ...environment,
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-CURRENT-TUPLE-R1',
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-CURRENT-TUPLE-R1',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-FINDINGS-CLOSURE-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-FINDINGS-CLOSURE-R1',
   };
   const manualInput = { request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) };
   const manual = validateDispatch(manualInput, manualEnvironment);
@@ -141,9 +146,9 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-publisher-'));
   try {
     const environment = {
-      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1',
+      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1',
       GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1',
+      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1',
       GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: REQUEST_ID,
       R21_CONFIRMATION: CONFIRMATION, R21_RUNNER_REF: 'a'.repeat(40),
     };
@@ -234,6 +239,20 @@ test('R-21 requires accepted initial Install evidence', () => {
 test('R-21 requires candidate App-to-Runtime readiness after retry', () => {
   const value = receipt(); value.retry.candidate_app_runtime_ready = false;
   assert.throws(() => verifyReceipt(value), /App-to-Runtime/);
+});
+
+test('R-21 rejects wrong or broken served candidate App interactions', () => {
+  for (const mutate of [
+    value => { value.retry.served_app_runtime.app = '0'.repeat(40); },
+    value => { value.retry.served_app_runtime.origin = 'https://wrong.invalid'; },
+    value => { value.retry.served_app_runtime.health = false; },
+    value => { value.retry.served_app_runtime.handshake = false; },
+    value => { delete value.retry.served_app_runtime.realm_digest; },
+    value => { delete value.retry.served_app_runtime; },
+  ]) {
+    const value = receipt(); mutate(value);
+    assert.throws(() => verifyReceipt(value), /served candidate App/i);
+  }
 });
 
 test('R-21 rejects retry without positive installer completion or with failures', () => {

@@ -11,6 +11,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createTrace, actionPhase, createActionTracker, ptermExit, createInstallDiagnostics } = require('./r21-observer-diagnostics.cjs');
 const { createObserverIO } = require('./r21-observer-io.cjs');
+const { observeCandidateAppInteraction } = require('./r21-app-browser.cjs');
 const { digestProtectedState, installedTupleMatches } = require('./r21-protected-state.cjs');
 const {
   ACTIONS, APP_RUNTIME, ENDPOINT, FIRST_REFUSAL, TUPLE, verifyReceipt,
@@ -22,7 +23,8 @@ if (!requestPath || !output) throw new Error('usage: node r21-observe.cjs <reque
 const appRoot = process.env.R21_APP_ROOT;
 const ptermRoot = process.env.R21_PTERM_ROOT;
 const home = process.env.R21_VENUE_HOME;
-if (!appRoot || !ptermRoot || !home) throw new Error('R21_APP_ROOT, R21_PTERM_ROOT, and R21_VENUE_HOME are required');
+const chromePath = process.env.R21_CHROME_PATH;
+if (!appRoot || !ptermRoot || !home || !chromePath) throw new Error('R21_APP_ROOT, R21_PTERM_ROOT, R21_VENUE_HOME, and R21_CHROME_PATH are required');
 
 const { WebSocket } = require(path.join(ptermRoot, 'node_modules/unws'));
 const ACTION_TIMEOUT_MS = 20 * 60 * 1000;
@@ -57,7 +59,7 @@ const actionTracker = createActionTracker();
 let installDiagnostics = null;
 const io = createObserverIO({ WebSocket, fetch, spawn, appRoot, ptermRoot, home, endpoint: ENDPOINT, appRuntime: APP_RUNTIME,
   record: value => { trace.record(value); write('r21-observer-operation.json', trace.snapshot().at(-1)); } });
-const { openSocket, status, waitForReadiness, runtimeReady, applicationReady, candidateAppRuntimeReady, startOldLauncher } = io;
+const { openSocket, status, waitForReadiness, runtimeReady, applicationReady, candidateAppRuntimeObservation, startOldLauncher } = io;
 
 async function observeAction(label, script, timeoutMs = ACTION_TIMEOUT_MS) {
   const progressKey = actionPhase(label);
@@ -216,9 +218,18 @@ async function main() {
   await waitForReadiness();
   retry.runtime_ready = await runtimeReady();
   retry.application_ready = await applicationReady();
-  retry.candidate_app_runtime_ready = await candidateAppRuntimeReady();
+  const contract = await candidateAppRuntimeObservation();
+  if (contract.ready !== true) throw new Error('candidate App Runtime contract probe was not ready');
+  substage('candidate-app-browser');
+  retry.served_app_runtime = await observeCandidateAppInteraction({
+    spawn, chromePath, profileDir: path.join(home, '.r21-candidate-app-browser'),
+    appRuntime: APP_RUNTIME, appSha: TUPLE.app,
+    expectedRuntimeInstanceId: contract.runtime_instance_id, expectedRealmId: contract.realm_id,
+  });
+  retry.candidate_app_runtime_ready = true;
   retry.start_to_ready = retry.start_running_after_retry === true && retry.runtime_ready
-    && retry.application_ready && retry.candidate_app_runtime_ready;
+    && retry.application_ready && retry.candidate_app_runtime_ready
+    && retry.served_app_runtime?.health === true && retry.served_app_runtime?.handshake === true;
   substage('state-after-retry');
   const installedAfterRetry = await installedTupleMatches(appRoot, TUPLE);
   const afterRetry = await digestProtectedState(appRoot, home);

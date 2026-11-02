@@ -6,29 +6,50 @@ const path = require('node:path');
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
-async function digestTree(target) {
+async function digestTree(target, { requireRoot = false, bindLinks = false } = {}) {
   const hash = crypto.createHash('sha256');
-  async function visit(relative) {
-    const absolute = path.join(target, relative);
+  async function visit(absolute, relative, output, ancestors = new Set()) {
     let entry;
     try { entry = await fsp.lstat(absolute); }
     catch (error) {
-      if (error.code === 'ENOENT') { hash.update(`missing\0${relative}\0`); return; }
+      if (error.code === 'ENOENT' && !(requireRoot && relative === '')) {
+        output.update(`missing\0${relative}\0`); return;
+      }
+      if (error.code === 'ENOENT') throw new Error('protected tree root is missing');
       throw error;
     }
     if (entry.isDirectory()) {
-      hash.update(`directory\0${relative}\0`);
+      const real = await fsp.realpath(absolute);
+      if (ancestors.has(real)) throw new Error('protected tree contains a cyclic directory link');
+      const below = new Set(ancestors); below.add(real);
+      output.update(`directory\0${relative}\0`);
       const names = (await fsp.readdir(absolute)).sort();
-      for (const name of names) await visit(path.join(relative, name));
+      for (const name of names) await visit(path.join(absolute, name), path.join(relative, name), output, below);
     } else if (entry.isFile()) {
-      hash.update(`file\0${relative}\0${sha256(await fsp.readFile(absolute))}\0`);
+      output.update(`file\0${relative}\0${sha256(await fsp.readFile(absolute))}\0`);
     } else if (entry.isSymbolicLink()) {
-      hash.update(`symlink\0${relative}\0${await fsp.readlink(absolute)}\0`);
+      const link = await fsp.readlink(absolute);
+      if (!bindLinks) {
+        output.update(`symlink\0${relative}\0${link}\0`);
+        return;
+      }
+      let real;
+      try { real = await fsp.realpath(absolute); }
+      catch (error) {
+        if (error.code === 'ENOENT') throw new Error('protected installed tree contains a dangling link');
+        throw error;
+      }
+      const targetHash = crypto.createHash('sha256');
+      await visit(real, '', targetHash, ancestors);
+      // Bind both the link declaration and all bytes reached through it. The
+      // receipt publishes only this enclosing digest, never either path.
+      output.update(`symlink\0${relative}\0${link}\0${targetHash.digest('hex')}\0`);
     } else {
-      hash.update(`other\0${relative}\0`);
+      if (bindLinks) throw new Error('protected installed tree contains a non-file entry');
+      output.update(`other\0${relative}\0`);
     }
   }
-  await visit('');
+  await visit(path.resolve(target), '', hash);
   return hash.digest('hex');
 }
 
@@ -43,6 +64,55 @@ function selectedName(bytes) {
 function inside(parent, target) {
   const relative = path.relative(parent, target);
   return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+async function regular(pathname, label) {
+  let entry;
+  try { entry = await fsp.lstat(pathname); }
+  catch (error) {
+    if (error.code === 'ENOENT') throw new Error(`selected installed ${label} is missing`);
+    throw error;
+  }
+  if (entry.isSymbolicLink() || !entry.isFile()) throw new Error(`selected installed ${label} is not a regular file`);
+}
+
+async function selectedVersion(root, current) {
+  const name = selectedName(current);
+  const versionsRoot = path.resolve(root, 'versions');
+  const selectedRoot = path.resolve(versionsRoot, name);
+  if (!inside(versionsRoot, selectedRoot)) throw new Error('installed version escaped its versions root');
+  for (const [pathname, label] of [[versionsRoot, 'versions root'], [selectedRoot, 'version root']]) {
+    let entry;
+    try { entry = await fsp.lstat(pathname); }
+    catch (error) {
+      if (error.code === 'ENOENT') throw new Error(`selected installed ${label} is missing`);
+      throw error;
+    }
+    if (entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`selected installed ${label} is not a regular directory`);
+  }
+  const manifestPath = path.join(selectedRoot, 'manifest.json');
+  const versionPath = path.join(selectedRoot, 'version.json');
+  await regular(manifestPath, 'manifest');
+  await regular(versionPath, 'version record');
+  let record;
+  try { record = JSON.parse(await fsp.readFile(versionPath, 'utf8')); }
+  catch { throw new Error('selected installed version record cannot be read'); }
+  if (!record || typeof record !== 'object' || Array.isArray(record) || path.resolve(record.root || '') !== selectedRoot) {
+    throw new Error('selected installed version record does not bind its version root');
+  }
+  for (const [field, label] of [['python', 'Python'], ['profile', 'profile']]) {
+    if (typeof record[field] !== 'string' || !path.isAbsolute(record[field]) || !inside(selectedRoot, path.resolve(record[field]))) {
+      throw new Error(`selected installed ${label} escaped its version root`);
+    }
+    let target;
+    try { target = await fsp.stat(record[field]); }
+    catch (error) {
+      if (error.code === 'ENOENT') throw new Error(`selected installed ${label} is missing`);
+      throw error;
+    }
+    if (!target.isFile()) throw new Error(`selected installed ${label} target is not a file`);
+  }
+  return { name, versionsRoot, selectedRoot, manifestPath };
 }
 
 async function digestProtectedState(appRoot, home) {
@@ -62,10 +132,7 @@ async function digestProtectedState(appRoot, home) {
     if (error.code !== 'ENOENT') throw error;
     throw new Error('installed version selection cannot be read for protected-state observation');
   }
-  const name = selectedName(current);
-  const versionsRoot = path.resolve(root, 'versions');
-  const selectedRoot = path.resolve(versionsRoot, name);
-  if (!inside(versionsRoot, selectedRoot)) throw new Error('installed version escaped its versions root');
+  const { versionsRoot } = await selectedVersion(root, current);
   let dataRoot;
   try {
     const install = JSON.parse(await fsp.readFile(path.join(root, 'install.json'), 'utf8'));
@@ -79,7 +146,7 @@ async function digestProtectedState(appRoot, home) {
     selected_version: sha256(current),
     // Hash the complete installed versions tree, not only its pointer and
     // manifests. A refused first click must not stage or mutate any program byte.
-    installed_bytes: await digestTree(versionsRoot),
+    installed_bytes: await digestTree(versionsRoot, { requireRoot: true, bindLinks: true }),
     // Digests expose no paths, names, contents, timestamps, or raw logs.
     user_data: await digestTree(dataRoot),
   };
@@ -87,8 +154,8 @@ async function digestProtectedState(appRoot, home) {
 
 async function installedTupleMatches(appRoot, tuple) {
   const root = path.join(appRoot, 'app', 'astrid');
-  const name = selectedName(await fsp.readFile(path.join(root, 'current')));
-  const manifest = JSON.parse(await fsp.readFile(path.join(root, 'versions', name, 'manifest.json'), 'utf8'));
+  const selected = await selectedVersion(root, await fsp.readFile(path.join(root, 'current')));
+  const manifest = JSON.parse(await fsp.readFile(selected.manifestPath, 'utf8'));
   return manifest?.agent?.sha === tuple.agent && manifest?.runtime?.sha === tuple.runtime;
 }
 

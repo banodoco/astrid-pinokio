@@ -146,6 +146,8 @@ stage='verify-native-inputs'
 progress "$stage"
 test "$(git rev-parse HEAD)" = "$R21_RUNNER_REF"
 git merge-base --is-ancestor 3a6a98ae251ca126505245286e2d3e760f4348e9 HEAD
+chrome_path=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser)
+test -x "$chrome_path"
 test "$(git -C "$RUNNER_TEMP/pinokiod" rev-parse HEAD)" = 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf'
 test "$(git -C "$RUNNER_TEMP/pterm" rev-parse HEAD)" = '5be43718701c448b43daf0ce51d8935f170065bb'
 node .github/venue/r21-inputs.cjs --output "$request"
@@ -227,6 +229,7 @@ stage='run-r21-journey'
 progress "$stage"
 env HOME="$venue_home/user-home" XDG_DATA_HOME="$venue_home/data" PINOKIO_HOME="$venue_home" \
   R21_APP_ROOT="$app_root" R21_PTERM_ROOT="$RUNNER_TEMP/pterm" R21_VENUE_HOME="$venue_home" \
+  R21_CHROME_PATH="$chrome_path" \
   node .github/venue/r21-observe.cjs "$request" "$out"
 
 stage='complete'

@@ -10,6 +10,13 @@ const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const bool = value => value === true ? true : value === false ? false : null;
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : null;
 const number = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+const servedApp = source => source && typeof source === 'object' ? {
+  app: source.app === TUPLE.app ? TUPLE.app : null,
+  origin: source.origin === require('./r21-verify.cjs').APP_RUNTIME.origin ? source.origin : null,
+  app_release: source.app_release === 1 ? 1 : null,
+  health: bool(source.health), realm: bool(source.realm), handshake: bool(source.handshake),
+  runtime_instance_digest: hash(source.runtime_instance_digest), realm_digest: hash(source.realm_digest),
+} : null;
 const read = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 const action = source => source && typeof source === 'object' ? {
   action_id: number(source.action_id),
@@ -21,6 +28,7 @@ const action = source => source && typeof source === 'object' ? {
   running_after: bool(source.running_after), start_running_after: bool(source.start_running_after),
   daemon_idle: bool(source.daemon_idle), runtime_ready: bool(source.runtime_ready),
   application_ready: bool(source.application_ready), candidate_app_runtime_ready: bool(source.candidate_app_runtime_ready),
+  served_app_runtime: servedApp(source.served_app_runtime),
   start_running_after_retry: bool(source.start_running_after_retry), start_to_ready: bool(source.start_to_ready),
 } : null;
 const state = source => source && typeof source === 'object' ? {
@@ -52,7 +60,7 @@ function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
   const watchdog = read(path.join(watchdogDir, 'watchdog.json'));
   const substages = {
     setup: ['clone-pinokiod', 'checkout-pinokiod', 'install-pinokiod', 'clone-pterm', 'checkout-pterm', 'install-pterm'],
-    'run-r21-journey': ['install', 'initial-start-readiness', 'state-before', 'first-click', 'state-after-first-click', 'stop', 'retry', 'retry-start-readiness', 'state-after-retry', 'cleanup', 'verify-receipt'],
+    'run-r21-journey': ['install', 'initial-start-readiness', 'state-before', 'first-click', 'state-after-first-click', 'stop', 'retry', 'retry-start-readiness', 'candidate-app-browser', 'state-after-retry', 'cleanup', 'verify-receipt'],
   };
   const stages = ['setup','preflight','verify-native-inputs','retain-historical-launcher','verify-published-app-manifest','start-native-engine','run-r21-journey','complete'];
   const stage = stages.includes(snapshot?.stage) ? snapshot.stage : null;

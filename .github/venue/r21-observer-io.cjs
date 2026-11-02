@@ -127,24 +127,27 @@ function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot,
   const applicationReady = () => request('application', 'https://astrid.haus/?connect=1', applicationMs, response => response.ok, { redirect: 'follow' });
   const exactStrings = (actual, expected) => Array.isArray(actual) && actual.length === expected.length
     && [...actual].sort().every((value, index) => value === [...expected].sort()[index]);
-  async function candidateAppRuntimeReady() {
+  async function candidateAppRuntimeObservation() {
     const base = 'http://127.0.0.1:17340/api/runtime/v1';
     const origin = { Origin: appRuntime.origin };
     let realmId = null;
+    let runtimeInstanceId = null;
     const health = await request('app-runtime', `${base}/health`, applicationMs, async response => {
       const body = await response.json().catch(() => null);
-      return response.status === 200 && corsOrigin(response) && body?.status === 'ok'
+      const valid = response.status === 200 && corsOrigin(response) && body?.status === 'ok'
         && body?.protocol === appRuntime.protocol && body?.schema_digest === appRuntime.schema_digest
         && typeof body?.runtime_instance_id === 'string' && body.runtime_instance_id.length > 0;
+      if (valid) runtimeInstanceId = body.runtime_instance_id;
+      return valid;
     }, { headers: origin });
-    if (!health) return false;
+    if (!health) return { ready: false };
     const preflight = await request('app-runtime', `${base}/handshake`, applicationMs, response => {
       const methods = response.headers?.get?.('access-control-allow-methods') || '';
       const headers = response.headers?.get?.('access-control-allow-headers') || '';
       return response.ok && corsOrigin(response) && /(^|,)\s*POST\s*(,|$)/i.test(methods)
         && /(^|,)\s*content-type\s*(,|$)/i.test(headers);
     }, { method: 'OPTIONS', headers: { ...origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' } });
-    if (!preflight) return false;
+    if (!preflight) return { ready: false };
     const handshake = await request('app-runtime', `${base}/handshake`, applicationMs, async response => {
       const body = await response.json().catch(() => null);
       const forbidden = ['owner', 'astrid-pack-host', 'admin', 'worker'];
@@ -160,12 +163,14 @@ function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot,
       protocol: appRuntime.protocol, client_name: appRuntime.client_name,
       client_version: appRuntime.client_version, requested_scopes: appRuntime.requested_scopes,
     }) });
-    if (!handshake) return false;
-    return request('app-runtime', `${base}/realm`, applicationMs, async response => {
+    if (!handshake) return { ready: false };
+    const realm = await request('app-runtime', `${base}/realm`, applicationMs, async response => {
       const body = await response.json().catch(() => null);
       return response.status === 200 && corsOrigin(response) && body?.realm_id === realmId;
     }, { headers: origin });
+    return realm ? { ready: true, runtime_instance_id: runtimeInstanceId, realm_id: realmId } : { ready: false };
   }
+  const candidateAppRuntimeReady = async () => (await candidateAppRuntimeObservation()).ready;
   async function waitForReadiness() {
     const deadline = Date.now() + pollMs;
     while (!cancelled.signal.aborted && Date.now() < deadline) {
@@ -208,6 +213,6 @@ function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot,
     }));
   }
   return { openSocket, disposeSocket, status, waitForStatus, engineResourceReady, runtimeReady,
-    applicationReady, candidateAppRuntimeReady, waitForReadiness, startOldLauncher, cleanup };
+    applicationReady, candidateAppRuntimeObservation, candidateAppRuntimeReady, waitForReadiness, startOldLauncher, cleanup };
 }
 module.exports = { createObserverIO };

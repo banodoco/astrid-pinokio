@@ -39,8 +39,8 @@ const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
 // This lane is the dedicated diagnostic workflow source.  The product tuple
 // above remains the candidate under observation; this execution lane is never
 // substituted for its Pinokio product pin.
-const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-CURRENT-TUPLE-R1';
-const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1';
+const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-FINDINGS-CLOSURE-R1';
+const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-FINDINGS-CLOSURE-R1';
 const WORKFLOW_PATH = '.github/workflows/r21-real-engine.yml';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const ACTIONS = Object.freeze({
@@ -180,6 +180,15 @@ function verifyReceipt(receipt) {
       || retry.application_ready !== true || retry.candidate_app_runtime_ready !== true
       || retry.start_to_ready !== true) {
     fail('retry lacks independent Runtime, application, candidate App-to-Runtime, or Stop-to-Start readiness');
+  }
+  const served = object(retry.served_app_runtime, 'served candidate App-to-Runtime interaction');
+  equal(served.app, TUPLE.app, 'served candidate App build');
+  equal(served.origin, APP_RUNTIME.origin, 'served candidate App origin');
+  equal(served.app_release, 1, 'served candidate App release');
+  if (served.health !== true || served.realm !== true || served.handshake !== true
+      || !/^[a-f0-9]{64}$/.test(served.runtime_instance_digest || '')
+      || !/^[a-f0-9]{64}$/.test(served.realm_digest || '')) {
+    fail('served candidate App did not observably connect and handshake with this Runtime');
   }
   if (protectedState.before.user_data !== protectedState.after_retry?.user_data) {
     fail('retry changed the protected user-data digest');
