@@ -80,7 +80,10 @@ test('daemon and PTerm output capture is byte-bounded and redacts secrets split 
     assert.equal(stats.truncated, true);
     assert.doesNotMatch(output, /super-secret|credential=private/);
     assert.match(output, /\[REDACTED\]/);
-    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    // Node exposes POSIX mode bits on Unix; Windows reports inherited ACL-backed
+    // mode bits instead, so this check is not portable. Redaction and byte
+    // bounds above remain required on every platform.
+    if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
