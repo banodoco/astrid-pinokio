@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Local synthetic repositories and protocol fixtures; no live evidence."""
-import importlib.util
-import copy
 import contextlib
+import copy
+import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[1] / 'pinokio/providers/r24-linux.py'
@@ -35,6 +36,148 @@ def repo(path, files):
     cmd(path, 'add', '.')
     cmd(path, 'commit', '-qm', 'synthetic fixture')
     return cmd(path, 'rev-parse', 'HEAD')
+
+
+class InstalledContextTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = self.root / 'pinokio-home'
+        self.backend = self.home / 'api/astrid/app/astrid'
+        self.version = self.backend / 'versions/release-1'
+        self.version.mkdir(parents=True)
+        self.data = self.root / 'data'
+        self.data.mkdir()
+        (self.backend / 'install.json').write_text(json.dumps({
+            'owner': 'haus.astrid.runtime', 'managed_by': 'pinokio',
+            'data_root': str(self.data)}))
+        (self.backend / 'current').write_text('release-1\n')
+        self.profile = self.version / 'profile.json'
+        self.profile.write_text('{}')
+        self.manifest = json.dumps({
+            'release': 1,
+            'tools': {'python': {'version': '3.11.13'}},
+        }).encode()
+        (self.version / 'manifest.json').write_bytes(self.manifest)
+        self.lifecycle = self.home / 'api/astrid/pinokio/lifecycle.mjs'
+        self.lifecycle.parent.mkdir(parents=True)
+        self.lifecycle.write_bytes(b'fixture lifecycle')
+        self.bootstrap = self.root / 'xdg/astrid/bootstrap/python'
+        self.bootstrap.mkdir(parents=True)
+        self.binding = {'lifecycle_sha256': r24.sha(self.lifecycle.read_bytes())}
+
+    def write_record(self, python, **updates):
+        record = {'root': str(self.version), 'python': str(python),
+                  'profile': str(self.profile), 'env': {},
+                  'identity': {'release': 1, 'managed_by': 'pinokio'}}
+        record.update(updates)
+        (self.version / 'version.json').write_text(json.dumps(record))
+
+    def installed(self):
+        with patch.object(r24, 'BINDING', self.binding):
+            return r24.installed_context(
+                self.home, self.lifecycle, self.manifest, self.bootstrap)
+
+    def test_genuine_pinned_bootstrap_symlink_is_accepted_lexically(self):
+        target = (self.bootstrap / 'cpython-3.11.13-linux-x86_64-gnu'
+                  / 'bin/python3.11')
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b'pinned python')
+        python = self.version / 'py/bin/python'
+        python.parent.mkdir(parents=True)
+        try:
+            python.symlink_to(target)
+        except OSError as exc:
+            self.skipTest(f'symlinks unavailable: {exc}')
+        self.write_record(python)
+        installed = self.installed()
+        self.assertEqual(installed['python'], python)
+        self.assertEqual(installed['python_target'], target)
+        self.assertEqual(installed['python_sha256'], r24.sha(target.read_bytes()))
+
+    def test_normal_in_version_interpreter_is_accepted(self):
+        python = self.version / 'py/bin/python'
+        python.parent.mkdir(parents=True)
+        python.write_bytes(b'venv python')
+        self.write_record(python)
+        installed = self.installed()
+        self.assertEqual(installed['python'], python)
+        self.assertEqual(installed['python_target'], python)
+
+    def test_lexical_and_target_escapes_are_rejected(self):
+        pinned = (self.bootstrap / 'cpython-3.11.13-linux-x86_64-gnu'
+                  / 'bin/python3.11')
+        pinned.parent.mkdir(parents=True)
+        pinned.write_bytes(b'pinned python')
+        self.write_record(pinned)
+        with self.assertRaisesRegex(ValueError, 'installed path mismatch'):
+            self.installed()
+
+        external = self.root / 'external/python'
+        external.parent.mkdir()
+        external.write_bytes(b'external')
+        python = self.version / 'py/bin/python'
+        python.parent.mkdir(parents=True)
+        python.symlink_to(external)
+        self.write_record(python)
+        with self.assertRaisesRegex(ValueError, 'installed path mismatch'):
+            self.installed()
+
+    def test_parent_symlink_and_forged_bootstrap_shape_are_rejected(self):
+        real_py = self.version / 'real-py/bin'
+        real_py.mkdir(parents=True)
+        (real_py / 'python').write_bytes(b'in-version')
+        (self.version / 'py').symlink_to(self.version / 'real-py')
+        python = self.version / 'py/bin/python'
+        self.write_record(python)
+        with self.assertRaisesRegex(ValueError, 'installed path mismatch'):
+            self.installed()
+
+        (self.version / 'py').unlink()
+        shutil.rmtree(self.version / 'real-py')
+        python.parent.mkdir(parents=True)
+        wrong = self.bootstrap / 'cpython-3.11.12-linux-x86_64-gnu/bin/python3.11'
+        wrong.parent.mkdir(parents=True)
+        wrong.write_bytes(b'wrong pin')
+        python.symlink_to(wrong)
+        with self.assertRaisesRegex(ValueError, 'installed path mismatch'):
+            self.installed()
+
+        python.unlink()
+        malformed = self.bootstrap / 'cpython-3.11.13-forged/bin/python3.11'
+        malformed.parent.mkdir(parents=True)
+        malformed.write_bytes(b'forged shape')
+        python.symlink_to(malformed)
+        with self.assertRaisesRegex(ValueError, 'installed path mismatch'):
+            self.installed()
+
+        python.unlink()
+        external = self.root / 'two-hop-external'
+        external.write_bytes(b'external')
+        pinned = (self.bootstrap / 'cpython-3.11.13-linux-x86_64-gnu'
+                  / 'bin/python3.11')
+        pinned.parent.mkdir(parents=True, exist_ok=True)
+        pinned.symlink_to(external)
+        python.symlink_to(pinned)
+        with self.assertRaisesRegex(ValueError, 'installed path mismatch'):
+            self.installed()
+
+    def test_installer_python_root_comes_from_canonical_engine_environment(self):
+        engine_home = self.root / 'engine-home'
+        user_home = engine_home / 'user-home'
+        data_home = engine_home / 'xdg-data'
+        bootstrap = data_home / 'astrid/bootstrap/python'
+        user_home.mkdir(parents=True)
+        bootstrap.mkdir(parents=True)
+        environment = {b'HOME': os.fsencode(user_home),
+                       b'XDG_DATA_HOME': os.fsencode(data_home)}
+        self.assertEqual(r24.installer_python_root(environment, engine_home), bootstrap)
+        linked = engine_home / 'linked-xdg'
+        linked.symlink_to(data_home, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'invalid installer data home'):
+            r24.installer_python_root({b'HOME': os.fsencode(user_home),
+                                       b'XDG_DATA_HOME': os.fsencode(linked)}, engine_home)
 
 
 class ProviderTests(unittest.TestCase):
@@ -93,11 +236,12 @@ class ProviderTests(unittest.TestCase):
                         'stop': {'ref': refs['pinokio'], 'path': 'pinokio/stop.js', 'sha256': r24.sha(stop)},
                         'config_sha256': r24.sha(r24.canonical(self.config)), 'run_id': 'a' * 32}
         installed = {'backend_root': resource / 'app/astrid', 'version_root': resource,
-                     'python': node, 'python_sha256': r24.sha(node.read_bytes()), 'data_root': root}
+                     'python': node, 'python_target': node,
+                     'python_sha256': r24.sha(node.read_bytes()), 'data_root': root}
         engine_identity = {'pid': 123, 'boot_id': 'a' * 36, 'start_ticks': '7',
                            'port': 42000, 'node_sha256': r24.sha(node.read_bytes())}
         self.patches = [patch.object(r24, 'BINDING', self.binding), patch.object(r24, 'BASE', provider),
-                        patch.object(r24, 'proc_identity', return_value=engine_identity),
+                        patch.object(r24, 'proc_identity', return_value=(engine_identity, root / 'bootstrap')),
                         patch.object(r24, 'installed_context', return_value=installed)]
         for p in self.patches:
             p.start()
@@ -232,7 +376,8 @@ class ProviderTests(unittest.TestCase):
         connection.commit()
         connection.close()
         context = {'installed': {'data_root': data, 'backend_root': backend, 'version_root': version,
-                                 'python': (Path('/proc') / str(pid) / 'exe').resolve()},
+                                 'python': Path('/lexical/venv/bin/python'),
+                                 'python_target': (Path('/proc') / str(pid) / 'exe').resolve()},
                    'resource': resource}
         snapshot = r24.protected_snapshot(context)
         self.assertEqual(snapshot['runtime']['runtime_session_id'], runtime_session)

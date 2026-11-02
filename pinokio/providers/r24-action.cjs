@@ -20,13 +20,13 @@ function readControl(file) {
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) throw new Error('invalid control file');
   const value = JSON.parse(fs.readFileSync(file, 'utf8'));
   exact(value, ['schema', 'pterm', 'session', 'request_sha256', 'live_uri', 'stop_uri', 'lifecycle',
-    'lifecycle_sha256', 'backend_root', 'python', 'python_sha256', 'data_root', 'control_dir']);
+    'lifecycle_sha256', 'backend_root', 'python', 'python_target', 'python_sha256', 'data_root', 'control_dir']);
   if (value.schema !== 'astrid.r24.live-control.v1' || !HEX32.test(value.session) ||
       !HEX64.test(value.request_sha256) || !HEX64.test(value.lifecycle_sha256) || !HEX64.test(value.python_sha256)) {
     throw new Error('invalid control identity');
   }
   if (value.live_uri !== LIVE_URI || value.stop_uri !== STOP_URI) throw new Error('invalid engine endpoint');
-  for (const key of ['pterm', 'lifecycle', 'backend_root', 'python', 'data_root', 'control_dir']) {
+  for (const key of ['pterm', 'lifecycle', 'backend_root', 'python', 'python_target', 'data_root', 'control_dir']) {
     if (typeof value[key] !== 'string' || !path.isAbsolute(value[key])) throw new Error('invalid control path');
   }
   return value;
@@ -83,7 +83,7 @@ function inputFor(control, mode) {
   return { schema: 'astrid.r24.live-action-input.v1', mode, session: control.session,
     request_sha256: control.request_sha256, lifecycle: control.lifecycle,
     lifecycle_sha256: control.lifecycle_sha256, backend_root: control.backend_root,
-    python: control.python, python_sha256: control.python_sha256,
+    python: control.python, python_target: control.python_target, python_sha256: control.python_sha256,
     data_root: control.data_root, control_dir: control.control_dir };
 }
 function requestId(uri, session, phase) {

@@ -22,18 +22,25 @@ const digest = value => crypto.createHash('sha256').update(value).digest('hex');
   assert.equal(busy.blockers[0].task_id, 'task-1');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r24-action-'));
   try {
-    const lifecycle = path.join(root, 'lifecycle.mjs'), python = path.join(root, 'python'), controlDir = path.join(root, 'control');
-    fs.writeFileSync(lifecycle, 'fixture'); fs.writeFileSync(python, 'fixture'); fs.mkdirSync(controlDir);
+    const lifecycle = path.join(root, 'lifecycle.mjs'), pythonTarget = path.join(root, 'python-target');
+    const python = path.join(root, 'venv-python'), controlDir = path.join(root, 'control');
+    fs.writeFileSync(lifecycle, 'fixture'); fs.writeFileSync(pythonTarget, 'fixture');
+    fs.symlinkSync(pythonTarget, python); fs.mkdirSync(controlDir);
     const input = { schema: 'astrid.r24.live-action-input.v1', mode: 'probe', session,
       request_sha256: request, lifecycle, lifecycle_sha256: digest(fs.readFileSync(lifecycle)),
-      backend_root: root, python, python_sha256: digest(fs.readFileSync(python)), data_root: root, control_dir: controlDir };
+      backend_root: root, python, python_target: pythonTarget,
+      python_sha256: digest(fs.readFileSync(pythonTarget)), data_root: root, control_dir: controlDir };
     assert.equal((await live.execute({ input })).session, session);
+    input.python_target = path.join(root, 'forged-target');
+    await assert.rejects(live.execute({ input }));
+    input.python_target = pythonTarget;
     input.lifecycle_sha256 = '0'.repeat(64);
     await assert.rejects(live.execute({ input }));
     const full = { schema: 'astrid.r24.live-control.v1', pterm: root, session, request_sha256: request,
       live_uri: '~/api/astrid/pinokio/providers/r24-live-action.js', stop_uri: '~/api/astrid/pinokio/stop.js',
       lifecycle, lifecycle_sha256: digest(fs.readFileSync(lifecycle)),
-      backend_root: root, python, python_sha256: digest(fs.readFileSync(python)), data_root: root, control_dir: controlDir };
+      backend_root: root, python, python_target: pythonTarget,
+      python_sha256: digest(fs.readFileSync(pythonTarget)), data_root: root, control_dir: controlDir };
     const file = path.join(root, 'control.json'); fs.writeFileSync(file, JSON.stringify(full));
     assert.equal(readControl(file).session, session);
     assert.throws(() => requestId('/absolute/action.js', session, 'probe'));
@@ -58,5 +65,5 @@ const digest = value => crypto.createHash('sha256').update(value).digest('hex');
       closeOnStart: true, onObserverLost: () => assert.equal(socket.closeObserved, true) });
     assert.equal(fault.observer_lost, true);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
-  console.log('5 local action/control protocol fixtures passed');
+  console.log('7 local action/control protocol fixtures passed');
 })().catch(() => { console.error('action protocol fixture failed'); process.exitCode = 1; });

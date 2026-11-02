@@ -39,6 +39,19 @@ managed Runtime must already be installed under
 actual `running` or `cancel_requested` task. The producer does not create a
 synthetic task and will fail closed if genuine busy state is absent.
 
+The hosted installer environment is also bound to the authenticated daemon:
+`HOME` must be `pinokio_home/user-home` and `XDG_DATA_HOME` must be
+`pinokio_home/xdg-data`, both canonical runner-owned directories. The installed
+Agent record must retain the exact lexical Linux venv interpreter at
+`version_root/py/bin/python`, with an unlinked parent. A normal interpreter may
+resolve inside `version_root`; a symlink may resolve outside it only to the
+manifest-pinned uv target under
+`XDG_DATA_HOME/astrid/bootstrap/python/cpython-<pin>-linux-<machine>-gnu/bin/python<major>.<minor>`.
+The producer hashes and process-binds that resolved regular target but gives
+the lifecycle action the lexical venv path. Lexical escapes, parent links,
+wrong pins or platform shapes, linked bootstrap roots, target changes and
+two-hop escapes fail closed.
+
 The active task must have a claimed `execution_bindings` row whose
 `session_id` and `runtime_epoch` equal the selected realm's live
 `runtime_lifecycle` row. Runtime discovery, instance lock, catalog owner,

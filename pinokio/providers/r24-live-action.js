@@ -30,6 +30,14 @@ function regular(file) {
   return fs.readFileSync(file);
 }
 
+function installedPython(file, target) {
+  const stat = fs.lstatSync(file);
+  if ((!stat.isFile() && !stat.isSymbolicLink()) || fs.realpathSync(file) !== target) {
+    throw new Error('R-24 installed Python target mismatch.');
+  }
+  return regular(target);
+}
+
 function writeExclusive(directory, name, value) {
   const file = path.join(directory, name);
   const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL |
@@ -96,7 +104,7 @@ function controlledUnknownRunner(input) {
         waitForArm(input.control_dir, input.session, 10_000, () => {
           writeExclusive(input.control_dir, 'ready.json', {
             schema: 'astrid.r24.fault-ready.v1', session: input.session, pid: child.pid,
-            python_sha256: digest(regular(input.python))
+            python_sha256: digest(installedPython(input.python, input.python_target))
           });
         }).then(() => {
           armed = true;
@@ -129,17 +137,19 @@ function projectRefusal(error) {
 async function execute(request) {
   const input = request && request.input;
   exact(input, ['schema', 'mode', 'session', 'request_sha256', 'lifecycle', 'lifecycle_sha256',
-    'backend_root', 'python', 'python_sha256', 'data_root', 'control_dir']);
+    'backend_root', 'python', 'python_target', 'python_sha256', 'data_root', 'control_dir']);
   if (input.schema !== 'astrid.r24.live-action-input.v1' || !HEX32.test(input.session) ||
       !HEX64.test(input.request_sha256) || !HEX64.test(input.lifecycle_sha256) ||
       !HEX64.test(input.python_sha256) || !['probe', 'busy', 'unknown', 'restoration'].includes(input.mode)) {
     throw new Error('Invalid R-24 live action binding.');
   }
-  for (const key of ['lifecycle', 'backend_root', 'python', 'data_root', 'control_dir']) {
+  for (const key of ['lifecycle', 'backend_root', 'python', 'python_target', 'data_root', 'control_dir']) {
     if (typeof input[key] !== 'string' || !path.isAbsolute(input[key])) throw new Error('R-24 paths must be absolute.');
   }
   if (digest(regular(input.lifecycle)) !== input.lifecycle_sha256 ||
-      digest(regular(input.python)) !== input.python_sha256) throw new Error('R-24 live source identity mismatch.');
+      digest(installedPython(input.python, input.python_target)) !== input.python_sha256) {
+    throw new Error('R-24 live source identity mismatch.');
+  }
   if (input.mode === 'probe') {
     return { schema: 'astrid.r24.engine-binding.v1', session: input.session,
       request_sha256: input.request_sha256, mode: 'probe' };

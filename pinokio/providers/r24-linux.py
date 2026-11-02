@@ -4,13 +4,13 @@ import base64
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import secrets
 import signal
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 BASE = HERE.parent.parent
@@ -96,6 +96,25 @@ def regular(path):
     return path.read_bytes()
 
 
+def canonical_directory(path):
+    return path.is_absolute() and not path.is_symlink() and path.is_dir() \
+        and path.resolve(strict=True) == path and path.stat().st_uid == os.getuid()
+
+
+def installer_python_root(environment, engine_home):
+    """Bind uv's Python store to the live installer's inherited environment."""
+    expected_home = engine_home / 'user-home'
+    data_home = engine_home / 'xdg-data'
+    if environment.get(b'HOME') != os.fsencode(expected_home) \
+            or environment.get(b'XDG_DATA_HOME') != os.fsencode(data_home) \
+            or not canonical_directory(expected_home) or not canonical_directory(data_home):
+        raise ValueError('invalid installer data home')
+    root = data_home / 'astrid/bootstrap/python'
+    if not canonical_directory(root):
+        raise ValueError('invalid installer Python root')
+    return root
+
+
 def proc_identity(pid, node, daemon, engine):
     if type(pid) is not int or pid < 1:
         raise ValueError('invalid engine pid')
@@ -116,7 +135,9 @@ def proc_identity(pid, node, daemon, engine):
     for row in regular(proc / 'environ').split(b'\0'):
         if b'=' in row:
             key, value = row.split(b'=', 1)
-            if key == b'PINOKIO_HOME':
+            if key in (b'PINOKIO_HOME', b'HOME', b'XDG_DATA_HOME'):
+                if key in environment:
+                    raise ValueError('duplicate engine environment')
                 environment[key] = value
     if environment.get(b'PINOKIO_HOME') != os.fsencode(engine['pinokio_home']):
         raise ValueError('engine home mismatch')
@@ -131,11 +152,12 @@ def proc_identity(pid, node, daemon, engine):
              if (target := os.readlink(fd)).startswith('socket:[')}
     if not inodes or not inodes.intersection(owned):
         raise ValueError('engine listener ownership mismatch')
-    return {'pid': pid, 'boot_id': boot_id, 'start_ticks': engine['start_ticks'],
-            'port': engine['port'], 'node_sha256': sha(regular(node))}
+    identity = {'pid': pid, 'boot_id': boot_id, 'start_ticks': engine['start_ticks'],
+                'port': engine['port'], 'node_sha256': sha(regular(node))}
+    return identity, installer_python_root(environment, Path(engine['pinokio_home']))
 
 
-def installed_context(home, lifecycle, candidate_manifest):
+def installed_context(home, lifecycle, candidate_manifest, bootstrap_python):
     backend = home / 'api/astrid/app/astrid'
     install = decode(regular(backend / 'install.json'))
     if install.get('owner') != 'haus.astrid.runtime' or install.get('managed_by') != 'pinokio':
@@ -143,23 +165,49 @@ def installed_context(home, lifecycle, candidate_manifest):
     version = regular(backend / 'current').decode().strip()
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', version):
         raise ValueError('invalid installed version')
-    version_root = (backend / 'versions' / version).resolve(strict=True)
+    version_path = backend / 'versions' / version
+    if not canonical_directory(version_path):
+        raise ValueError('installed path mismatch')
+    version_root = version_path.resolve(strict=True)
     record = decode(regular(version_root / 'version.json'))
     record_root = Path(record['root']).resolve(strict=True)
-    python = Path(record['python']).resolve(strict=True)
+    python = Path(record['python'])
+    expected_python = version_root / 'py/bin/python'
+    if python != expected_python or not canonical_directory(python.parent):
+        raise ValueError('installed path mismatch')
+    python_target = python.resolve(strict=True)
+    python_bytes = regular(python_target)
     profile = Path(record['profile']).resolve(strict=True)
     data = Path(install['data_root']).resolve(strict=True)
+    candidate = decode(candidate_manifest)
+    python_version = candidate.get('tools', {}).get('python', {}).get('version')
+    if not isinstance(python_version, str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', python_version):
+        raise ValueError('invalid installer Python version')
+    major_minor = '.'.join(python_version.split('.')[:2])
+    target_allowed = version_root in python_target.parents
+    if not target_allowed:
+        if not canonical_directory(bootstrap_python):
+            raise ValueError('installed path mismatch')
+        try:
+            target_parts = python_target.relative_to(bootstrap_python).parts
+        except ValueError:
+            target_parts = ()
+        machines = {'amd64': 'x86_64', 'arm64': 'aarch64'}
+        machine = machines.get(os.uname().machine.lower(), os.uname().machine.lower())
+        target_allowed = len(target_parts) == 3 \
+            and target_parts[0] == 'cpython-' + python_version + '-linux-' + machine + '-gnu' \
+            and target_parts[1:] == ('bin', 'python' + major_minor)
     if record_root != version_root or record.get('identity') != {'release': 1, 'managed_by': 'pinokio'} \
-            or version_root not in python.parents or version_root not in profile.parents \
+            or not target_allowed or version_root not in profile.parents \
             or not data.is_dir() or data.is_symlink():
         raise ValueError('installed path mismatch')
     installed_manifest = regular(version_root / 'manifest.json')
-    if decode(installed_manifest) != decode(candidate_manifest):
+    if decode(installed_manifest) != candidate:
         raise ValueError('installed manifest mismatch')
     if sha(regular(lifecycle)) != BINDING['lifecycle_sha256']:
         raise ValueError('lifecycle source mismatch')
     return {'backend_root': backend, 'version_root': version_root, 'python': python,
-            'python_sha256': sha(regular(python)), 'profile': profile,
+            'python_target': python_target, 'python_sha256': sha(python_bytes), 'profile': profile,
             'profile_sha256': sha(regular(profile)), 'data_root': data,
             'manifest_sha256': sha(installed_manifest)}
 
@@ -246,8 +294,8 @@ def validate(request, config):
     scratch = Path(config['scratch_root']).resolve(strict=True) if isinstance(config['scratch_root'], str) else Path('.')
     if not scratch.is_absolute() or scratch.is_symlink() or not scratch.is_dir() or scratch.stat().st_uid != os.getuid():
         raise ValueError('invalid scratch root')
-    identity = proc_identity(engine['pid'], node, daemon, engine)
-    installed = installed_context(home, resource / 'pinokio/lifecycle.mjs', manifest)
+    identity, bootstrap_python = proc_identity(engine['pid'], node, daemon, engine)
+    installed = installed_context(home, resource / 'pinokio/lifecycle.mjs', manifest, bootstrap_python)
     return {'roots': roots, 'pterm': pterm, 'node': node, 'daemon': daemon, 'home': home,
             'resource': resource, 'scratch': scratch, 'engine': identity, 'installed': installed}
 
@@ -483,7 +531,7 @@ def protected_snapshot(context):
     proc = Path('/proc') / str(discovery['pid'])
     stat_text = regular(proc / 'stat').decode()
     stat_fields = stat_text[stat_text.rfind(')') + 2:].split()
-    if len(stat_fields) < 20 or (proc / 'exe').resolve() != installed['python']:
+    if len(stat_fields) < 20 or (proc / 'exe').resolve() != installed['python_target']:
         raise ValueError('Runtime process mismatch')
     birth = discovery['process_birth_id']
     boot_id = regular(Path('/proc/sys/kernel/random/boot_id')).decode().strip()
@@ -569,7 +617,8 @@ def collect_authenticated(request, session, context):
         'stop_uri': '~/api/astrid/pinokio/stop.js',
         'lifecycle': str(context['resource'] / 'pinokio/lifecycle.mjs'),
         'lifecycle_sha256': BINDING['lifecycle_sha256'], 'backend_root': str(installed['backend_root']),
-        'python': str(installed['python']), 'python_sha256': installed['python_sha256'],
+        'python': str(installed['python']), 'python_target': str(installed['python_target']),
+        'python_sha256': installed['python_sha256'],
         'data_root': str(installed['data_root']), 'control_dir': str(control_dir)}
     control_path = control_dir / 'control.json'
     fd = os.open(control_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
