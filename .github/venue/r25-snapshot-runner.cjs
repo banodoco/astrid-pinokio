@@ -160,8 +160,10 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
     await new Promise(resolve => setTimeout(resolve, 500));
     return { script, inner_exit: innerExit, terminal, first_error: firstError, status_after: await io.status(path.join(appRoot, script), `${action}-status`) };
   } finally {
-    diagnostic?.shell?.(path.join(appRoot, '_r25-setup-shell-diagnostics.jsonl'));
+    const shellDiagnosticFile = path.join(appRoot, '_r25-setup-shell-diagnostics.jsonl');
+    diagnostic?.shell?.(shellDiagnosticFile);
     await terminateChild(child);
+    diagnostic?.shell?.(shellDiagnosticFile);
     io.disposeSocket(socket);
   }
 }
