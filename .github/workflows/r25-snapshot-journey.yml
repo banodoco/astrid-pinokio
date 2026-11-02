@@ -1,0 +1,145 @@
+name: R-25 authenticated six-action snapshot journey
+
+on:
+  push:
+    branches:
+      - lane/M-PIN/R-25-MACOS-SNAPSHOT-SESSION-R1
+  workflow_dispatch:
+    inputs:
+      agent_ref:
+        description: Immutable Agent snapshot collector commit
+        required: true
+        default: a6b68d5b5478326a4db1971966d33a2cfe61d091
+        type: string
+      slot_id:
+        description: Hosted platform slot
+        required: true
+        default: pinokio-fully-local-macos
+        type: choice
+        options: [pinokio-fully-local-macos]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  macos-six-action:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.slot_id == 'pinokio-fully-local-macos')
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      AGENT_REF: ${{ github.event_name == 'push' && 'a6b68d5b5478326a4db1971966d33a2cfe61d091' || inputs.agent_ref }}
+      SLOT_ID: ${{ github.event_name == 'push' && 'pinokio-fully-local-macos' || inputs.slot_id }}
+      R25_TARGET_OS: macos
+      R25_SLOT_ID: ${{ github.event_name == 'push' && 'pinokio-fully-local-macos' || inputs.slot_id }}
+      R25_LAUNCHD_TARGET: gui/501/haus.astrid.runtime
+      PINOKIOD_REF: add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
+      PTERM_REF: 5be43718701c448b43daf0ce51d8935f170065bb
+      R25_TUPLE_JSON: >-
+        {"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","artifacts":{"public/install":"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d","public/install.sh":"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285","public/install.ps1":"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"},"published_at":"2026-11-02T17:55:27Z"}
+    steps:
+      - name: Preserve exact Git blob bytes on macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Materialize exact Agent collector source
+        shell: bash
+        env:
+          AGENT_ROOT: ${{ runner.temp }}/astrid-agent
+        run: |
+          set -euo pipefail
+          test "$AGENT_REF" = 'a6b68d5b5478326a4db1971966d33a2cfe61d091'
+          git clone --filter=blob:none --no-checkout https://github.com/banodoco/astrid-agent.git "$AGENT_ROOT"
+          git -C "$AGENT_ROOT" fetch --no-tags --depth=1 origin "$AGENT_REF"
+          git -C "$AGENT_ROOT" config core.autocrlf false
+          git -C "$AGENT_ROOT" config core.eol lf
+          git -C "$AGENT_ROOT" checkout --detach FETCH_HEAD
+          test "$(git -C "$AGENT_ROOT" rev-parse HEAD)" = "$AGENT_REF"
+      - name: Materialize pinned native engine dependencies
+        shell: bash
+        env:
+          PINOKIOD_ROOT: ${{ runner.temp }}/pinokiod
+          PTERM_ROOT: ${{ runner.temp }}/pterm
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/pinokiocomputer/pinokiod.git "$PINOKIOD_ROOT"
+          git -C "$PINOKIOD_ROOT" fetch --no-tags --depth=1 origin "$PINOKIOD_REF"
+          git -C "$PINOKIOD_ROOT" config core.autocrlf false
+          git -C "$PINOKIOD_ROOT" config core.eol lf
+          git -C "$PINOKIOD_ROOT" checkout --detach FETCH_HEAD
+          test "$(git -C "$PINOKIOD_ROOT" rev-parse HEAD)" = "$PINOKIOD_REF"
+          npm ci --omit=dev --prefix "$PINOKIOD_ROOT" --silent
+          git clone --filter=blob:none --no-checkout https://github.com/pinokiocomputer/pterm.git "$PTERM_ROOT"
+          git -C "$PTERM_ROOT" fetch --no-tags --depth=1 origin "$PTERM_REF"
+          git -C "$PTERM_ROOT" config core.autocrlf false
+          git -C "$PTERM_ROOT" config core.eol lf
+          git -C "$PTERM_ROOT" checkout --detach FETCH_HEAD
+          test "$(git -C "$PTERM_ROOT" rev-parse HEAD)" = "$PTERM_REF"
+          npm ci --omit=dev --prefix "$PTERM_ROOT" --silent
+      - name: Validate immutable sources and focused route checks
+        shell: bash
+        env:
+          AGENT_ROOT: ${{ runner.temp }}/astrid-agent
+        run: |
+          set -euo pipefail
+          assert_git_blob_bytes() {
+            local root="$1" relative="$2" blob actual
+            blob="$(git -C "$root" rev-parse "HEAD:$relative")"
+            actual="$(git -C "$root" hash-object --no-filters -- "$relative")"
+            test "$actual" = "$blob" || { echo "Git blob bytes changed after checkout: $root $relative ($actual != $blob)" >&2; return 1; }
+          }
+          assert_git_blob_bytes "$GITHUB_WORKSPACE" pinokio/providers/r25-snapshot-macos.cjs
+          assert_git_blob_bytes "$GITHUB_WORKSPACE" pinokio/providers/r25-snapshot-windows.cjs
+          assert_git_blob_bytes "$AGENT_ROOT" scripts/pinokio_snapshot_collector.py
+          assert_git_blob_bytes "$AGENT_ROOT" scripts/pinokio_snapshot_macos.py
+          assert_git_blob_bytes "$AGENT_ROOT" scripts/pinokio_snapshot_windows.py
+          node pinokio/providers/r25-native-collector-binding.cjs \
+            --validate-source-only true --agent-ref "$AGENT_REF" \
+            --agent-root "$AGENT_ROOT" --pinokio-root "$GITHUB_WORKSPACE"
+          node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-macos.test.cjs
+          python -m py_compile \
+            "$AGENT_ROOT/scripts/pinokio_snapshot_collector.py" \
+            "$AGENT_ROOT/scripts/pinokio_snapshot_macos.py"
+          node --check .github/venue/r25-snapshot-runner.cjs
+      - name: Run real six-action macOS session
+        shell: bash
+        env:
+          AGENT_ROOT: ${{ runner.temp }}/astrid-agent
+          PINOKIOD_ROOT: ${{ runner.temp }}/pinokiod
+          PTERM_ROOT: ${{ runner.temp }}/pterm
+          PYTHON: python
+          R25_OUTPUT: ${{ runner.temp }}/r25-snapshot-output
+          R25_DIAGNOSTICS: ${{ runner.temp }}/r25-diagnostics
+        run: |
+          set -euo pipefail
+          node .github/venue/r25-snapshot-runner.cjs \
+            --agent-root "$AGENT_ROOT" --pinokiod "$PINOKIOD_ROOT" \
+            --pterm "$PTERM_ROOT" --output "$R25_OUTPUT"
+      - name: Retain authenticated R-25 snapshot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r25-snapshots-pinokio-fully-local-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/r25-snapshot-output
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Retain bounded failure and inner-exit diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r25-snapshot-diagnostics-pinokio-fully-local-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/r25-diagnostics
+          if-no-files-found: warn
+          retention-days: 30
