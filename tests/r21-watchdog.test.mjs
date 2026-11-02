@@ -49,9 +49,9 @@ exec "$R21_REAL_NODE" "$@"
       const env = {
         ...process.env, PATH: `${bin}:${process.env.PATH}`, R21_REAL_NODE: process.execPath, RUNNER_TEMP: root,
         GITHUB_OUTPUT: output, R21_FAKE_PHASE: phase, R21_CHILD_PID: path.join(root, 'child.pid'),
-        GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1',
+        GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3',
         GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-        GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1',
+        GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3',
         GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1',
         R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40),
       };

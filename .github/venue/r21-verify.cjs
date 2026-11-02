@@ -40,7 +40,7 @@ const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
 // above remains the candidate under observation; this execution lane is never
 // substituted for its Pinokio product pin.
 const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-INSTALL-ABSENT-DIAG-R1';
-const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1';
+const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3';
 const WORKFLOW_PATH = '.github/workflows/r21-real-engine.yml';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const ACTIONS = Object.freeze({

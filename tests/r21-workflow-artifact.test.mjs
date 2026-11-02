@@ -4,6 +4,11 @@ import test from 'node:test';
 
 test('R-21 always uploads only the named bounded diagnostic evidence', () => {
   const workflow = fs.readFileSync('.github/workflows/r21-real-engine.yml', 'utf8');
+  const venue = 'venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3';
+  assert.match(workflow, new RegExp(`^on:\\n  push:\\n    branches:\\n      - ${venue}$`, 'm'));
+  assert.match(workflow, /R21_REQUEST_ID: \$\{\{ github\.event_name == 'push' && 'R-21-PUBLISHED-TUPLE-R1' \|\| inputs\.request_id \}\}/);
+  assert.match(workflow, /R21_RUNNER_REF: \$\{\{ github\.event_name == 'push' && github\.sha \|\| inputs\.runner_ref \|\| github\.sha \}\}/);
+  assert.match(workflow, /GITHUB_WORKFLOW_SHA: \$\{\{ github\.workflow_sha \}\}/);
   const uploads = [...workflow.matchAll(/^      - name: Upload bounded R-21 diagnostic evidence\n(?:(?!      - ).*\n?)*/gm)];
   assert.equal(uploads.length, 1);
   assert.equal((workflow.match(/uses:\s*actions\/upload-artifact@/g) || []).length, 1);
