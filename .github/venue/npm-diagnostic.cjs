@@ -13,10 +13,17 @@ const errnoNames = new Set([...Object.keys(require('node:os').constants.errno),
 function diagnose(log, lock) {
   const codes = new Set();
   const packages = new Set();
+  const messages = new Set();
   const entries = Object.entries(lock.packages || {}).filter(([key, value]) =>
     /^(?:node_modules\/(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+\/)*node_modules\/(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/.test(key) &&
     typeof value.version === 'string' && /^[0-9][a-zA-Z0-9.+_-]{0,63}$/.test(value.version));
   for (const line of log.split(/\r?\n/)) {
+    const message = /^npm (?:ERR!|error) (.+)$/.exec(line);
+    if (message && !/^(?:code|errno|path|command|cwd|lifecycle|complete log|stack)\b/i.test(message[1]) &&
+      !/https?:\/\//i.test(message[1])) {
+      const bounded = message[1].replace(/[A-Za-z]:[\\/][^ ]+|\/(?:[^ ]+\/)+[^ ]+/g, '<path>').slice(0, 240);
+      if (bounded) messages.add(bounded);
+    }
     const code = /^npm (?:ERR!|error) (code|errno) (-?[A-Z0-9_]{1,32})\s*$/.exec(line);
     if (code && (errnoNames.has(code[2]) ||
       (/^-?[0-9]{1,5}$/.test(code[2]) && Math.abs(Number(code[2])) <= 65535))) {
@@ -33,7 +40,8 @@ function diagnose(log, lock) {
     }
   }
   return [...[...packages].sort().slice(0, 10).map(p => `package=${p}`),
-    ...[...codes].sort().slice(0, 10)].join('\n');
+    ...[...codes].sort().slice(0, 10),
+    ...[...messages].slice(0, 3).map(message => `message=${message}`)].join('\n');
 }
 
 if (require.main === module) {

@@ -22,3 +22,13 @@ test('handles scoped packages without retaining untrusted paths', () => {
     'package=@scope/native@1.2.3\ncode=ENOENT');
   assert.equal(diagnose('npm error path /token/node_modules/unknown\nnpm error code https://secret', lock), '');
 });
+
+test('retains a bounded npm error message without paths or URLs', () => {
+  const log = ['npm error code 1',
+    'npm error path C:\\runner\\node_modules\\better-sqlite3',
+    'npm error gyp ERR! configure error',
+    'npm error command https://user:password@example.invalid/token',
+    'npm error build failed at /private/runner/build.js'].join('\n');
+  assert.equal(diagnose(log, lock),
+    'package=better-sqlite3@12.11.1\ncode=1\nmessage=gyp ERR! configure error\nmessage=build failed at <path>');
+});
