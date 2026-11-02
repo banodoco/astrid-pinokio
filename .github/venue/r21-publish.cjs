@@ -1,0 +1,105 @@
+'use strict';
+
+// Only explicitly typed, non-secret observations are allowed into the result ref.
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { TRACE_LIMIT, projectOperation, projectActionFailure, projectInstallEvidence } = require('./r21-observer-diagnostics.cjs');
+const { validateDispatch, verifyReceipt, TUPLE, ENDPOINT, REQUEST_ID } = require('./r21-verify.cjs');
+const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+const bool = value => value === true ? true : value === false ? false : null;
+const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : null;
+const number = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+const read = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+const action = source => source && typeof source === 'object' ? {
+  action_id: number(source.action_id),
+  action_uri: Object.values(require('./r21-verify.cjs').ACTIONS).includes(source.action_uri) ? source.action_uri : null,
+  inner_exit: source.inner_exit && typeof source.inner_exit === 'object' ? { code: number(source.inner_exit.code), signal: source.inner_exit.signal === null ? null : 'non-null' } : null,
+  terminal: { stop: bool(source.terminal?.stop), disconnect: bool(source.terminal?.disconnect), expected_refusal: bool(source.terminal?.expected_refusal) },
+  installer_dispatch: bool(source.installer_dispatch), installer_success: bool(source.installer_success),
+  engine_error: bool(source.engine_error), launcher_failure: bool(source.launcher_failure), stopped: bool(source.stopped), lock_free: bool(source.lock_free),
+  running_after: bool(source.running_after), start_running_after: bool(source.start_running_after),
+  daemon_idle: bool(source.daemon_idle), runtime_ready: bool(source.runtime_ready),
+  application_ready: bool(source.application_ready), start_running_after_retry: bool(source.start_running_after_retry), start_to_ready: bool(source.start_to_ready),
+} : null;
+const state = source => source && typeof source === 'object' ? {
+  program: hash(source.program), selected_version: hash(source.selected_version), user_data: hash(source.user_data),
+} : null;
+function projectReceipt(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    schema: raw.schema === 1 ? 1 : null,
+    request_id: raw.request_id === REQUEST_ID ? REQUEST_ID : null,
+    endpoint: raw.endpoint === ENDPOINT ? ENDPOINT : null,
+    tuple: Object.fromEntries(Object.entries(TUPLE).map(([k, v]) => [k, raw.tuple?.[k] === v ? v : null])),
+    installed_tuple: { before: bool(raw.installed_tuple?.before), after_retry: bool(raw.installed_tuple?.after_retry) },
+    first_click: action(raw.first_click), stop: action(raw.stop), retry: action(raw.retry), cleanup: action(raw.cleanup),
+    protected_state: { before: state(raw.protected_state?.before), after_first_click: state(raw.protected_state?.after_first_click), after_retry: state(raw.protected_state?.after_retry) },
+  };
+}
+function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
+  const request = validateDispatch({ request_id: env.R21_REQUEST_ID, confirmation: env.R21_CONFIRMATION, runner_ref: env.R21_RUNNER_REF }, env);
+  if (!/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID || '') || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT || '')) throw new Error('numeric run identity required');
+  if (env.GITHUB_WORKFLOW_SHA !== env.GITHUB_SHA) throw new Error('workflow SHA must equal runner SHA');
+  for (const code of [setupExit, journeyExit]) if (code !== null && (!Number.isInteger(code) || code < 0 || code > 255)) throw new Error('invalid inner exit');
+  const receipt = projectReceipt(read(path.join(evidenceDir, 'r21-receipt.json')));
+  const progress = read(path.join(evidenceDir, 'r21-progress.json'));
+  const watchdogDir = env.RUNNER_TEMP ? path.join(env.RUNNER_TEMP, 'r21-watchdog') : '';
+  const snapshot = read(path.join(watchdogDir, 'progress.json'));
+  const watchdog = read(path.join(watchdogDir, 'watchdog.json'));
+  const substages = {
+    setup: ['clone-pinokiod', 'checkout-pinokiod', 'install-pinokiod', 'clone-pterm', 'checkout-pterm', 'install-pterm'],
+    'run-r21-journey': ['install', 'initial-start-readiness', 'state-before', 'first-click', 'state-after-first-click', 'stop', 'retry', 'retry-start-readiness', 'state-after-retry', 'cleanup', 'verify-receipt'],
+  };
+  const stages = ['setup','preflight','verify-native-inputs','retain-historical-launcher','verify-published-app-manifest','start-native-engine','run-r21-journey','complete'];
+  const stage = stages.includes(snapshot?.stage) ? snapshot.stage : null;
+  const lastProgress = { stage, substage: substages[stage]?.includes(snapshot?.substage) ? snapshot.substage : null,
+    elapsed_ms: number(snapshot?.elapsed_ms) };
+  const execution = { timed_out: bool(watchdog?.timed_out), elapsed_ms: number(watchdog?.elapsed_ms),
+    exit_code: number(watchdog?.exit_code) };
+  let accepted = false;
+  let reason = 'journey_receipt_missing';
+  if (receipt) {
+    try {
+      for (const key of ['before', 'after_first_click', 'after_retry']) {
+        if (!Object.values(receipt.protected_state[key] || {}).length || Object.values(receipt.protected_state[key]).some(value => !value)) throw new Error('protected_state digest missing');
+      }
+      verifyReceipt(receipt);
+      if (setupExit !== 0 || journeyExit !== 0 || execution.timed_out !== false || execution.exit_code !== 0 || execution.elapsed_ms === null) throw new Error('inner exit missing or nonzero');
+      accepted = true; reason = null;
+    } catch (error) { reason = error.message; }
+  }
+  // Errors from the verifier are fixed strings, except JSON.stringify of an
+  // expected constant; never publish exception text from engine or user data.
+  const verdict = { schema: 1, status: accepted ? 'ACCEPTED' : 'FAILED', reason,
+    setup_exit: setupExit, journey_exit: journeyExit, progress: lastProgress, watchdog: execution,
+    action_inner_exits: Object.fromEntries(['install', 'first_click', 'stop', 'retry', 'cleanup'].map(k => [k, receipt?.[k]?.inner_exit || action(progress?.[k])?.inner_exit || null])),
+    workflow_sha: env.GITHUB_WORKFLOW_SHA, run_id: env.GITHUB_RUN_ID, run_attempt: env.GITHUB_RUN_ATTEMPT };
+  fs.mkdirSync(destination, { recursive: true });
+  const files = { 'request.json': request, 'verdict.json': verdict };
+  if (receipt) files['r21-receipt.json'] = receipt;
+  const failure = read(path.join(evidenceDir, 'r21-runner-failure.json'));
+  if (failure && stages.includes(failure.stage)) files['runner-failure.json'] = { schema: 1, status: 'blocked', stage: failure.stage };
+  const installDiagnostics = read(path.join(evidenceDir, 'r21-install-diagnostics.json'));
+  const diagnosticBinding = { request_id: request.request_id, runner_ref: request.runner_ref,
+    run_id: env.GITHUB_RUN_ID, run_attempt: env.GITHUB_RUN_ATTEMPT };
+  if (installDiagnostics && Object.entries(diagnosticBinding).every(([key, value]) => installDiagnostics.binding?.[key] === value)) {
+    files['install-diagnostics.json'] = projectInstallEvidence(installDiagnostics, diagnosticBinding);
+  }
+  const obsFailure = read(path.join(evidenceDir, 'r21-failure.json'));
+  if (obsFailure && ['timeout','engine-or-observer'].includes(obsFailure.category)) {
+    const trace = Array.isArray(obsFailure.readiness_trace) ? obsFailure.readiness_trace.slice(-TRACE_LIMIT).map(projectOperation).filter(Boolean) : [];
+    files['observer-failure.json'] = { schema: 1, status: 'blocked', category: obsFailure.category,
+      action_failure: projectActionFailure(obsFailure.action_failure), last_operation: projectOperation(obsFailure.last_operation), readiness_trace: trace };
+  }
+  for (const [name, data] of Object.entries(files)) fs.writeFileSync(path.join(destination, name), `${JSON.stringify(data, null, 2)}\n`);
+  const sums = Object.keys(files).sort().map(name => `${digest(fs.readFileSync(path.join(destination, name)))}  ${name}`).join('\n') + '\n';
+  fs.writeFileSync(path.join(destination, 'SHA256SUMS'), sums);
+  return verdict;
+}
+module.exports = { projectReceipt, publish };
+if (require.main === module) {
+  const parseExit = value => typeof value === 'string' && /^(0|[1-9][0-9]{0,2})$/.test(value) ? Number(value) : null;
+  const verdict = publish({ env: process.env, evidenceDir: process.argv[2], destination: process.argv[3], setupExit: parseExit(process.argv[4]), journeyExit: parseExit(process.argv[5]) });
+  process.stdout.write(`${verdict.status}\n`);
+}
