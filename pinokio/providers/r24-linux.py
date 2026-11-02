@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import subprocess
 import sys
 
@@ -145,32 +146,84 @@ def invoke_action(node, pterm, uri):
     return subprocess.run([str(node), str(HERE / 'r24-action.cjs'), str(pterm), uri], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=130, check=False)
 
 
+def serialize_success(request, session, observations):
+    """Serialize already authenticated observations; never authenticates them.
+
+    This is an internal boundary, not an input API. The collector must establish
+    invocation, source and custody authenticity before returning these records.
+    """
+    match(session, HEX32)
+    request_sha = sha(canonical(request))
+    match(request['run_id'], HEX32)
+    sources = request['provider']['sources']
+    if not isinstance(observations, list) or len(observations) != 3:
+        raise ValueError('incomplete observations')
+    outcomes = {'busy': 'busy-observed', 'unknown': 'unknown-safely-handled', 'restoration': 'restored'}
+    rows = []
+    seen = set()
+    for obs in observations:
+        exact(obs, ('kind', 'outcome', 'safe', 'request_sha256', 'run_id', 'session',
+                    'source', 'source_sha256', 'evidence', 'evidence_sha256'))
+        kind = obs['kind']
+        if not isinstance(kind, str) or kind not in outcomes or kind in seen:
+            raise ValueError('invalid observation kind')
+        seen.add(kind)
+        if obs['outcome'] != outcomes[kind] or obs['safe'] is not True:
+            raise ValueError('observation not safely completed')
+        if obs['request_sha256'] != request_sha or obs['run_id'] != request['run_id'] or obs['session'] != session:
+            raise ValueError('observation binding mismatch')
+        source = obs['source']
+        if not isinstance(source, str) or source not in sources or obs['source_sha256'] != sources[source]:
+            raise ValueError('observation source mismatch')
+        match(obs['source_sha256'], HEX64)
+        match(obs['evidence_sha256'], HEX64)
+        if not isinstance(obs['evidence'], bytes) or not obs['evidence'] or sha(obs['evidence']) != obs['evidence_sha256']:
+            raise ValueError('evidence mismatch')
+        rows.append({'kind': kind, 'source': source, 'evidence_sha256': obs['evidence_sha256'], 'safe': True})
+    return {'schema': 'astrid.r24.provider-result.v1', 'request_sha256': request_sha, 'observations': rows}
+
+
+def collect_authenticated(request, session, action):
+    # No current collector can authenticate the invocation, bind this session,
+    # or establish the required controls and restoration. Never accept records
+    # from request/config, environment, action stdout, or caller-provided files.
+    return None
+
+
 def run(request, config):
     roots, pterm, node = validate(request, config)
     uri = str(roots['pinokio'] / 'pinokio/stop.js')
+    session = secrets.token_hex(16)
     try:
         proc = invoke_action(node, pterm, uri)
-        action = decode(proc.stdout) if proc.returncode == 0 else {'end': 'observer-error', 'settlement': 'unknown'}
-        action = sanitize_action(action)
-    except (OSError, subprocess.SubprocessError, ValueError):
+        if proc.returncode != 0:
+            raise ValueError('action failed')
+        action = sanitize_action(decode(proc.stdout))
+        observations = collect_authenticated(request, session, action)
+        if observations is not None:
+            return serialize_success(request, session, observations), None
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
         action = {'end': 'observer-error', 'settlement': 'unknown'}
     # No busy/unknown injection or restoration source is bound. Never translate
     # a process exit or socket disconnect into settlement, safety or restoration.
-    return {'schema': 'astrid.r24.producer-diagnostic.v1', 'request_sha256': sha(canonical(request)),
+    return None, {'schema': 'astrid.r24.producer-diagnostic.v1', 'request_sha256': sha(canonical(request)),
             'action': action, 'busy': 'not-run', 'unknown': 'not-run', 'restoration': 'unknown',
             'runtime_identity': 'unknown', 'custody': 'unknown', 'protected_state': 'unknown'}
 
 
 def main():
     if len(sys.argv) != 3:
-        print('usage: r24-linux.py REQUEST CONFIG', file=sys.stderr)
+        print(json.dumps({'schema': 'astrid.r24.producer-error.v1', 'status': 'unknown'}), file=sys.stderr)
         return 2
     try:
         request = decode(Path(sys.argv[1]).read_bytes())
         config = decode(Path(sys.argv[2]).read_bytes())
-        result = run(request, config)
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        print(json.dumps({'schema': 'astrid.r24.producer-error.v1', 'status': 'unknown'}))
+        result, diagnostic = run(request, config)
+    except (OSError, ValueError, KeyError, TypeError, RecursionError, subprocess.SubprocessError):
+        print(json.dumps({'schema': 'astrid.r24.producer-error.v1', 'status': 'unknown'}), file=sys.stderr)
+        return 1
+    if result is None:
+        print(json.dumps(diagnostic, sort_keys=True), file=sys.stderr)
         return 1
     print(json.dumps(result, sort_keys=True))
     return 0

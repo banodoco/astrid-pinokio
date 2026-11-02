@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Local synthetic repositories and protocol fixtures; no live evidence."""
 import importlib.util
+import copy
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -92,14 +95,120 @@ class ProviderTests(unittest.TestCase):
         fake = {'dispatched': True, 'client_exit': 0, 'client_signal': None, 'messages': 1, 'disconnects': 1,
                 'errors': 0, 'post_terminal': False, 'end': 'timeout', 'settlement': 'unknown'}
         with patch.object(r24, 'invoke_action', return_value=subprocess.CompletedProcess([], 0, json.dumps(fake).encode())):
-            result = r24.run(self.request, self.config)
-        self.assertEqual((result['busy'], result['unknown'], result['restoration']), ('not-run', 'not-run', 'unknown'))
-        self.assertEqual(result['action']['settlement'], 'unknown')
+            result, diagnostic = r24.run(self.request, self.config)
+        self.assertIsNone(result)
+        self.assertEqual((diagnostic['busy'], diagnostic['unknown'], diagnostic['restoration']), ('not-run', 'not-run', 'unknown'))
+        self.assertEqual(diagnostic['action']['settlement'], 'unknown')
         fake['token'] = 'bearer secret'
         with patch.object(r24, 'invoke_action', return_value=subprocess.CompletedProcess([], 0, json.dumps(fake).encode())):
-            result = r24.run(self.request, self.config)
-        self.assertNotIn('secret', json.dumps(result))
-        self.assertEqual(result['action']['end'], 'observer-error')
+            result, diagnostic = r24.run(self.request, self.config)
+        self.assertIsNone(result)
+        self.assertNotIn('secret', json.dumps(diagnostic))
+        self.assertEqual(diagnostic['action']['end'], 'observer-error')
+
+    def observations(self):
+        session = 'b' * 32
+        source = r24.FILES[0]
+        records = []
+        for kind, outcome in (('busy', 'busy-observed'), ('unknown', 'unknown-safely-handled'), ('restoration', 'restored')):
+            evidence = ('synthetic ' + kind + ' secret payload').encode()
+            records.append({'kind': kind, 'outcome': outcome, 'safe': True,
+                            'request_sha256': r24.sha(r24.canonical(self.request)), 'run_id': self.request['run_id'],
+                            'session': session, 'source': source, 'source_sha256': self.request['provider']['sources'][source],
+                            'evidence': evidence, 'evidence_sha256': r24.sha(evidence)})
+        return session, records
+
+    def test_success_serialization_and_bindings(self):
+        session, records = self.observations()
+        result = r24.serialize_success(self.request, session, records)
+        self.assertEqual([r['kind'] for r in result['observations']], ['busy', 'unknown', 'restoration'])
+        self.assertNotIn('secret payload', json.dumps(result))
+        parser_path = os.environ.get('R24_CONSUMER_PARSER')
+        self.assertTrue(parser_path, 'pinned parser required for this focused test')
+        spec = importlib.util.spec_from_file_location('r24_consumer_success', parser_path)
+        import sys
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        request = module.ProviderRequest.parse(r24.canonical(self.request))
+        self.assertEqual(len(module.ProviderResult.parse(r24.canonical(result), request).observations), 3)
+
+        variants = [records[:-1], records + [records[0]], [records[0], records[0], records[2]]]
+        for index in range(3):
+            for key, value in (('request_sha256', '0' * 64), ('run_id', '0' * 32), ('session', '0' * 32),
+                               ('source', 'foreign'), ('source_sha256', '0' * 64), ('evidence_sha256', '0' * 64),
+                               ('evidence', b''), ('safe', False), ('outcome', 'not-run')):
+                changed = copy.deepcopy(records)
+                changed[index][key] = value
+                variants.append(changed)
+            for key in records[index]:
+                changed = copy.deepcopy(records)
+                del changed[index][key]
+                variants.append(changed)
+        action = {'dispatched': True, 'client_exit': 0, 'client_signal': None, 'messages': 1, 'disconnects': 1,
+                  'errors': 0, 'post_terminal': False, 'end': 'timeout', 'settlement': 'unknown'}
+        with patch.object(r24, 'validate', return_value=({'pinokio': Path('/fixture')}, Path('/pterm'), Path('/node'))), \
+             patch.object(r24, 'invoke_action', return_value=subprocess.CompletedProcess([], 0, json.dumps(action).encode())), \
+             patch.object(r24.secrets, 'token_hex', return_value=session):
+            for variant in variants:
+                with self.subTest(variant=repr(variant)):
+                    with self.assertRaises(ValueError): r24.serialize_success(self.request, session, variant)
+                    with patch.object(r24, 'collect_authenticated', return_value=variant):
+                        result, diagnostic = r24.run(self.request, self.config)
+                    self.assertIsNone(result)
+                    self.assertEqual(diagnostic['schema'], 'astrid.r24.producer-diagnostic.v1')
+        with self.assertRaises(ValueError): r24.serialize_success(self.request, '', records)
+
+    def test_result_diagnostic_separation_and_failure(self):
+        session, records = self.observations()
+        action = {'dispatched': True, 'client_exit': 0, 'client_signal': None, 'messages': 1, 'disconnects': 1,
+                  'errors': 0, 'post_terminal': False, 'end': 'timeout', 'settlement': 'unknown'}
+        with patch.object(r24, 'invoke_action', return_value=subprocess.CompletedProcess([], 0, json.dumps(action).encode())), \
+             patch.object(r24.secrets, 'token_hex', return_value=session), \
+             patch.object(r24, 'collect_authenticated', return_value=records):
+            result, diagnostic = r24.run(self.request, self.config)
+        self.assertIsNone(diagnostic)
+        self.assertEqual(result['schema'], 'astrid.r24.provider-result.v1')
+        for code, observations in ((1, records), (0, records[:-1]), (0, None)):
+            with self.subTest(code=code, observations=observations), \
+                 patch.object(r24, 'invoke_action', return_value=subprocess.CompletedProcess([], code, json.dumps(action).encode())), \
+                 patch.object(r24.secrets, 'token_hex', return_value=session), \
+                 patch.object(r24, 'collect_authenticated', return_value=observations):
+                result, diagnostic = r24.run(self.request, self.config)
+            self.assertIsNone(result)
+            self.assertEqual(diagnostic['schema'], 'astrid.r24.producer-diagnostic.v1')
+            self.assertNotIn('secret payload', json.dumps(diagnostic))
+
+    def test_cli_streams_and_redacted_errors(self):
+        import sys
+        with tempfile.TemporaryDirectory() as directory:
+            request = Path(directory) / 'request'
+            config = Path(directory) / 'config'
+            request.write_bytes(r24.canonical(self.request))
+            config.write_bytes(r24.canonical(self.config))
+            stdout, stderr = io.StringIO(), io.StringIO()
+            diagnostic = {'schema': 'astrid.r24.producer-diagnostic.v1'}
+            with patch.object(sys, 'argv', ['r24-linux.py', str(request), str(config)]), \
+                 patch.object(r24, 'run', return_value=(None, diagnostic)), \
+                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(r24.main(), 1)
+            self.assertEqual(stdout.getvalue(), '')
+            self.assertEqual(json.loads(stderr.getvalue()), diagnostic)
+            stdout, stderr = io.StringIO(), io.StringIO()
+            success = r24.serialize_success(self.request, *self.observations())
+            with patch.object(sys, 'argv', ['r24-linux.py', str(request), str(config)]), \
+                 patch.object(r24, 'run', return_value=(success, None)), \
+                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(r24.main(), 0)
+            self.assertEqual(json.loads(stdout.getvalue()), success)
+            self.assertEqual(stderr.getvalue(), '')
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.object(sys, 'argv', ['r24-linux.py', str(request), str(config)]), \
+                 patch.object(r24, 'run', side_effect=ValueError('bearer secret')), \
+                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(r24.main(), 1)
+            self.assertEqual(stdout.getvalue(), '')
+            self.assertNotIn('secret', stderr.getvalue())
 
     def test_duplicate_json_and_config_digest_rejected(self):
         with self.assertRaises(ValueError): r24.decode('{"x":1,"x":2}')
