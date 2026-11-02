@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import verifier from '../.github/venue/r21-verify.cjs';
 
-const { ACTIONS, CONFIRMATION, ENDPOINT, REQUEST_ID, TUPLE, validateDispatch, verifyReceipt } = verifier;
+const { ACTIONS, CANDIDATE_SOURCES, CONFIRMATION, ENDPOINT, REQUEST_ID, TUPLE, validateDispatch, verifyReceipt } = verifier;
 
 function innerExit() { return { code: 0, signal: null }; }
 function terminal(refusal = false) { return { stop: true, disconnect: true, expected_refusal: refusal }; }
@@ -39,13 +39,17 @@ function receipt() {
 
 test('R-21 venue verifier accepts only a complete native old-launcher receipt', () => {
   assert.deepEqual(TUPLE, {
-    runtime: '5453366458f7b4ee874c94d15ae7952e3e82d3c3',
-    agent: 'e425903f7a9fa5b82973281d15054c0716b46e2d',
-    app: '5c95abb00525e1a77d00c32042b6453d9f14f4e7',
-    pinokio: '2f085c5fc0cde192ac4a022065883c85dcccd0de',
+    runtime: '2776ba973b6c8f3555b5629b0840d9691a98d3c2',
+    agent: 'ab43bad818ef65ca1e929b973a2f61cd9fc4bf61',
+    app: '79f7e5397c044c4c97dc7e97b20ad96f787e5247',
+    pinokio: '3a6a98ae251ca126505245286e2d3e760f4348e9',
     old_launcher: 'bbba620e3d89eeff8021417f365e6ea584203105',
     pinokiod: 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf',
     pterm: '5be43718701c448b43daf0ce51d8935f170065bb',
+  });
+  assert.deepEqual(CANDIDATE_SOURCES, {
+    agent: 'a678ae168498bdc4795471b44446d34d58f7c5cd',
+    pinokio: '13cb31104c8aae655d0ee04efdb9537aa111e340',
   });
   assert.deepEqual(verifyReceipt(receipt()), { accepted: true, request_id: REQUEST_ID });
 });
@@ -74,30 +78,32 @@ test('R-21 venue verifier rejects a successful-looking wrapper with a nonzero in
   assert.throws(() => verifyReceipt(value), /zero inner PTerm exit/);
 });
 
-test('R-21 dispatch binding accepts only the exact product dispatch or self-serve venue ref', () => {
+test('R-21 dispatch binding accepts only the exact candidate dispatch or self-serve venue ref', () => {
   const environment = {
     GITHUB_EVENT_NAME: 'push',
-    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-R1',
+    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-CANDIDATE-HOSTED-REF-R1',
     GITHUB_SHA: 'a'.repeat(40),
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-CANDIDATE-HOSTED-REF-R1',
     GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1',
   };
-  const bound = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment);
+  const candidateInput = { candidate_agent_ref: CANDIDATE_SOURCES.agent, candidate_pinokio_ref: CANDIDATE_SOURCES.pinokio };
+  const bound = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40), ...candidateInput }, environment);
   assert.equal(bound.endpoint, ENDPOINT);
+  assert.deepEqual(bound.candidate_sources, CANDIDATE_SOURCES);
   assert.deepEqual(bound.agent_journey_harness, { ref: '6e46e3bb45ec3feddbd0b0617a50a157e3a4df67', executed: false });
-  assert.equal(bound.app_manifest_sha256, 'a6eef2804e58e198d56899f1b36d97688d5cbc4a0847a82078ba144df4a207eb');
-  assert.throws(() => validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'main' }, environment), /immutable 40-character SHA/);
-  assert.throws(() => validateDispatch({ request_id: 'R-20', confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment), /request_id/);
-  assert.throws(() => validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, {
+  assert.equal(bound.app_manifest_sha256, 'b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f');
+  assert.throws(() => validateDispatch({ ...candidateInput, request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'main' }, environment), /immutable 40-character SHA/);
+  assert.throws(() => validateDispatch({ ...candidateInput, request_id: 'R-20', confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment), /request_id/);
+  assert.throws(() => validateDispatch({ ...candidateInput, request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, {
     ...environment, GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-R9',
   }), /GitHub ref/);
   const manualEnvironment = {
     ...environment,
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-R1',
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-R1',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-CANDIDATE-HOSTED-REF-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-CANDIDATE-HOSTED-REF-R1',
   };
-  const manualInput = { request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) };
+  const manualInput = { request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40), ...candidateInput };
   const manual = validateDispatch(manualInput, manualEnvironment);
   assert.equal(manual.workflow.event, 'workflow_dispatch');
   assert.throws(() => validateDispatch({ ...manualInput, runner_ref: 'b'.repeat(40) }, manualEnvironment), /runner_ref\/GITHUB_SHA binding/);
@@ -105,7 +111,8 @@ test('R-21 dispatch binding accepts only the exact product dispatch or self-serv
   assert.throws(() => validateDispatch({ ...manualInput, confirmation: 'wrong' }, manualEnvironment), /confirmation/);
   assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_EVENT_NAME: 'pull_request' }), /GitHub event/);
   assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R13' }), /workflow source/);
-  assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/other.yml@refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-R1' }), /workflow source/);
+  assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/other.yml@refs/heads/lane/M-PIN/R-21-CANDIDATE-HOSTED-REF-R1' }), /workflow source/);
+  assert.throws(() => validateDispatch({ ...manualInput, candidate_agent_ref: '0'.repeat(40) }, manualEnvironment), /candidate_agent_ref/);
 });
 
 test('publisher binds the run and only retains sanitized evidence with inner exits', async () => {
@@ -117,11 +124,12 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-publisher-'));
   try {
     const environment = {
-      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-R1',
+      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-CANDIDATE-HOSTED-REF-R1',
       GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-R1',
+      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-CANDIDATE-HOSTED-REF-R1',
       GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: REQUEST_ID,
       R21_CONFIRMATION: CONFIRMATION, R21_RUNNER_REF: 'a'.repeat(40),
+      R21_CANDIDATE_AGENT_REF: CANDIDATE_SOURCES.agent, R21_CANDIDATE_PINOKIO_REF: CANDIDATE_SOURCES.pinokio,
     };
     environment.RUNNER_TEMP = root;
     fs.mkdirSync(path.join(root, 'r21-watchdog'));

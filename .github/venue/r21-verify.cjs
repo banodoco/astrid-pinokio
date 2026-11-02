@@ -5,10 +5,10 @@
 // interpret fixture results or the R-20 Reset receipt.
 
 const TUPLE = Object.freeze({
-  runtime: '5453366458f7b4ee874c94d15ae7952e3e82d3c3',
-  agent: 'e425903f7a9fa5b82973281d15054c0716b46e2d',
-  app: '5c95abb00525e1a77d00c32042b6453d9f14f4e7',
-  pinokio: '2f085c5fc0cde192ac4a022065883c85dcccd0de',
+  runtime: '2776ba973b6c8f3555b5629b0840d9691a98d3c2',
+  agent: 'ab43bad818ef65ca1e929b973a2f61cd9fc4bf61',
+  app: '79f7e5397c044c4c97dc7e97b20ad96f787e5247',
+  pinokio: '3a6a98ae251ca126505245286e2d3e760f4348e9',
   old_launcher: 'bbba620e3d89eeff8021417f365e6ea584203105',
   pinokiod: 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf',
   pterm: '5be43718701c448b43daf0ce51d8935f170065bb',
@@ -16,12 +16,16 @@ const TUPLE = Object.freeze({
 
 // This standalone observer does not execute the separate Agent journey harness.
 const AGENT_JOURNEY_HARNESS_REFERENCE = '6e46e3bb45ec3feddbd0b0617a50a157e3a4df67';
-const MANIFEST_SHA256 = 'a6eef2804e58e198d56899f1b36d97688d5cbc4a0847a82078ba144df4a207eb';
-const REQUEST_ID = 'R-21-PUBLISHED-TUPLE-R1';
+const MANIFEST_SHA256 = 'b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f';
+const CANDIDATE_SOURCES = Object.freeze({
+  agent: 'a678ae168498bdc4795471b44446d34d58f7c5cd',
+  pinokio: '13cb31104c8aae655d0ee04efdb9537aa111e340',
+});
+const REQUEST_ID = 'R-21-CANDIDATE-HOSTED-REF-R1';
 const CONFIRMATION = 'REAL_ENGINE_UPDATE_STOP_RETRY';
 const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
-const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-R1';
-const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-R1';
+const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-CANDIDATE-HOSTED-REF-R1';
+const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-CANDIDATE-HOSTED-REF-R1';
 const WORKFLOW_PATH = '.github/workflows/r21-real-engine.yml';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const ACTIONS = Object.freeze({
@@ -59,6 +63,8 @@ function validateDispatch(input, environment = process.env) {
   object(input, 'dispatch input');
   equal(input.request_id, REQUEST_ID, 'request_id');
   equal(input.confirmation, CONFIRMATION, 'confirmation');
+  equal(input.candidate_agent_ref, CANDIDATE_SOURCES.agent, 'candidate_agent_ref');
+  equal(input.candidate_pinokio_ref, CANDIDATE_SOURCES.pinokio, 'candidate_pinokio_ref');
   if (typeof input.runner_ref !== 'string' || !SHA.test(input.runner_ref)) {
     fail('runner_ref must be a lowercase immutable 40-character SHA');
   }
@@ -79,6 +85,7 @@ function validateDispatch(input, environment = process.env) {
     runner_ref: input.runner_ref,
     endpoint: ENDPOINT,
     tuple: TUPLE,
+    candidate_sources: CANDIDATE_SOURCES,
     app_manifest_sha256: MANIFEST_SHA256,
     agent_journey_harness: { ref: AGENT_JOURNEY_HARNESS_REFERENCE, executed: false },
     workflow: {
@@ -160,6 +167,6 @@ function verifyReceipt(receipt) {
 }
 
 module.exports = {
-  ACTIONS, CONFIRMATION, ENDPOINT, FIRST_REFUSAL, REQUEST_ID, TUPLE,
+  ACTIONS, CANDIDATE_SOURCES, CONFIRMATION, ENDPOINT, FIRST_REFUSAL, REQUEST_ID, TUPLE,
   validateDispatch, verifyReceipt,
 };

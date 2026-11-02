@@ -35,7 +35,7 @@ test('R-21 always uploads only the named bounded diagnostic evidence', () => {
     '        continue-on-error: true',
     '        uses: actions/upload-artifact@v4',
     '        with:',
-    '          name: r21-published-tuple-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
+    '          name: r21-candidate-hosted-ref-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
     '          retention-days: 7',
     '          if-no-files-found: warn',
     '          path: |',

@@ -11,5 +11,7 @@ const request = validateDispatch({
   request_id: process.env.R21_REQUEST_ID,
   confirmation: process.env.R21_CONFIRMATION,
   runner_ref: process.env.R21_RUNNER_REF,
+  candidate_agent_ref: process.env.R21_CANDIDATE_AGENT_REF,
+  candidate_pinokio_ref: process.env.R21_CANDIDATE_PINOKIO_REF,
 });
 fs.writeFileSync(process.argv[outputIndex + 1], `${JSON.stringify(request, null, 2)}\n`, { mode: 0o600 });

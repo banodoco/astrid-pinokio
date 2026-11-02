@@ -3,13 +3,13 @@ name: R-21 native old-launcher Update Stop retry
 on:
   push:
     branches:
-      - venue/M-PIN-R-21-PUBLISHED-TUPLE-R1
+      - venue/M-PIN-R-21-CANDIDATE-HOSTED-REF-R1
   workflow_dispatch:
     inputs:
       request_id:
         description: Exact authorised venue request ID
         required: false
-        default: R-21-PUBLISHED-TUPLE-R1
+        default: R-21-CANDIDATE-HOSTED-REF-R1
         type: string
       runner_ref:
         description: Immutable R-21 lane commit SHA; defaults to this run's GitHub SHA
@@ -19,6 +19,16 @@ on:
         description: Required literal REAL_ENGINE_UPDATE_STOP_RETRY
         required: false
         default: REAL_ENGINE_UPDATE_STOP_RETRY
+        type: string
+      candidate_agent_ref:
+        description: Immutable candidate Agent-side venue runner source
+        required: false
+        default: a678ae168498bdc4795471b44446d34d58f7c5cd
+        type: string
+      candidate_pinokio_ref:
+        description: Immutable candidate Pinokio producer source
+        required: false
+        default: 13cb31104c8aae655d0ee04efdb9537aa111e340
         type: string
 
 permissions:
@@ -33,9 +43,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      R21_REQUEST_ID: ${{ github.event_name == 'push' && 'R-21-PUBLISHED-TUPLE-R1' || inputs.request_id }}
+      R21_REQUEST_ID: ${{ github.event_name == 'push' && 'R-21-CANDIDATE-HOSTED-REF-R1' || inputs.request_id }}
       R21_RUNNER_REF: ${{ github.event_name == 'push' && github.sha || inputs.runner_ref || github.sha }}
       R21_CONFIRMATION: ${{ github.event_name == 'push' && 'REAL_ENGINE_UPDATE_STOP_RETRY' || inputs.confirmation }}
+      R21_CANDIDATE_AGENT_REF: ${{ github.event_name == 'push' && 'a678ae168498bdc4795471b44446d34d58f7c5cd' || inputs.candidate_agent_ref }}
+      R21_CANDIDATE_PINOKIO_REF: ${{ github.event_name == 'push' && '13cb31104c8aae655d0ee04efdb9537aa111e340' || inputs.candidate_pinokio_ref }}
       GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +79,7 @@ jobs:
           set -euo pipefail
           result="$RUNNER_TEMP/r21-result"
           node .github/venue/r21-publish.cjs "$RUNNER_TEMP/r21-evidence" "$result" "$SETUP_EXIT" "$JOURNEY_EXIT"
-          ref="refs/heads/venue-results/M-PIN-R-21-PUBLISHED-TUPLE-R1/${R21_REQUEST_ID}/${GITHUB_WORKFLOW_SHA}/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
+          ref="refs/heads/venue-results/M-PIN-R-21-CANDIDATE-HOSTED-REF-R1/${R21_REQUEST_ID}/${GITHUB_WORKFLOW_SHA}/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
           git check-ref-format "$ref"
           git init --quiet "$result"
           git -C "$result" config user.name 'github-actions[bot]'
@@ -98,7 +110,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: r21-published-tuple-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: r21-candidate-hosted-ref-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 7
           if-no-files-found: warn
           path: |

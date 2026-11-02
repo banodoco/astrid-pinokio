@@ -38,7 +38,13 @@ function projectReceipt(raw) {
   };
 }
 function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
-  const request = validateDispatch({ request_id: env.R21_REQUEST_ID, confirmation: env.R21_CONFIRMATION, runner_ref: env.R21_RUNNER_REF }, env);
+  const request = validateDispatch({
+    request_id: env.R21_REQUEST_ID,
+    confirmation: env.R21_CONFIRMATION,
+    runner_ref: env.R21_RUNNER_REF,
+    candidate_agent_ref: env.R21_CANDIDATE_AGENT_REF,
+    candidate_pinokio_ref: env.R21_CANDIDATE_PINOKIO_REF,
+  }, env);
   if (!/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID || '') || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT || '')) throw new Error('numeric run identity required');
   if (env.GITHUB_WORKFLOW_SHA !== env.GITHUB_SHA) throw new Error('workflow SHA must equal runner SHA');
   for (const code of [setupExit, journeyExit]) if (code !== null && (!Number.isInteger(code) || code < 0 || code > 255)) throw new Error('invalid inner exit');
