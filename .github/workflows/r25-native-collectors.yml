@@ -99,6 +99,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Materialize bound Pinokio sources with LF
+        shell: bash
+        run: |
+          git -c core.autocrlf=false checkout-index --force -- \
+            pinokio/providers/r25-snapshot-macos.cjs \
+            pinokio/providers/r25-snapshot-windows.cjs
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
