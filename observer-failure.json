@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "status": "blocked",
+  "category": "timeout",
+  "last_operation": null,
+  "readiness_trace": []
+}
