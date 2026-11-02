@@ -88,13 +88,19 @@ test('R-21 dispatch binding accepts only the exact product dispatch or self-serv
   assert.throws(() => validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, {
     ...environment, GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-R9',
   }), /GitHub ref/);
-  const manual = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, {
+  const manualEnvironment = {
     ...environment,
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-R13',
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R13',
-  });
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-ADMISSION-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-ADMISSION-R1',
+  };
+  const manualInput = { request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) };
+  const manual = validateDispatch(manualInput, manualEnvironment);
   assert.equal(manual.workflow.event, 'workflow_dispatch');
+  assert.throws(() => validateDispatch({ ...manualInput, runner_ref: 'b'.repeat(40) }, manualEnvironment), /runner_ref\/GITHUB_SHA binding/);
+  assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-R13' }), /GitHub ref/);
+  assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R13' }), /workflow source/);
+  assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/other.yml@refs/heads/lane/M-PIN/R-21-ADMISSION-R1' }), /workflow source/);
 });
 
 test('publisher binds the run and only retains sanitized evidence with inner exits', async () => {
