@@ -138,16 +138,24 @@ function launchShell(step, environment, { background = false, onSpawn } = {}) {
     : '/bin/bash';
   assert.ok(fs.existsSync(executable), `${shell} is missing from this runner: ${executable}`);
   let message = step.params.message;
-  if (process.env.PINOKIO_DIAGNOSTIC_MANIFEST && message.includes('install-manifest.json')) {
-    assert.ok(windows, 'diagnostic manifest override is Windows-only');
-    const installer = 'https://raw.githubusercontent.com/banodoco/astrid-app/int%2Fr1/public/install.ps1';
-    assert.ok(message.includes(installer), 'expected the original App bootstrap URL');
-    message = message.replace(installer, 'https://raw.githubusercontent.com/banodoco/astrid-app/36ff224e3c9ad862e3f807e2548b997a36799543/public/install.ps1');
-    const download = /Invoke-WebRequest -UseBasicParsing '[^']+\/install-manifest\.json' -OutFile \(Join-Path \$tmp 'install-manifest\.json'\)/;
-    assert.match(message, download, 'expected exactly the hosted manifest download');
-    const manifest = process.env.PINOKIO_DIAGNOSTIC_MANIFEST.replaceAll("'", "''");
-    message = message.replace(download, `Copy-Item -LiteralPath '${manifest}' -Destination (Join-Path $tmp 'install-manifest.json')`);
-    log(`using diagnostic manifest ${process.env.PINOKIO_DIAGNOSTIC_MANIFEST}`);
+  if (process.env.PINOKIO_DIAGNOSTIC_MANIFEST && windows) {
+    // The Windows launcher carries the actual shell command in a base64 payload.
+    const payloadMatch = message.match(/--pinokio-payload=([A-Za-z0-9+/=]+)/);
+    if (payloadMatch) {
+      const payload = JSON.parse(Buffer.from(payloadMatch[1], 'base64').toString('utf8'));
+      if (payload.message.includes('install-manifest.json')) {
+        const installer = 'https://raw.githubusercontent.com/banodoco/astrid-app/int%2Fr1/public/install.ps1';
+        assert.ok(payload.message.includes(installer), 'expected the original App bootstrap URL');
+        payload.message = payload.message.replace(installer, 'https://raw.githubusercontent.com/banodoco/astrid-app/36ff224e3c9ad862e3f807e2548b997a36799543/public/install.ps1');
+        const download = /Invoke-WebRequest -UseBasicParsing '[^']+\/install-manifest\.json' -OutFile \(Join-Path \$tmp 'install-manifest\.json'\)/;
+        assert.match(payload.message, download, 'expected the hosted manifest download');
+        const manifest = process.env.PINOKIO_DIAGNOSTIC_MANIFEST.replaceAll("'", "''");
+        payload.message = payload.message.replace(download, `Copy-Item -LiteralPath '${manifest}' -Destination (Join-Path $tmp 'install-manifest.json')`);
+        const encoded = Buffer.from(JSON.stringify(payload)).toString('base64');
+        message = message.replace(payloadMatch[1], encoded);
+        log(`using diagnostic manifest ${process.env.PINOKIO_DIAGNOSTIC_MANIFEST}`);
+      }
+    }
   }
   const child = spawn(executable, windows
     ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', message]
