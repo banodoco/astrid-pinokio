@@ -1,0 +1,123 @@
+name: R-21 native old-launcher Update Stop retry
+
+on:
+  push:
+    branches:
+      - venue/M-PIN-R-21-PUBLISHED-TUPLE-R1
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Exact authorised venue request ID
+        required: false
+        default: R-21-PUBLISHED-TUPLE-R1
+        type: string
+      runner_ref:
+        description: Immutable R-21 lane commit SHA; defaults to this run's GitHub SHA
+        required: false
+        type: string
+      confirmation:
+        description: Required literal REAL_ENGINE_UPDATE_STOP_RETRY
+        required: false
+        default: REAL_ENGINE_UPDATE_STOP_RETRY
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: r21-real-engine-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  native-old-launcher-journey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      R21_REQUEST_ID: ${{ github.event_name == 'push' && 'R-21-PUBLISHED-TUPLE-R1' || inputs.request_id }}
+      R21_RUNNER_REF: ${{ github.event_name == 'push' && github.sha || inputs.runner_ref || github.sha }}
+      R21_CONFIRMATION: ${{ github.event_name == 'push' && 'REAL_ENGINE_UPDATE_STOP_RETRY' || inputs.confirmation }}
+      GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - id: request
+        name: Admit immutable dedicated request
+        run: node .github/venue/r21-inputs.cjs --output "$RUNNER_TEMP/r21-request.json"
+      - id: execute
+        name: Provision pinned inputs and run native journey
+        run: |
+          set +e
+          bash .github/venue/r21-real-engine.sh --execute "$RUNNER_TEMP/r21-request.json"
+          watchdog_exit=$?
+          # Preserve a successful wrapper step so the request-bound publisher runs.
+          echo "runner_exit=$watchdog_exit" >> "$GITHUB_OUTPUT"
+      - name: Publish immutable sanitized result ref
+        if: ${{ always() && steps.request.outcome == 'success' }}
+        env:
+          RESULT_TOKEN: ${{ github.token }}
+          SETUP_EXIT: ${{ steps.execute.outputs.setup_exit }}
+          JOURNEY_EXIT: ${{ steps.execute.outputs.journey_exit }}
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/r21-result"
+          node .github/venue/r21-publish.cjs "$RUNNER_TEMP/r21-evidence" "$result" "$SETUP_EXIT" "$JOURNEY_EXIT"
+          ref="refs/heads/venue-results/M-PIN-R-21-PUBLISHED-TUPLE-R1/${R21_REQUEST_ID}/${GITHUB_WORKFLOW_SHA}/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
+          git check-ref-format "$ref"
+          git init --quiet "$result"
+          git -C "$result" config user.name 'github-actions[bot]'
+          git -C "$result" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C "$result" add request.json verdict.json SHA256SUMS
+          for file in r21-receipt.json runner-failure.json observer-failure.json install-diagnostics.json; do
+            if [ -f "$result/$file" ]; then git -C "$result" add "$file"; fi
+          done
+          git -C "$result" commit --quiet -m "R-21 sanitized hosted result"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$RESULT_TOKEN" | base64 -w0)"
+          export GIT_CONFIG_VALUE_0
+          test -z "$(git -C "$result" ls-remote https://github.com/banodoco/astrid-pinokio.git "$ref")"
+          git -C "$result" push https://github.com/banodoco/astrid-pinokio.git "HEAD:$ref"
+          echo "Result ref: $ref" >> "$GITHUB_STEP_SUMMARY"
+      - name: Mark unsuccessful inner execution
+        if: ${{ always() && steps.request.outcome == 'success' }}
+        env:
+          SETUP_EXIT: ${{ steps.execute.outputs.setup_exit }}
+          JOURNEY_EXIT: ${{ steps.execute.outputs.journey_exit }}
+          RUNNER_EXIT: ${{ steps.execute.outputs.runner_exit }}
+        run: |
+          test "$RUNNER_EXIT" = 0 && test "$SETUP_EXIT" = 0 && test "$JOURNEY_EXIT" = 0 && node -e 'process.exit(require(process.env.RUNNER_TEMP + "/r21-result/verdict.json").status === "ACCEPTED" ? 0 : 1)'
+      # The sanitized result ref remains canonical; this short-lived artifact
+      # retains only named diagnostic projections from this run.
+      - name: Upload bounded R-21 diagnostic evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: r21-published-tuple-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/r21-request.json
+            ${{ runner.temp }}/r21-watchdog/progress.json
+            ${{ runner.temp }}/r21-watchdog/watchdog.json
+            ${{ runner.temp }}/r21-watchdog/setup.exit
+            ${{ runner.temp }}/r21-watchdog/journey.exit
+            ${{ runner.temp }}/r21-evidence/r21-progress.json
+            ${{ runner.temp }}/r21-evidence/r21-receipt.json
+            ${{ runner.temp }}/r21-evidence/r21-verdict.json
+            ${{ runner.temp }}/r21-evidence/r21-runner-failure.json
+            ${{ runner.temp }}/r21-evidence/r21-observer-operation.json
+            ${{ runner.temp }}/r21-evidence/r21-failure.json
+            ${{ runner.temp }}/r21-evidence/r21-install-diagnostics.json
+            ${{ runner.temp }}/r21-result/request.json
+            ${{ runner.temp }}/r21-result/verdict.json
+            ${{ runner.temp }}/r21-result/r21-receipt.json
+            ${{ runner.temp }}/r21-result/runner-failure.json
+            ${{ runner.temp }}/r21-result/observer-failure.json
+            ${{ runner.temp }}/r21-result/install-diagnostics.json
+            ${{ runner.temp }}/r21-result/SHA256SUMS
