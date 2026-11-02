@@ -1,0 +1,36 @@
+name: R21 isolated native wildcard bind
+on:
+  push:
+    branches: [venue/M-VENUE-V02-R21-ISOLATED-BIND-1]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-bind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Measure native daemon
+        id: measure
+        continue-on-error: true
+        run: bash .github/venue/r21-isolated-wildcard-bind.sh
+      - name: Retain bounded evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r21-isolated-wildcard-bind
+          path: ${{ runner.temp }}/r21-bind-evidence/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Propagate measurement result
+        if: always()
+        env:
+          MEASURE_OUTCOME: ${{ steps.measure.outcome }}
+        run: test "$MEASURE_OUTCOME" = success
