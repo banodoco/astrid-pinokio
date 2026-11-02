@@ -1,0 +1,162 @@
+{
+  "schema": "astrid.r25.pinokio-snapshot-specimen.v1",
+  "specimen_version": 1,
+  "synthetic": true,
+  "execution_evidence": false,
+  "qualification": false,
+  "m4_6_acceptance": false,
+  "non_evidence_reason": "Interface fixture only; workflow/run/job/artifact fields are synthetic sentinels and no hosted execution occurred.",
+  "inputs": {
+    "current_tuple_path": "/home/user/merge-docs/docs/merge-plan/CURRENT-TUPLE.json",
+    "current_tuple_sha256": "71a738081dba7f84bea0b882a975cd540b62684e8f6f1fa0d99f572e62908e50",
+    "agent_ref": "a6b68d5b5478326a4db1971966d33a2cfe61d091",
+    "pinokio_ref": "95aafb5a029c3f53cb2268d8596909eab0deb3c4",
+    "r36_ref": "010e8f25c70109f0a93a6fccb0a16f7f40e06739"
+  },
+  "request": {
+    "schema": "astrid.r25.pinokio-snapshot-request.v1",
+    "slot_id": "pinokio-backend-macos",
+    "tuple": {
+      "app": "79f7e5397c044c4c97dc7e97b20ad96f787e5247",
+      "agent": "ab43bad818ef65ca1e929b973a2f61cd9fc4bf61",
+      "runtime": "2776ba973b6c8f3555b5629b0840d9691a98d3c2",
+      "pinokio": "3a6a98ae251ca126505245286e2d3e760f4348e9",
+      "manifest_sha256": "b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f",
+      "artifacts": {
+        "public/install": "100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d",
+        "public/install.sh": "591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285",
+        "public/install.ps1": "bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"
+      },
+      "published_at": "2026-11-02T17:55:27Z"
+    },
+    "origin": {
+      "repository_id": 900000001,
+      "repository_full_name": "synthetic/astrid-pinokio",
+      "workflow_id": 900000002,
+      "workflow_ref": "synthetic://r25-specimen/r25-snapshot.yml@95aafb5a029c3f53cb2268d8596909eab0deb3c4",
+      "workflow_sha": "0000000000000000000000000000000000000000",
+      "run_id": 900000003,
+      "run_attempt": 1,
+      "head_sha": "0000000000000000000000000000000000000000",
+      "producer_job_id": 900000004,
+      "producer_job_name": "pinokio-backend-macos",
+      "artifact_id": null,
+      "artifact_name": "r25-snapshots-pinokio-backend-macos-SYNTHETIC-DO-NOT-QUALIFY"
+    },
+    "collector": {
+      "agent_ref": "a6b68d5b5478326a4db1971966d33a2cfe61d091",
+      "pinokio_ref": "95aafb5a029c3f53cb2268d8596909eab0deb3c4",
+      "sources": {
+        "scripts/pinokio_snapshot_collector.py": "a94ef58088702aba984c920a7d718ee6b03713a52d93b41298ccdd958a230a99",
+        "scripts/pinokio_snapshot_macos.py": "086faf864e821ef53e7502179cdd322a7b86b462e4403e0f7af6abf789b2db6d",
+        "scripts/pinokio_snapshot_windows.py": "6ab995a1829ddfeaf78cf738985f9a03c77a22b1c88ef36c462a0f34b3a83611",
+        "pinokio/providers/r25-snapshot-macos.cjs": "eceba872257c310f1ad638e475ee1954facef43866ee95f443170fda408631da",
+        "pinokio/providers/r25-snapshot-windows.cjs": "2c3cbce7597f3440ded89c89eaf1b74f7eae6c1ba11e71e9d3d64fb2e70e67d8"
+      }
+    },
+    "actions": [
+      {
+        "action": "start",
+        "action_id": "synthetic-m46-start",
+        "action_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      {
+        "action": "ready",
+        "action_id": "synthetic-m46-ready",
+        "action_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      {
+        "action": "stop",
+        "action_id": "synthetic-m46-stop",
+        "action_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      {
+        "action": "update",
+        "action_id": "synthetic-m46-update",
+        "action_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      {
+        "action": "rollback",
+        "action_id": "synthetic-m46-rollback",
+        "action_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      {
+        "action": "uninstall",
+        "action_id": "synthetic-m46-uninstall",
+        "action_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ],
+    "targets": {
+      "os": "macos",
+      "launchd_targets": [
+        "gui/501/haus.astrid.runtime"
+      ]
+    }
+  },
+  "observation_contract": {
+    "ordered_phases": [
+      "before",
+      "during",
+      "boundary"
+    ],
+    "boundary_alias": "after-action final snapshot",
+    "minimum_observation_files": 18,
+    "per_action": {
+      "before": {
+        "phase": "before",
+        "sample": 0,
+        "cardinality": 1
+      },
+      "immediate_during": {
+        "phase": "during",
+        "sample": 0,
+        "cardinality": 1
+      },
+      "bounded_poll": {
+        "phase": "during",
+        "sample_start": 1,
+        "poll_interval_seconds": 1,
+        "max_poll_samples": 900,
+        "cardinality": "0..899 additional samples"
+      },
+      "after": {
+        "phase": "boundary",
+        "sample": 0,
+        "cardinality": 1
+      }
+    },
+    "finalization": {
+      "required_actions": [
+        "start",
+        "ready",
+        "stop",
+        "update",
+        "rollback",
+        "uninstall"
+      ],
+      "receipt_schema": "astrid.r25.pinokio-snapshot-receipt.v1",
+      "qualification": "requires-r36-verifier",
+      "m4_6_acceptance": false,
+      "closed_world": true,
+      "artifact_id_authority": "hosted-artifact-origin-join-required"
+    }
+  },
+  "required_authenticated_joins": [
+    "repository/workflow/workflow_sha/run_id/run_attempt/head_sha -> hosted workflow run",
+    "producer_job_id/producer_job_name/slot_id -> same hosted run",
+    "artifact_name/artifact_id -> same producer job and downloaded artifact bytes",
+    "candidate tuple, manifest_sha256, and public/install bootstrap hashes -> accepted CURRENT-TUPLE.json",
+    "agent_ref/pinokio_ref/source SHA-256 map -> immutable checked-out files",
+    "request binding, observation files, structural digests, receipt inventory -> exact artifact bytes",
+    "six action IDs/order and slot -> authenticated journey configuration",
+    "snapshot claims -> separate action/filesystem evidence for write and data-preservation proof rules"
+  ],
+  "missing_for_qualification": [
+    "authentic hosted workflow/run/attempt/head and producer job identity",
+    "platform-assigned artifact ID and external artifact-origin join",
+    "downloaded receipt artifact containing native before/during/boundary observations",
+    "independent R-36 recomputation of all request, file, structural, and receipt digests",
+    "authenticated journey binding for this slot and the corresponding real action boundaries",
+    "separate action/filesystem evidence where snapshots cannot prove the proof rule"
+  ]
+}
