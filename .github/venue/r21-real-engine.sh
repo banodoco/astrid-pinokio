@@ -145,19 +145,19 @@ trap failure_receipt EXIT
 stage='verify-native-inputs'
 progress "$stage"
 test "$(git rev-parse HEAD)" = "$R21_RUNNER_REF"
-git merge-base --is-ancestor 2f085c5fc0cde192ac4a022065883c85dcccd0de HEAD
+git merge-base --is-ancestor 3a6a98ae251ca126505245286e2d3e760f4348e9 HEAD
 test "$(git -C "$RUNNER_TEMP/pinokiod" rev-parse HEAD)" = 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf'
 test "$(git -C "$RUNNER_TEMP/pterm" rev-parse HEAD)" = '5be43718701c448b43daf0ce51d8935f170065bb'
 node .github/venue/r21-inputs.cjs --output "$request"
 git init --quiet "$agent_source"
 git -C "$agent_source" remote add origin https://github.com/banodoco/astrid-agent.git
 git -C "$agent_source" fetch --quiet --filter=blob:none origin \
-  e425903f7a9fa5b82973281d15054c0716b46e2d \
+  2de0726d1eaea7f7bd141251e088aa9fdf224525 \
   cb71f548caf6f06051eaeb161cce45e44401e145
-test "$(git -C "$agent_source" rev-parse e425903f7a9fa5b82973281d15054c0716b46e2d^{commit})" = 'e425903f7a9fa5b82973281d15054c0716b46e2d'
+test "$(git -C "$agent_source" rev-parse 2de0726d1eaea7f7bd141251e088aa9fdf224525^{commit})" = '2de0726d1eaea7f7bd141251e088aa9fdf224525'
 git -C "$agent_source" merge-base --is-ancestor \
   cb71f548caf6f06051eaeb161cce45e44401e145 \
-  e425903f7a9fa5b82973281d15054c0716b46e2d
+  2de0726d1eaea7f7bd141251e088aa9fdf224525
 
 stage='retain-historical-launcher'
 progress "$stage"
@@ -175,7 +175,7 @@ test "$(git -C "$app_root" rev-parse HEAD)" = 'bbba620e3d89eeff8021417f365e6ea58
 # The retained launcher normally reads this supported setting from its tracked
 # environment file.  The immutable app SHA makes both fetched bootstrap and
 # manifest resolve to the current published R-21 App input.
-sed -i 's/^ASTRID_APP_REF=.*/ASTRID_APP_REF=5c95abb00525e1a77d00c32042b6453d9f14f4e7/' "$app_root/_ENVIRONMENT"
+sed -i 's/^ASTRID_APP_REF=.*/ASTRID_APP_REF=ce1502e94b935fe6ef1e2f363fc6b55aade4a204/' "$app_root/_ENVIRONMENT"
 
 stage='verify-published-app-manifest'
 progress "$stage"
@@ -184,14 +184,14 @@ progress "$stage"
 # setup output as R-21 evidence.
 manifest="$RUNNER_TEMP/r21-published-install-manifest.json"
 curl --fail --silent --show-error --location \
-  https://raw.githubusercontent.com/banodoco/astrid-app/5c95abb00525e1a77d00c32042b6453d9f14f4e7/public/install-manifest.json \
+  https://raw.githubusercontent.com/banodoco/astrid-app/ce1502e94b935fe6ef1e2f363fc6b55aade4a204/public/install-manifest.json \
   --output "$manifest"
-printf '%s  %s\n' 'a6eef2804e58e198d56899f1b36d97688d5cbc4a0847a82078ba144df4a207eb' "$manifest" | sha256sum --check --status
+printf '%s  %s\n' '920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87' "$manifest" | sha256sum --check --status
 node - "$manifest" <<'NODE'
 const fs = require('node:fs');
 const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const expected = {
-  agent: 'e425903f7a9fa5b82973281d15054c0716b46e2d',
+  agent: '2de0726d1eaea7f7bd141251e088aa9fdf224525',
   runtime: '5453366458f7b4ee874c94d15ae7952e3e82d3c3',
 };
 for (const [name, sha] of Object.entries(expected)) {

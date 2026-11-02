@@ -6,9 +6,9 @@
 
 const TUPLE = Object.freeze({
   runtime: '5453366458f7b4ee874c94d15ae7952e3e82d3c3',
-  agent: 'e425903f7a9fa5b82973281d15054c0716b46e2d',
-  app: '5c95abb00525e1a77d00c32042b6453d9f14f4e7',
-  pinokio: '2f085c5fc0cde192ac4a022065883c85dcccd0de',
+  agent: '2de0726d1eaea7f7bd141251e088aa9fdf224525',
+  app: 'ce1502e94b935fe6ef1e2f363fc6b55aade4a204',
+  pinokio: '3a6a98ae251ca126505245286e2d3e760f4348e9',
   old_launcher: 'bbba620e3d89eeff8021417f365e6ea584203105',
   pinokiod: 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf',
   pterm: '5be43718701c448b43daf0ce51d8935f170065bb',
@@ -16,7 +16,7 @@ const TUPLE = Object.freeze({
 
 // This standalone observer does not execute the separate Agent journey harness.
 const AGENT_JOURNEY_HARNESS_REFERENCE = '6e46e3bb45ec3feddbd0b0617a50a157e3a4df67';
-const MANIFEST_SHA256 = 'a6eef2804e58e198d56899f1b36d97688d5cbc4a0847a82078ba144df4a207eb';
+const MANIFEST_SHA256 = '920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87';
 // These values come from the pinned App source above: its served manifest and
 // browser Runtime client. The observer uses the real browser-door routes with
 // this exact contract instead of treating an unrelated public-page 200 as an
@@ -39,7 +39,7 @@ const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
 // This lane is the dedicated diagnostic workflow source.  The product tuple
 // above remains the candidate under observation; this execution lane is never
 // substituted for its Pinokio product pin.
-const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-REVIEW-FIX-R1';
+const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-CURRENT-TUPLE-R1';
 const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1';
 const WORKFLOW_PATH = '.github/workflows/r21-real-engine.yml';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";

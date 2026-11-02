@@ -44,9 +44,9 @@ function receipt() {
 test('R-21 venue verifier accepts only a complete native old-launcher receipt', () => {
   assert.deepEqual(TUPLE, {
     runtime: '5453366458f7b4ee874c94d15ae7952e3e82d3c3',
-    agent: 'e425903f7a9fa5b82973281d15054c0716b46e2d',
-    app: '5c95abb00525e1a77d00c32042b6453d9f14f4e7',
-    pinokio: '2f085c5fc0cde192ac4a022065883c85dcccd0de',
+    agent: '2de0726d1eaea7f7bd141251e088aa9fdf224525',
+    app: 'ce1502e94b935fe6ef1e2f363fc6b55aade4a204',
+    pinokio: '3a6a98ae251ca126505245286e2d3e760f4348e9',
     old_launcher: 'bbba620e3d89eeff8021417f365e6ea584203105',
     pinokiod: 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf',
     pterm: '5be43718701c448b43daf0ce51d8935f170065bb',
@@ -93,7 +93,7 @@ test('R-21 dispatch binding accepts only the exact product dispatch or self-serv
   assert.equal(bound.endpoint, ENDPOINT);
   assert.equal(bound.workflow.sha, environment.GITHUB_SHA);
   assert.deepEqual(bound.agent_journey_harness, { ref: '6e46e3bb45ec3feddbd0b0617a50a157e3a4df67', executed: false });
-  assert.equal(bound.app_manifest_sha256, 'a6eef2804e58e198d56899f1b36d97688d5cbc4a0847a82078ba144df4a207eb');
+  assert.equal(bound.app_manifest_sha256, '920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87');
   assert.throws(() => validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'main' }, environment), /immutable 40-character SHA/);
   assert.throws(() => validateDispatch({ request_id: 'R-20', confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment), /request_id/);
   assert.throws(() => validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, {
@@ -102,8 +102,8 @@ test('R-21 dispatch binding accepts only the exact product dispatch or self-serv
   const manualEnvironment = {
     ...environment,
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-REVIEW-FIX-R1',
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-REVIEW-FIX-R1',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-CURRENT-TUPLE-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-CURRENT-TUPLE-R1',
   };
   const manualInput = { request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) };
   const manual = validateDispatch(manualInput, manualEnvironment);
