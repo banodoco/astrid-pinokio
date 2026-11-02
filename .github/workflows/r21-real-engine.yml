@@ -95,6 +95,7 @@ jobs:
       # retains only named diagnostic projections from this run.
       - name: Upload bounded R-21 diagnostic evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: r21-r13-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

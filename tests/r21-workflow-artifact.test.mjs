@@ -30,6 +30,7 @@ test('R-21 always uploads only the named bounded diagnostic evidence', () => {
   const expected = [
     '      - name: Upload bounded R-21 diagnostic evidence',
     '        if: always()',
+    '        continue-on-error: true',
     '        uses: actions/upload-artifact@v4',
     '        with:',
     '          name: r21-r13-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
