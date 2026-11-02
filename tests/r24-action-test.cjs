@@ -4,11 +4,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { terminalProjection, busyProjection, readControl } = require('../pinokio/providers/r24-action.cjs');
+const { LIVE_URI, requestId, terminalProjection, busyProjection, readControl } = require('../pinokio/providers/r24-action.cjs');
 const live = require('../pinokio/providers/r24-live-action.js');
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 (async () => {
-  const session = 'a'.repeat(32), request = 'b'.repeat(64), id = `r24-session=${session}-probe`;
+  const session = 'a'.repeat(32), request = 'b'.repeat(64), id = requestId(LIVE_URI, session, 'probe');
   const run = { id, packets: [
     { id, type: 'result', data: { schema: 'binding', session } },
     { id, type: 'event', data: 'stop' }, { id, type: 'disconnect' }
@@ -31,10 +31,12 @@ const digest = value => crypto.createHash('sha256').update(value).digest('hex');
     input.lifecycle_sha256 = '0'.repeat(64);
     await assert.rejects(live.execute({ input }));
     const full = { schema: 'astrid.r24.live-control.v1', pterm: root, session, request_sha256: request,
-      live_uri: lifecycle, stop_uri: lifecycle, lifecycle, lifecycle_sha256: digest(fs.readFileSync(lifecycle)),
+      live_uri: '~/api/astrid/pinokio/providers/r24-live-action.js', stop_uri: '~/api/astrid/pinokio/stop.js',
+      lifecycle, lifecycle_sha256: digest(fs.readFileSync(lifecycle)),
       backend_root: root, python, python_sha256: digest(fs.readFileSync(python)), data_root: root, control_dir: controlDir };
     const file = path.join(root, 'control.json'); fs.writeFileSync(file, JSON.stringify(full));
     assert.equal(readControl(file).session, session);
+    assert.throws(() => requestId('/absolute/action.js', session, 'probe'));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
   console.log('4 local action/control protocol fixtures passed');
 })().catch(() => { console.error('action protocol fixture failed'); process.exitCode = 1; });

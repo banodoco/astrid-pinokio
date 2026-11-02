@@ -419,8 +419,8 @@ def collect_authenticated(request, session, context):
     installed = context['installed']
     control = {'schema': 'astrid.r24.live-control.v1', 'pterm': str(context['pterm']),
         'session': session, 'request_sha256': sha(canonical(request)),
-        'live_uri': str(context['resource'] / 'pinokio/providers/r24-live-action.js'),
-        'stop_uri': str(context['resource'] / 'pinokio/stop.js'),
+        'live_uri': '~/api/astrid/pinokio/providers/r24-live-action.js',
+        'stop_uri': '~/api/astrid/pinokio/stop.js',
         'lifecycle': str(context['resource'] / 'pinokio/lifecycle.mjs'),
         'lifecycle_sha256': BINDING['lifecycle_sha256'], 'backend_root': str(installed['backend_root']),
         'python': str(installed['python']), 'python_sha256': installed['python_sha256'],

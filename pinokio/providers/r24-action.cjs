@@ -9,6 +9,8 @@ const crypto = require('node:crypto');
 
 const HEX32 = /^[0-9a-f]{32}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
+const LIVE_URI = '~/api/astrid/pinokio/providers/r24-live-action.js';
+const STOP_URI = '~/api/astrid/pinokio/stop.js';
 function exact(value, keys) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       Object.keys(value).sort().join('\0') !== [...keys].sort().join('\0')) throw new Error('invalid control');
@@ -23,7 +25,8 @@ function readControl(file) {
       !HEX64.test(value.request_sha256) || !HEX64.test(value.lifecycle_sha256) || !HEX64.test(value.python_sha256)) {
     throw new Error('invalid control identity');
   }
-  for (const key of ['pterm', 'live_uri', 'stop_uri', 'lifecycle', 'backend_root', 'python', 'data_root', 'control_dir']) {
+  if (value.live_uri !== LIVE_URI || value.stop_uri !== STOP_URI) throw new Error('invalid engine endpoint');
+  for (const key of ['pterm', 'lifecycle', 'backend_root', 'python', 'data_root', 'control_dir']) {
     if (typeof value[key] !== 'string' || !path.isAbsolute(value[key])) throw new Error('invalid control path');
   }
   return value;
@@ -82,6 +85,12 @@ function inputFor(control, mode) {
     lifecycle_sha256: control.lifecycle_sha256, backend_root: control.backend_root,
     python: control.python, python_sha256: control.python_sha256,
     data_root: control.data_root, control_dir: control.control_dir };
+}
+function requestId(uri, session, phase) {
+  if (![LIVE_URI, STOP_URI].includes(uri) || !HEX32.test(session) || !/^[a-z-]+$/.test(phase)) {
+    throw new Error('invalid request identity');
+  }
+  return `${uri}?r24-session=${session}-${phase}`;
 }
 function runAction(create, { id, uri, input, closeOnStart = false, onObserverLost }) {
   return openSocket(create).then(socket => new Promise((resolve, reject) => {
@@ -156,27 +165,30 @@ async function waitForDrained(control) {
   throw new Error('fault drain timeout');
 }
 async function collect(control, create = socketFactory(control)) {
-  const prefix = `r24-session=${control.session}`;
-  const probe = await runAction(create, { id: `${prefix}-probe`, uri: control.live_uri, input: inputFor(control, 'probe') });
+  const probe = await runAction(create, { id: requestId(control.live_uri, control.session, 'probe'),
+    uri: control.live_uri, input: inputFor(control, 'probe') });
   const binding = terminalProjection(probe, value => value && value.schema === 'astrid.r24.engine-binding.v1' &&
     value.session === control.session && value.request_sha256 === control.request_sha256 && value.mode === 'probe');
   if (await status(create, probe.id, control.live_uri) !== false) throw new Error('probe remained active');
-  const busyRun = await runAction(create, { id: `${prefix}-busy-read`, uri: control.live_uri, input: inputFor(control, 'busy') });
+  const busyRun = await runAction(create, { id: requestId(control.live_uri, control.session, 'busy-read'),
+    uri: control.live_uri, input: inputFor(control, 'busy') });
   let busy;
   terminalProjection(busyRun, value => { busy = busyProjection(value, control, 'busy'); return true; });
-  const stopRun = await runAction(create, { id: `${prefix}-busy-stop`, uri: control.stop_uri });
+  const stopRun = await runAction(create, { id: requestId(control.stop_uri, control.session, 'busy-stop'),
+    uri: control.stop_uri });
   if (!stopRun.error || !busy.blockers.every(row => String(stopRun.error).includes(row.task_id))) {
     throw new Error('Stop did not preserve busy refusal');
   }
   const busyFence = await fence(create, stopRun.id, control.stop_uri);
-  const unknownId = `${prefix}-unknown`;
+  const unknownId = requestId(control.live_uri, control.session, 'unknown');
   const unknownRun = await runAction(create, { id: unknownId, uri: control.live_uri,
     input: inputFor(control, 'unknown'), closeOnStart: true,
     onObserverLost: () => fs.writeFileSync(path.join(control.control_dir, 'arm'), control.session + '\n', { flag: 'wx', mode: 0o600 }) });
   if (!unknownRun.observer_lost) throw new Error('observer loss not established');
   const drain = await waitForDrained(control);
   const unknownFence = await fence(create, unknownId, control.live_uri);
-  const restoreRun = await runAction(create, { id: `${prefix}-restoration`, uri: control.live_uri,
+  const restoreRun = await runAction(create, { id: requestId(control.live_uri, control.session, 'restoration'),
+    uri: control.live_uri,
     input: inputFor(control, 'restoration') });
   let restored;
   const restoration = terminalProjection(restoreRun, value => {
@@ -198,4 +210,5 @@ if (require.main === module) main().catch(() => {
   process.stderr.write(JSON.stringify({ schema: 'astrid.r24.live-action-error.v1', status: 'unknown' }) + '\n');
   process.exitCode = 1;
 });
-module.exports = { readControl, status, fence, runAction, terminalProjection, busyProjection, collect };
+module.exports = { LIVE_URI, STOP_URI, requestId, readControl, status, fence, runAction,
+  terminalProjection, busyProjection, collect };

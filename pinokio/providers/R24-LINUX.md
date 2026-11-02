@@ -32,8 +32,12 @@ managed Runtime must already be installed under
 actual `running` or `cancel_requested` task. The producer does not create a
 synthetic task and will fail closed if genuine busy state is absent.
 
-The controller uses request IDs of the form `r24-session=<session>-<phase>`.
-Each action is dispatched on the socket that subscribed before processing, and
+The controller uses fixed Pinokio endpoints
+`~/api/astrid/pinokio/providers/r24-live-action.js` and
+`~/api/astrid/pinokio/stop.js`. Each exact request ID is that endpoint plus the
+query `?r24-session=<session>-<phase>`; this is both uniquely correlated and a
+valid stoppable ID for the pinned engine. Each action is dispatched on the socket
+that subscribed before processing, and
 only packets carrying that exact ID are accepted. A probe requires one result,
 the engine `stop` event, disconnect, and an idle status query. Busy is read by
 the engine-loaded `r24-live-action.js` through the candidate's actual
