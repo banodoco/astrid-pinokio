@@ -1,7 +1,5 @@
 name: R21 isolated native wildcard bind
 on:
-  push:
-    branches: [venue/M-VENUE-V02-R21-ISOLATED-BIND-1]
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 3
       - uses: actions/setup-node@v4
         with:
           node-version: '20'

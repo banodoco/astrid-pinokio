@@ -8,6 +8,7 @@ work=$(mktemp -d "$RUNNER_TEMP/r21-bind.XXXXXXXX")
 export HOME="$work/home" PINOKIO_HOME="$work/pinokio-home" PINOKIO_HTTPS_ACTIVE=0 PINOKIO_NETWORK_ACTIVE=0
 mkdir -p "$HOME" "$PINOKIO_HOME"
 export CANDIDATE_SHA=13cb31104c8aae655d0ee04efdb9537aa111e340
+export VENUE_PARENT_SHA=69fa7602ef0bd296dedfd8f8efc7e1be14666fe4
 export AGENT_SHA=a678ae168498bdc4795471b44446d34d58f7c5cd
 export DAEMON_EXPECTED=add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
 export PTERM_EXPECTED=5be43718701c448b43daf0ce51d8935f170065bb
@@ -31,7 +32,7 @@ finish() {
   export cleanup_exit daemon_exit final_exit
   python3 - "$out/receipt.json" <<'PY'
 import json, os, platform, sys
-keys = ['GITHUB_REPOSITORY','GITHUB_REF','GITHUB_SHA','GITHUB_WORKFLOW_REF','GITHUB_WORKFLOW_SHA','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_JOB','RUNNER_OS','RUNNER_ARCH','ImageOS','ImageVersion','CANDIDATE_SHA','AGENT_SHA','DAEMON_EXPECTED','PTERM_EXPECTED','daemon_sha','pterm_sha','daemon_pid','http_status','binding_exit','outbound_exit','daemon_clone_exit','daemon_checkout_exit','daemon_install_exit','pterm_clone_exit','pterm_checkout_exit','pterm_install_exit','setup_exit','readiness_exit','listener_capture_exit','listener_owner_exit','daemon_exit','cleanup_exit','final_exit']
+keys = ['GITHUB_REPOSITORY','GITHUB_REF','GITHUB_SHA','GITHUB_WORKFLOW_REF','GITHUB_WORKFLOW_SHA','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_JOB','RUNNER_OS','RUNNER_ARCH','ImageOS','ImageVersion','CANDIDATE_SHA','VENUE_PARENT_SHA','AGENT_SHA','DAEMON_EXPECTED','PTERM_EXPECTED','daemon_sha','pterm_sha','daemon_pid','http_status','binding_exit','outbound_exit','daemon_clone_exit','daemon_checkout_exit','daemon_install_exit','pterm_clone_exit','pterm_checkout_exit','pterm_install_exit','setup_exit','readiness_exit','listener_capture_exit','listener_owner_exit','daemon_exit','cleanup_exit','final_exit']
 data = {k: os.environ.get(k, 'unavailable') for k in keys}
 data.update({'kernel': platform.release(), 'outbound_url': 'https://github.com/pinokiocomputer/pinokiod.git/info/refs?service=git-upload-pack', 'readiness_url': 'http://127.0.0.1:42000/pinokio/version', 'listener_file': 'listener.txt', 'cleanup': 'task-local source and homes removed; daemon process group terminated' if data['cleanup_exit'] == '0' else 'cleanup failed'})
 with open(sys.argv[1], 'w') as f: json.dump(data, f, indent=2, sort_keys=True); f.write('\n')
@@ -40,8 +41,8 @@ PY
 }
 trap finish EXIT
 trap 'exit 1' TERM INT
-# A single venue-only commit must descend directly from the requested candidate.
-if [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" && "$(git rev-parse HEAD^)" == "$CANDIDATE_SHA" && "${GITHUB_WORKFLOW_SHA:-}" == "$GITHUB_SHA" ]]; then binding_exit=0; else binding_exit=1; fi
+# Bind this workflow to the exact prior venue commit and its product parent.
+if [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" && "$(git rev-parse HEAD^)" == "$VENUE_PARENT_SHA" && "$(git rev-parse HEAD^^)" == "$CANDIDATE_SHA" && "${GITHUB_WORKFLOW_SHA:-}" == "$GITHUB_SHA" ]]; then binding_exit=0; else binding_exit=1; fi
 curl -fsS --max-time 20 -o /dev/null 'https://github.com/pinokiocomputer/pinokiod.git/info/refs?service=git-upload-pack'; outbound_exit=$?
 if [[ "$binding_exit" != 0 || "$outbound_exit" != 0 ]]; then exit 1; fi
 timeout 120 git clone -q --filter=blob:none https://github.com/pinokiocomputer/pinokiod.git "$work/daemon" >/dev/null 2>&1; daemon_clone_exit=$?
@@ -70,5 +71,5 @@ for i in {1..90}; do
 done
 ss -ltnp '( sport = :42000 )' > "$out/listener.txt" 2>&1; listener_capture_exit=$?
 listener_owner_exit=1
-if [[ "$listener_capture_exit" == 0 ]] && awk -v pid="$pid" '$4 == "0.0.0.0:42000" && index($0,"pid=" pid ",") { found=1 } END { exit !found }' "$out/listener.txt"; then listener_owner_exit=0; fi
+if [[ "$listener_capture_exit" == 0 && "$readiness_exit" == 0 ]] && awk -v pid="$pid" -f .github/venue/r21-listener.awk "$out/listener.txt"; then listener_owner_exit=0; fi
 exit 0
