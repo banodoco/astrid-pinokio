@@ -68,7 +68,7 @@ test('installed tuple observation binds the selected manifest and rejects escape
   } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
 });
 
-test('protected state rejects a missing selected version or required selected file', async () => {
+test('protected state rejects a missing selected version, required selected file, or user-data root', async () => {
   const f = fixture();
   try {
     fs.rmSync(f.version, { recursive: true });
@@ -80,6 +80,12 @@ test('protected state rejects a missing selected version or required selected fi
     fs.rmSync(path.join(missing.version, 'bin', 'python'));
     await assert.rejects(digestProtectedState(missing.appRoot, missing.home), /selected installed Python is missing/);
   } finally { fs.rmSync(missing.home, { recursive: true, force: true }); }
+
+  const missingData = fixture();
+  try {
+    fs.rmSync(missingData.data, { recursive: true });
+    await assert.rejects(digestProtectedState(missingData.appRoot, missingData.home), /protected user data root is missing/);
+  } finally { fs.rmSync(missingData.home, { recursive: true, force: true }); }
 });
 
 test('deleting a selected installed file changes the protected digest and is rejected by comparison', async () => {
@@ -92,18 +98,64 @@ test('deleting a selected installed file changes the protected digest and is rej
   } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
 });
 
-test('installed-byte digest binds symlink target bytes and rejects dangling links', { skip: process.platform === 'win32' }, async () => {
+test('protected-state digests bind in-root linked bytes and reject dangling links', { skip: process.platform === 'win32' }, async () => {
   const f = fixture();
   try {
-    const external = path.join(f.home, 'external-program');
+    const target = path.join(f.version, 'linked-target');
     const link = path.join(f.version, 'linked-program');
-    fs.writeFileSync(external, 'external-v1');
-    fs.symlinkSync(external, link);
+    fs.writeFileSync(target, 'linked-v1');
+    fs.symlinkSync('linked-target', link);
     const before = await digestProtectedState(f.appRoot, f.home);
-    fs.writeFileSync(external, 'external-v2');
+    fs.writeFileSync(target, 'linked-v2');
     const changed = await digestProtectedState(f.appRoot, f.home);
     assert.notEqual(changed.installed_bytes, before.installed_bytes);
-    fs.rmSync(external);
+    fs.rmSync(target);
     await assert.rejects(digestProtectedState(f.appRoot, f.home), /dangling link/);
+  } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
+});
+
+test('protected user data binds in-root links and rejects linked roots', { skip: process.platform === 'win32' }, async () => {
+  const f = fixture();
+  try {
+    const target = path.join(f.data, 'linked-target');
+    const link = path.join(f.data, 'linked-project');
+    fs.writeFileSync(target, 'linked-user-data-v1');
+    fs.symlinkSync('linked-target', link);
+    const before = await digestProtectedState(f.appRoot, f.home);
+    fs.writeFileSync(target, 'linked-user-data-v2');
+    const changed = await digestProtectedState(f.appRoot, f.home);
+    assert.notEqual(changed.user_data, before.user_data);
+
+    fs.rmSync(f.data, { recursive: true });
+    const replacement = path.join(f.home, 'replacement-data');
+    fs.mkdirSync(replacement);
+    fs.symlinkSync(replacement, f.data);
+    await assert.rejects(digestProtectedState(f.appRoot, f.home), /protected user data root is not a regular directory/);
+  } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
+});
+
+test('protected-state links cannot escape or recursively traverse a directory', { skip: process.platform === 'win32' }, async () => {
+  const f = fixture();
+  try {
+    const outside = path.join(f.home, 'outside');
+    fs.writeFileSync(outside, 'outside-program');
+    fs.symlinkSync(outside, path.join(f.version, 'escaped-program'));
+    await assert.rejects(digestProtectedState(f.appRoot, f.home), /link escaped its root/);
+
+    fs.rmSync(path.join(f.version, 'escaped-program'));
+    fs.mkdirSync(path.join(f.version, 'linked-directory'));
+    fs.writeFileSync(path.join(f.version, 'linked-directory', 'child'), 'child');
+    fs.symlinkSync('linked-directory', path.join(f.version, 'directory-link'));
+    await assert.rejects(digestProtectedState(f.appRoot, f.home), /link target is not a regular file/);
+  } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
+});
+
+test('protected user-data links cannot escape their snapshot root', { skip: process.platform === 'win32' }, async () => {
+  const f = fixture();
+  try {
+    const outside = path.join(f.home, 'outside-user-data');
+    fs.writeFileSync(outside, 'outside-user-data');
+    fs.symlinkSync(outside, path.join(f.data, 'escaped-user-data'));
+    await assert.rejects(digestProtectedState(f.appRoot, f.home), /link escaped its root/);
   } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
 });
