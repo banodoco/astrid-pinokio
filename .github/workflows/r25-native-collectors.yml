@@ -1,43 +1,33 @@
-name: R-25 native collector route
+name: R-25 snapshot collector component route
 
 on:
   workflow_dispatch:
     inputs:
-      tuple_json:
-        description: Canonical CURRENT-TUPLE.json object, supplied by M-INT/M-VENUE
+      agent_ref:
+        description: Immutable astrid-agent snapshot collector commit
         required: true
-        type: string
-      source_ref:
-        description: Immutable adapter source commit
-        required: true
-        default: 47059b072889b489b2db20d3a3e86acf02e5a3d4
+        default: 142d7b0ba9de0971cb2fd642f9de8660ae887086
         type: string
       target_os:
-        description: Native collector platform(s)
+        description: Platform component probe(s); not M4-6 evidence
         required: true
         default: both
         type: choice
         options: [macos, windows, both]
-      mode:
-        description: Pinokio slot mode(s) to bind
-        required: true
-        default: both
-        type: choice
-        options: [backend, fully-local, both]
 
 permissions:
   contents: read
 
 jobs:
-  macos:
+  macos-component:
     if: inputs.target_os == 'macos' || inputs.target_os == 'both'
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 15
     env:
-      TUPLE_JSON: ${{ inputs.tuple_json }}
-      SOURCE_REF: ${{ inputs.source_ref }}
-      MODE: ${{ inputs.mode }}
-      SOURCE_ROOT: ${{ runner.temp }}/r25-macos-source
+      AGENT_REF: ${{ inputs.agent_ref }}
+      AGENT_ROOT: ${{ runner.temp }}/astrid-agent
+      SNAPSHOT: ${{ runner.temp }}/r25-macos-component-snapshot.json
+      ROUTE: ${{ runner.temp }}/r25-macos-component-route.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,58 +35,55 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
-      - name: Materialize immutable adapter source and validate binding
+      - name: Materialize exact Agent source
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$SOURCE_ROOT"
-          git fetch --no-tags --depth=1 origin "$SOURCE_REF"
-          git archive FETCH_HEAD -- \
-            .github/venue/adapters/macos-observer.c \
-            .github/venue/adapters/macos-observer.cjs \
-            tests/macos-observer.test.mjs \
-            .github/workflows/r25-os-adapters.yml | tar -x -C "$SOURCE_ROOT"
+          test "$AGENT_REF" = 142d7b0ba9de0971cb2fd642f9de8660ae887086
+          git clone --filter=blob:none --no-checkout https://github.com/banodoco/astrid-agent.git "$AGENT_ROOT"
+          git -C "$AGENT_ROOT" fetch --no-tags --depth=1 origin "$AGENT_REF"
+          git -C "$AGENT_ROOT" checkout --detach FETCH_HEAD
+          test "$(git -C "$AGENT_ROOT" rev-parse HEAD)" = "$AGENT_REF"
+      - name: Validate source binding and focused parsers
+        shell: bash
+        run: |
+          set -euo pipefail
           node pinokio/providers/r25-native-collector-binding.cjs \
-            --tuple-json "$TUPLE_JSON" --candidate-ref "$GITHUB_SHA" \
-            --source-ref "$SOURCE_REF" --target-os macos --mode "$MODE" \
-            --source-root "$SOURCE_ROOT" --output "$RUNNER_TEMP/r25-native-binding-macos.json"
-      - name: Build fixed Endpoint Security helper
+            --validate-source-only true --agent-ref "$AGENT_REF" \
+            --agent-root "$AGENT_ROOT" --pinokio-root "$GITHUB_WORKSPACE" > "$ROUTE"
+          node --test \
+            tests/r25-native-collector-binding.test.cjs \
+            tests/r25-snapshot-macos.test.cjs
+          python3 -m py_compile \
+            "$AGENT_ROOT/scripts/pinokio_snapshot_collector.py" \
+            "$AGENT_ROOT/scripts/pinokio_snapshot_macos.py"
+      - name: Execute one direct macOS component snapshot
         shell: bash
         run: |
           set -euo pipefail
-          sdk="$(xcrun --sdk macosx --show-sdk-path)"
-          test -d "$sdk/System/Library/Frameworks/EndpointSecurity.framework"
-          /usr/bin/clang -isysroot "$sdk" -O2 -Wall -Wextra -fblocks \
-            "$SOURCE_ROOT/.github/venue/adapters/macos-observer.c" \
-            -framework EndpointSecurity -lbsm \
-            -o "$SOURCE_ROOT/.github/venue/adapters/macos-observer"
-      - name: Retain bounded macOS helper identity
-        shell: bash
-        run: shasum -a 256 "$SOURCE_ROOT/.github/venue/adapters/macos-observer" > "$RUNNER_TEMP/r25-native-macos-helper.sha256"
-      - name: Run focused native parser/route test
-        shell: bash
-        working-directory: ${{ runner.temp }}/r25-macos-source
-        run: node --test tests/macos-observer.test.mjs
-      - name: Retain bounded binding result
+          PYTHONPATH="$AGENT_ROOT" python3 -m scripts.pinokio_snapshot_macos \
+            --launchd-target "gui/$(id -u)/haus.astrid.runtime" > "$SNAPSHOT"
+          node -e "const fs=require('node:fs'); const p=require('./pinokio/providers/r25-snapshot-macos.cjs'); p.parseObservation(fs.readFileSync(process.env.SNAPSHOT));"
+      - name: Retain component-only output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r25-native-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: r25-snapshot-component-macos-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/r25-native-binding-macos.json
-            ${{ runner.temp }}/r25-native-macos-helper.sha256
+            ${{ runner.temp }}/r25-macos-component-route.json
+            ${{ runner.temp }}/r25-macos-component-snapshot.json
           if-no-files-found: warn
           retention-days: 30
 
-  windows:
+  windows-component:
     if: inputs.target_os == 'windows' || inputs.target_os == 'both'
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 15
     env:
-      TUPLE_JSON: ${{ inputs.tuple_json }}
-      SOURCE_REF: ${{ inputs.source_ref }}
-      MODE: ${{ inputs.mode }}
-      SOURCE_ROOT: ${{ runner.temp }}\r25-windows-source
+      AGENT_REF: ${{ inputs.agent_ref }}
+      AGENT_ROOT: ${{ runner.temp }}\astrid-agent
+      SNAPSHOT: ${{ runner.temp }}\r25-windows-component-snapshot.json
+      ROUTE: ${{ runner.temp }}\r25-windows-component-route.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,44 +91,40 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
-      - name: Materialize immutable adapter source and validate binding
+      - name: Materialize exact Agent source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force -Path $env:SOURCE_ROOT | Out-Null
-          git fetch --no-tags --depth=1 origin $env:SOURCE_REF
-          git archive FETCH_HEAD -- `
-            pinokio/windows-observer/adapter.mjs `
-            pinokio/windows-observer/etw-observer.cpp `
-            tests/windows-observer-adapter.test.mjs `
-            .github/workflows/r25-os-adapters.yml | tar -x -C $env:SOURCE_ROOT
+          if ($env:AGENT_REF -ne '142d7b0ba9de0971cb2fd642f9de8660ae887086') { throw 'agent_ref differs' }
+          git clone --filter=blob:none --no-checkout https://github.com/banodoco/astrid-agent.git $env:AGENT_ROOT
+          git -C $env:AGENT_ROOT fetch --no-tags --depth=1 origin $env:AGENT_REF
+          git -C $env:AGENT_ROOT checkout --detach FETCH_HEAD
+          if ((git -C $env:AGENT_ROOT rev-parse HEAD) -ne $env:AGENT_REF) { throw 'Agent HEAD differs' }
+      - name: Validate source binding and focused parsers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
           node pinokio/providers/r25-native-collector-binding.cjs `
-            --tuple-json $env:TUPLE_JSON --candidate-ref $env:GITHUB_SHA `
-            --source-ref $env:SOURCE_REF --target-os windows --mode $env:MODE `
-            --source-root $env:SOURCE_ROOT --output "$env:RUNNER_TEMP\r25-native-binding-windows.json"
-      - name: Run focused Windows build and bounded ETW test
+            --validate-source-only true --agent-ref $env:AGENT_REF `
+            --agent-root $env:AGENT_ROOT --pinokio-root $env:GITHUB_WORKSPACE | Set-Content -Encoding utf8 $env:ROUTE
+          node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-windows.test.cjs
+          python -m py_compile `
+            "$env:AGENT_ROOT\scripts\pinokio_snapshot_collector.py" `
+            "$env:AGENT_ROOT\scripts\pinokio_snapshot_windows.py"
+      - name: Execute one direct Windows component snapshot
         shell: pwsh
-        working-directory: ${{ runner.temp }}\r25-windows-source
         run: |
           $ErrorActionPreference = 'Stop'
-          $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
-          $vs = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
-          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
-          $exe = Join-Path $PWD 'pinokio\windows-observer\etw-observer.exe'
-          $source = Join-Path $PWD 'pinokio\windows-observer\etw-observer.cpp'
-          $obj = Join-Path $env:RUNNER_TEMP 'r25-etw-observer.obj'
-          $build = "call `"$setup`" >nul && cl /nologo /EHsc /W4 /O2 /Fo`"$obj`" /Fe`"$exe`" `"$source`" /link advapi32.lib ole32.lib"
-          & cmd.exe /d /s /c $build
-          if ($LASTEXITCODE -ne 0) { throw "fixed ETW helper build failed with exit $LASTEXITCODE" }
-          @{ source_ref = $env:SOURCE_REF; executable = 'pinokio/windows-observer/etw-observer.exe'; sha256 = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant() } | ConvertTo-Json -Compress | Set-Content -Encoding utf8 "$env:RUNNER_TEMP\r25-native-windows-helper.json"
-          node tests/windows-observer-adapter.test.mjs
-      - name: Retain bounded binding result
+          $env:PYTHONPATH = $env:AGENT_ROOT
+          python -c "import json; from scripts.pinokio_snapshot_windows import collect_windows_snapshot; print(json.dumps(collect_windows_snapshot(scheduled_task_paths=[r'\Astrid Runtime'], service_names=['AstridRuntime']), sort_keys=True, separators=(',', ':')))" | Set-Content -Encoding utf8 $env:SNAPSHOT
+          node -e "const fs=require('node:fs'); const p=require('./pinokio/providers/r25-snapshot-windows.cjs'); p.validateObservation(JSON.parse(fs.readFileSync(process.env.SNAPSHOT, 'utf8').replace(/^\uFEFF/, '')));"
+      - name: Retain component-only output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r25-native-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          name: r25-snapshot-component-windows-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}\r25-native-binding-windows.json
-            ${{ runner.temp }}\r25-native-windows-helper.json
+            ${{ runner.temp }}\r25-windows-component-route.json
+            ${{ runner.temp }}\r25-windows-component-snapshot.json
           if-no-files-found: warn
           retention-days: 30
