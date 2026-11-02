@@ -1,0 +1,152 @@
+{
+  "schema": 1,
+  "binding": {
+    "request_id": "R-21-PUBLISHED-TUPLE-R1",
+    "runner_ref": "a70615355d350f5eb95f896d333f451ad8e51c27",
+    "run_id": "41459848667",
+    "run_attempt": "1"
+  },
+  "events": [
+    {
+      "timestamp": "2026-11-02T14:29:49.179Z",
+      "kind": "start",
+      "index": 0,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:29:49.180Z",
+      "kind": "result",
+      "index": 0,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:29:49.187Z",
+      "kind": "start",
+      "index": 1,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:29:49.188Z",
+      "kind": "result",
+      "index": 1,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:29:49.194Z",
+      "kind": "start",
+      "index": 2,
+      "total": 4,
+      "method": "shell.run"
+    },
+    {
+      "timestamp": "2026-11-02T14:29:49.840Z",
+      "kind": "stream",
+      "index": 2,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:29:49.840Z",
+      "kind": "installer-failure-marker",
+      "index": 2,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:29:49.842Z",
+      "kind": "stream",
+      "index": 2,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:29:49.842Z",
+      "kind": "installer-failure-marker",
+      "index": 2,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:29:49.843Z",
+      "kind": "stream",
+      "index": 2,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:29:49.843Z",
+      "kind": "error",
+      "index": null,
+      "total": null,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:29:50.362Z",
+      "kind": "stream",
+      "index": 2,
+      "total": 4,
+      "method": null
+    }
+  ],
+  "last_activity": {
+    "timestamp": "2026-11-02T14:29:50.362Z",
+    "kind": "stream",
+    "index": 2,
+    "total": 4,
+    "method": null
+  },
+  "last_native_event": {
+    "timestamp": "2026-11-02T14:29:50.362Z",
+    "kind": "stream",
+    "index": 2,
+    "total": 4,
+    "method": null
+  },
+  "last_start": {
+    "timestamp": "2026-11-02T14:29:49.194Z",
+    "kind": "start",
+    "index": 2,
+    "total": 4,
+    "method": "shell.run"
+  },
+  "last_result": {
+    "timestamp": "2026-11-02T14:29:49.188Z",
+    "kind": "result",
+    "index": 1,
+    "total": 4,
+    "method": null
+  },
+  "last_error": {
+    "timestamp": "2026-11-02T14:29:49.843Z",
+    "kind": "error",
+    "index": null,
+    "total": null,
+    "method": null
+  },
+  "first_error": {
+    "timestamp": "2026-11-02T14:29:49.840Z",
+    "source": "installer_failure_marker",
+    "index": 2,
+    "total": 4,
+    "method": null,
+    "reason": "installer_failure_marker",
+    "code": "unknown"
+  },
+  "last_terminal": null,
+  "timer": {
+    "started_at": "2026-11-02T14:29:48.970Z",
+    "deadline_at": "2026-11-02T15:14:48.970Z",
+    "fired_at": "2026-11-02T15:14:49.065Z"
+  },
+  "child": {
+    "spawn_error_at": null,
+    "exited_at": "2026-11-02T15:14:49.114Z",
+    "code": 0,
+    "signal": null,
+    "signal_observed": false
+  }
+}

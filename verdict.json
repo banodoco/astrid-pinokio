@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "status": "FAILED",
+  "reason": "journey_receipt_missing",
+  "setup_exit": 0,
+  "journey_exit": 1,
+  "progress": {
+    "stage": "run-r21-journey",
+    "substage": "install",
+    "elapsed_ms": 191694
+  },
+  "watchdog": {
+    "timed_out": false,
+    "elapsed_ms": 2893921,
+    "exit_code": 1
+  },
+  "action_inner_exits": {
+    "install": null,
+    "first_click": null,
+    "stop": null,
+    "retry": null,
+    "cleanup": null
+  },
+  "workflow_sha": "a70615355d350f5eb95f896d333f451ad8e51c27",
+  "run_id": "41459848667",
+  "run_attempt": "1"
+}
