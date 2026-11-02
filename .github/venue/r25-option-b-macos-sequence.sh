@@ -9,6 +9,8 @@ test "$(id -un)" = astrid-runner
 command -v git >/dev/null
 command -v node >/dev/null
 command -v npm >/dev/null
+command -v curl >/dev/null
+command -v shasum >/dev/null
 test "$(node --version)" = v20.19.4
 
 run_parent="$HOME/r25-option-b-runs"
@@ -92,6 +94,9 @@ test -x "$python_actual_executable"
 # interpreter. No alternate executable is installed.
 
 venue_ref=327d0fc29f0b63d58e6c6c3449c81af5912ac85c
+wrapper_ref=37e2337271cffe275374fe9a2eda73e8948ef17a
+wrapper_sha256=c9abcd60a839de2001195f207e63133632d457bc2c4fa921f3ba4c09efdd0570
+wrapper_url="https://raw.githubusercontent.com/banodoco/astrid-pinokio/$wrapper_ref/.github/venue/r25-local-macos-option-b.sh"
 agent_ref=a6b68d5b5478326a4db1971966d33a2cfe61d091
 pinokiod_ref=add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
 pterm_ref=5be43718701c448b43daf0ce51d8935f170065bb
@@ -107,6 +112,8 @@ printf '%s\n' \
   "python_actual_version=$python_actual_version" \
   "python_version_guard=explicitly-supported-3.11" \
   "pinokio_source_ref=$venue_ref" \
+  "executed_wrapper_ref=$wrapper_ref" \
+  "executed_wrapper_sha256=$wrapper_sha256" \
   "pinokio_product_ref=$pinokio_product_ref" \
   "agent_ref=$agent_ref" \
   "pinokiod_ref=$pinokiod_ref" \
@@ -130,6 +137,15 @@ clone_pinned astrid-agent https://github.com/banodoco/astrid-agent.git "$agent_r
 clone_pinned pinokiod https://github.com/pinokiocomputer/pinokiod.git "$pinokiod_ref"
 clone_pinned pterm https://github.com/pinokiocomputer/pterm.git "$pterm_ref"
 
+wrapper_path="$sources/astrid-pinokio/.github/venue/r25-local-macos-option-b.sh"
+wrapper_download="$run_root/r25-local-macos-option-b.sh.download"
+test ! -L "$wrapper_path"
+curl --fail --silent --show-error --location "$wrapper_url" --output "$wrapper_download"
+printf '%s  %s\n' "$wrapper_sha256" "$wrapper_download" | shasum -a 256 --check
+chmod 700 "$wrapper_download"
+mv -f "$wrapper_download" "$wrapper_path"
+printf '%s  %s\n' "$wrapper_sha256" "$wrapper_path" | shasum -a 256 --check
+
 npm ci --omit=dev --prefix "$sources/pinokiod" --silent
 npm ci --omit=dev --prefix "$sources/pterm" --silent
 
@@ -144,11 +160,11 @@ npm ci --omit=dev --prefix "$sources/pterm" --silent
     "$sources/astrid-agent/scripts/pinokio_snapshot_macos.py" \
     .github/venue/r25-snapshot-worker.py
   node --check .github/venue/r25-snapshot-runner.cjs
-  bash -n .github/venue/r25-local-macos-option-b.sh
+  bash -n "$wrapper_path"
 )
 
 set +e
-bash "$sources/astrid-pinokio/.github/venue/r25-local-macos-option-b.sh" \
+bash "$wrapper_path" \
   "$run_root" "$sources/astrid-agent" "$sources/pinokiod" "$sources/pterm"
 route_exit=$?
 set -e
