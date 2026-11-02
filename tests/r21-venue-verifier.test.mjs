@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { test } from 'node:test';
 import verifier from '../.github/venue/r21-verify.cjs';
 
-const { ACTIONS, APP_RUNTIME, CONFIRMATION, ENDPOINT, REQUEST_ID, TUPLE, validateDispatch, verifyReceipt } = verifier;
+const { ACTIONS, APP_RUNTIME, CONFIRMATION, ENDPOINT, MANIFEST_SHA256, REQUEST_ID, TUPLE, validateDispatch, verifyReceipt } = verifier;
 
 function innerExit() { return { code: 0, signal: null }; }
 function terminal(refusal = false) { return { stop: true, disconnect: true, expected_refusal: refusal }; }
@@ -41,7 +41,7 @@ function receipt() {
         runtime_instance_digest: '1'.repeat(64), realm_digest: '2'.repeat(64),
         served_build: {
           source_commit: TUPLE.app,
-          manifest_sha256: 'b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f',
+          manifest_sha256: MANIFEST_SHA256,
           build_json_app: TUPLE.app, build_json_release: 1, build_json_sha256: '3'.repeat(64),
           origin: APP_RUNTIME.origin, local_loopback: true,
         },
@@ -71,7 +71,7 @@ test('R-21 venue verifier accepts only a complete native old-launcher receipt', 
 
 test('R-21 real-engine route and receipt bind the same current manifest tuple', () => {
   const runner = fs.readFileSync('.github/venue/r21-real-engine.sh', 'utf8');
-  for (const value of [TUPLE.pinokio, TUPLE.agent, TUPLE.app, 'b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f']) {
+  for (const value of [TUPLE.pinokio, TUPLE.runtime, TUPLE.agent, TUPLE.app, MANIFEST_SHA256]) {
     assert.match(runner, new RegExp(value));
   }
   for (const command of [
@@ -126,7 +126,7 @@ test('R-21 dispatch binding accepts only the exact dedicated request or self-ser
   assert.equal(bound.endpoint, ENDPOINT);
   assert.equal(bound.workflow.sha, environment.GITHUB_SHA);
   assert.deepEqual(bound.agent_journey_harness, { ref: '6e46e3bb45ec3feddbd0b0617a50a157e3a4df67', executed: false });
-  assert.equal(bound.app_manifest_sha256, 'b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f');
+  assert.equal(bound.app_manifest_sha256, MANIFEST_SHA256);
   assert.throws(() => validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'main' }, environment), /immutable 40-character SHA/);
   assert.throws(() => validateDispatch({ request_id: 'R-20', confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment), /request_id/);
   assert.throws(() => validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, {
