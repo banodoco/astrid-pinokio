@@ -85,19 +85,19 @@ if [[ "${1:-}" == --work ]]; then
     git init --quiet "$RUNNER_TEMP/r21-candidate-app-source"
     git -C "$RUNNER_TEMP/r21-candidate-app-source" remote add origin https://github.com/banodoco/astrid-app.git
     git -C "$RUNNER_TEMP/r21-candidate-app-source" fetch --quiet --depth=1 --filter=blob:none origin \
-      ce1502e94b935fe6ef1e2f363fc6b55aade4a204
+      933c53a6fb1a11e5f8a01335d6252016d703beec
     git -C "$RUNNER_TEMP/r21-candidate-app-source" checkout --quiet --detach FETCH_HEAD
-    test "$(git -C "$RUNNER_TEMP/r21-candidate-app-source" rev-parse HEAD)" = 'ce1502e94b935fe6ef1e2f363fc6b55aade4a204'
+    test "$(git -C "$RUNNER_TEMP/r21-candidate-app-source" rev-parse HEAD)" = '933c53a6fb1a11e5f8a01335d6252016d703beec'
     progress setup install-candidate-app
     npm ci --prefix "$RUNNER_TEMP/r21-candidate-app-source" --silent
     progress setup build-candidate-app
-    env RAILWAY_GIT_COMMIT_SHA=ce1502e94b935fe6ef1e2f363fc6b55aade4a204 \
-      VITE_APP_BUILD=ce1502e94b935fe6ef1e2f363fc6b55aade4a204 NODE_OPTIONS=--max-old-space-size=4096 \
+    env RAILWAY_GIT_COMMIT_SHA=933c53a6fb1a11e5f8a01335d6252016d703beec \
+      VITE_APP_BUILD=933c53a6fb1a11e5f8a01335d6252016d703beec NODE_OPTIONS=--max-old-space-size=4096 \
       npm run --prefix "$RUNNER_TEMP/r21-candidate-app-source" build:hosted --silent
     node .github/venue/r21-candidate-app-build.cjs \
       --source "$RUNNER_TEMP/r21-candidate-app-source" \
-      --app ce1502e94b935fe6ef1e2f363fc6b55aade4a204 \
-      --manifest 920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87 \
+      --app 933c53a6fb1a11e5f8a01335d6252016d703beec \
+      --manifest b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f \
       --output "$RUNNER_TEMP/r21-candidate-app-build.json"
   )
   status=$?
@@ -187,19 +187,19 @@ test "$(git -C "$RUNNER_TEMP/pinokiod" rev-parse HEAD)" = 'add4a674ad1ba95bb62ec
 test "$(git -C "$RUNNER_TEMP/pterm" rev-parse HEAD)" = '5be43718701c448b43daf0ce51d8935f170065bb'
 node .github/venue/r21-candidate-app-build.cjs \
   --source "$candidate_app_source" \
-  --app ce1502e94b935fe6ef1e2f363fc6b55aade4a204 \
-  --manifest 920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87 \
+  --app 933c53a6fb1a11e5f8a01335d6252016d703beec \
+  --manifest b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f \
   --output "$candidate_app_provenance"
 node .github/venue/r21-inputs.cjs --output "$request"
 git init --quiet "$agent_source"
 git -C "$agent_source" remote add origin https://github.com/banodoco/astrid-agent.git
 git -C "$agent_source" fetch --quiet --filter=blob:none origin \
-  2de0726d1eaea7f7bd141251e088aa9fdf224525 \
+  ab43bad818ef65ca1e929b973a2f61cd9fc4bf61 \
   cb71f548caf6f06051eaeb161cce45e44401e145
-test "$(git -C "$agent_source" rev-parse 2de0726d1eaea7f7bd141251e088aa9fdf224525^{commit})" = '2de0726d1eaea7f7bd141251e088aa9fdf224525'
+test "$(git -C "$agent_source" rev-parse ab43bad818ef65ca1e929b973a2f61cd9fc4bf61^{commit})" = 'ab43bad818ef65ca1e929b973a2f61cd9fc4bf61'
 git -C "$agent_source" merge-base --is-ancestor \
   cb71f548caf6f06051eaeb161cce45e44401e145 \
-  2de0726d1eaea7f7bd141251e088aa9fdf224525
+  ab43bad818ef65ca1e929b973a2f61cd9fc4bf61
 
 stage='retain-historical-launcher'
 progress "$stage"
@@ -217,7 +217,7 @@ test "$(git -C "$app_root" rev-parse HEAD)" = 'bbba620e3d89eeff8021417f365e6ea58
 # The retained launcher normally reads this supported setting from its tracked
 # environment file.  The immutable app SHA makes both fetched bootstrap and
 # manifest resolve to the current published R-21 App input.
-sed -i 's/^ASTRID_APP_REF=.*/ASTRID_APP_REF=ce1502e94b935fe6ef1e2f363fc6b55aade4a204/' "$app_root/_ENVIRONMENT"
+sed -i 's/^ASTRID_APP_REF=.*/ASTRID_APP_REF=933c53a6fb1a11e5f8a01335d6252016d703beec/' "$app_root/_ENVIRONMENT"
 
 stage='verify-published-app-manifest'
 progress "$stage"
@@ -226,15 +226,15 @@ progress "$stage"
 # setup output as R-21 evidence.
 manifest="$RUNNER_TEMP/r21-published-install-manifest.json"
 curl --fail --silent --show-error --location \
-  https://raw.githubusercontent.com/banodoco/astrid-app/ce1502e94b935fe6ef1e2f363fc6b55aade4a204/public/install-manifest.json \
+  https://raw.githubusercontent.com/banodoco/astrid-app/933c53a6fb1a11e5f8a01335d6252016d703beec/public/install-manifest.json \
   --output "$manifest"
-printf '%s  %s\n' '920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87' "$manifest" | sha256sum --check --status
+printf '%s  %s\n' 'b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f' "$manifest" | sha256sum --check --status
 node - "$manifest" <<'NODE'
 const fs = require('node:fs');
 const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const expected = {
-  agent: '2de0726d1eaea7f7bd141251e088aa9fdf224525',
-  runtime: '5453366458f7b4ee874c94d15ae7952e3e82d3c3',
+  agent: 'ab43bad818ef65ca1e929b973a2f61cd9fc4bf61',
+  runtime: '2776ba973b6c8f3555b5629b0840d9691a98d3c2',
 };
 for (const [name, sha] of Object.entries(expected)) {
   if (manifest?.[name]?.sha !== sha) process.exit(1);

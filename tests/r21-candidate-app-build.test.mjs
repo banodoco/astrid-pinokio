@@ -42,7 +42,7 @@ test('R-21 runner serves only the built exact candidate App at the product origi
   const runner = fs.readFileSync('.github/venue/r21-real-engine.sh', 'utf8');
   const server = fs.readFileSync('.github/venue/r21-candidate-app-server.cjs', 'utf8');
   const browser = fs.readFileSync('.github/venue/r21-app-browser.cjs', 'utf8');
-  assert.match(runner, /git -C "\$RUNNER_TEMP\/r21-candidate-app-source" fetch .*ce1502e94b935fe6ef1e2f363fc6b55aade4a204/s);
+  assert.match(runner, /git -C "\$RUNNER_TEMP\/r21-candidate-app-source" fetch .*933c53a6fb1a11e5f8a01335d6252016d703beec/s);
   assert.match(runner, /npm run --prefix "\$RUNNER_TEMP\/r21-candidate-app-source" build:hosted --silent/);
   assert.match(runner, /cmp "\$candidate_app_dist\/build\.json" "\$RUNNER_TEMP\/r21-served-build\.json"/);
   assert.match(runner, /R21_CANDIDATE_APP_HOST_RULES='MAP astrid\.haus 127\.0\.0\.1'/);

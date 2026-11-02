@@ -18,7 +18,7 @@ for (const phase of ['setup', 'journey']) {
       // A resistant descendant exercises escalation after its leader receives TERM.
       fs.writeFileSync(path.join(bin, 'git'), `#!/bin/bash
 if [[ "$1" == -C && "$3" == rev-parse ]]; then
-  echo ce1502e94b935fe6ef1e2f363fc6b55aade4a204
+  echo 933c53a6fb1a11e5f8a01335d6252016d703beec
   exit 0
 fi
 if [[ "$R21_FAKE_PHASE" == setup && "$1" == clone ]] || [[ "$R21_FAKE_PHASE" == journey && "$1" == rev-parse ]]; then
@@ -35,7 +35,7 @@ exit 0
 if [[ "$1" == *r21-candidate-app-build.cjs ]]; then
   while [[ "$#" -gt 0 ]]; do
     if [[ "$1" == --output ]]; then
-      printf '%s\\n' '{"source_commit":"ce1502e94b935fe6ef1e2f363fc6b55aade4a204","manifest_sha256":"920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87","build_json_app":"ce1502e94b935fe6ef1e2f363fc6b55aade4a204","build_json_release":1,"build_json_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","origin":"https://astrid.haus","local_loopback":true}' > "$2"
+      printf '%s\\n' '{"source_commit":"933c53a6fb1a11e5f8a01335d6252016d703beec","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","build_json_app":"933c53a6fb1a11e5f8a01335d6252016d703beec","build_json_release":1,"build_json_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","origin":"https://astrid.haus","local_loopback":true}' > "$2"
       exit 0
     fi
     shift
@@ -49,9 +49,9 @@ exec "$R21_REAL_NODE" "$@"
       const env = {
         ...process.env, PATH: `${bin}:${process.env.PATH}`, R21_REAL_NODE: process.execPath, RUNNER_TEMP: root,
         GITHUB_OUTPUT: output, R21_FAKE_PHASE: phase, R21_CHILD_PID: path.join(root, 'child.pid'),
-        GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3',
+        GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1',
         GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-        GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3',
+        GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1',
         GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1',
         R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40),
       };

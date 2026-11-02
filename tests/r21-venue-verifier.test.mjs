@@ -41,7 +41,7 @@ function receipt() {
         runtime_instance_digest: '1'.repeat(64), realm_digest: '2'.repeat(64),
         served_build: {
           source_commit: TUPLE.app,
-          manifest_sha256: '920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87',
+          manifest_sha256: 'b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f',
           build_json_app: TUPLE.app, build_json_release: 1, build_json_sha256: '3'.repeat(64),
           origin: APP_RUNTIME.origin, local_loopback: true,
         },
@@ -56,9 +56,9 @@ function receipt() {
 
 test('R-21 venue verifier accepts only a complete native old-launcher receipt', () => {
   assert.deepEqual(TUPLE, {
-    runtime: '5453366458f7b4ee874c94d15ae7952e3e82d3c3',
-    agent: '2de0726d1eaea7f7bd141251e088aa9fdf224525',
-    app: 'ce1502e94b935fe6ef1e2f363fc6b55aade4a204',
+    runtime: '2776ba973b6c8f3555b5629b0840d9691a98d3c2',
+    agent: 'ab43bad818ef65ca1e929b973a2f61cd9fc4bf61',
+    app: '933c53a6fb1a11e5f8a01335d6252016d703beec',
     pinokio: '3a6a98ae251ca126505245286e2d3e760f4348e9',
     old_launcher: 'bbba620e3d89eeff8021417f365e6ea584203105',
     pinokiod: 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf',
@@ -71,7 +71,7 @@ test('R-21 venue verifier accepts only a complete native old-launcher receipt', 
 
 test('R-21 real-engine route and receipt bind the same current manifest tuple', () => {
   const runner = fs.readFileSync('.github/venue/r21-real-engine.sh', 'utf8');
-  for (const value of [TUPLE.pinokio, TUPLE.agent, TUPLE.app, '920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87']) {
+  for (const value of [TUPLE.pinokio, TUPLE.agent, TUPLE.app, 'b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f']) {
     assert.match(runner, new RegExp(value));
   }
   for (const command of [
@@ -116,17 +116,17 @@ test('R-21 venue verifier rejects a successful-looking wrapper with a nonzero in
 test('R-21 dispatch binding accepts only the exact dedicated request or self-serve venue ref', () => {
   const environment = {
     GITHUB_EVENT_NAME: 'push',
-    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3',
+    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1',
     GITHUB_SHA: 'a'.repeat(40),
     GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1',
     GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1',
   };
   const bound = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment);
   assert.equal(bound.endpoint, ENDPOINT);
   assert.equal(bound.workflow.sha, environment.GITHUB_SHA);
   assert.deepEqual(bound.agent_journey_harness, { ref: '6e46e3bb45ec3feddbd0b0617a50a157e3a4df67', executed: false });
-  assert.equal(bound.app_manifest_sha256, '920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87');
+  assert.equal(bound.app_manifest_sha256, 'b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f');
   assert.throws(() => validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'main' }, environment), /immutable 40-character SHA/);
   assert.throws(() => validateDispatch({ request_id: 'R-20', confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment), /request_id/);
   assert.throws(() => validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, {
@@ -138,8 +138,8 @@ test('R-21 dispatch binding accepts only the exact dedicated request or self-ser
   const manualEnvironment = {
     ...environment,
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-INSTALL-ABSENT-DIAG-R1',
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-INSTALL-ABSENT-DIAG-R1',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-PROOF-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-PROOF-R1',
   };
   const manualInput = { request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) };
   const manual = validateDispatch(manualInput, manualEnvironment);
@@ -155,10 +155,10 @@ test('R-21 dispatch binding accepts only the exact dedicated request or self-ser
 });
 
 test('R-21 dedicated push route admits only its venue ref at the exact checked-out head', () => {
-  const lane = 'lane/M-PIN/R-21-PUSH-ROUTE-R1';
+  const lane = 'lane/M-PIN/R-21-PUBLISHED-TUPLE-PROOF-R1';
   const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   assert.equal(execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim(), lane);
-  const ref = 'refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3';
+  const ref = 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1';
   const environment = {
     GITHUB_EVENT_NAME: 'push', GITHUB_REF: ref,
     GITHUB_SHA: sha, GITHUB_WORKFLOW_SHA: sha,
@@ -176,7 +176,7 @@ test('R-21 dedicated push route admits only its venue ref at the exact checked-o
     ...environment, GITHUB_SHA: wrongSha, GITHUB_WORKFLOW_SHA: wrongSha,
   }), /runner_ref\/GITHUB_SHA binding/);
   assert.throws(() => validateDispatch(input, {
-    ...environment, GITHUB_WORKFLOW_REF: `banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-PUSH-ROUTE-R1`,
+    ...environment, GITHUB_WORKFLOW_REF: `banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-PROOF-R1`,
   }), /workflow source/);
 });
 
@@ -189,9 +189,9 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-publisher-'));
   try {
     const environment = {
-      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3',
+      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1',
       GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3',
+      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1',
       GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: REQUEST_ID,
       R21_CONFIRMATION: CONFIRMATION, R21_RUNNER_REF: 'a'.repeat(40),
     };

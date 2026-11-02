@@ -5,9 +5,9 @@
 // interpret fixture results or the R-20 Reset receipt.
 
 const TUPLE = Object.freeze({
-  runtime: '5453366458f7b4ee874c94d15ae7952e3e82d3c3',
-  agent: '2de0726d1eaea7f7bd141251e088aa9fdf224525',
-  app: 'ce1502e94b935fe6ef1e2f363fc6b55aade4a204',
+  runtime: '2776ba973b6c8f3555b5629b0840d9691a98d3c2',
+  agent: 'ab43bad818ef65ca1e929b973a2f61cd9fc4bf61',
+  app: '933c53a6fb1a11e5f8a01335d6252016d703beec',
   pinokio: '3a6a98ae251ca126505245286e2d3e760f4348e9',
   old_launcher: 'bbba620e3d89eeff8021417f365e6ea584203105',
   pinokiod: 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf',
@@ -16,7 +16,7 @@ const TUPLE = Object.freeze({
 
 // This standalone observer does not execute the separate Agent journey harness.
 const AGENT_JOURNEY_HARNESS_REFERENCE = '6e46e3bb45ec3feddbd0b0617a50a157e3a4df67';
-const MANIFEST_SHA256 = '920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87';
+const MANIFEST_SHA256 = 'b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f';
 // These values come from the pinned App source above: its served manifest and
 // browser Runtime client. The observer uses the real browser-door routes with
 // this exact contract instead of treating an unrelated public-page 200 as an
@@ -36,11 +36,11 @@ const APP_RUNTIME = Object.freeze({
 const REQUEST_ID = 'R-21-PUBLISHED-TUPLE-R1';
 const CONFIRMATION = 'REAL_ENGINE_UPDATE_STOP_RETRY';
 const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
-// This lane is the dedicated diagnostic workflow source.  The product tuple
+// This lane is the dedicated published-tuple proof workflow source. The product tuple
 // above remains the candidate under observation; this execution lane is never
 // substituted for its Pinokio product pin.
-const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-INSTALL-ABSENT-DIAG-R1';
-const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3';
+const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-PROOF-R1';
+const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1';
 const WORKFLOW_PATH = '.github/workflows/r21-real-engine.yml';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const ACTIONS = Object.freeze({

@@ -308,7 +308,7 @@ test('successful Start still requires explicit engine, runtime and application r
 
 test('publisher allows only timestamped fixed operation and category fields', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r21-observer-publish-'));
-  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
   try {
     const evidenceDir = path.join(root, 'evidence'); const destination = path.join(root, 'result'); fs.mkdirSync(evidenceDir);
     const put = last_operation => fs.writeFileSync(path.join(evidenceDir, 'r21-failure.json'), JSON.stringify({ category: 'timeout', last_operation }));
@@ -416,7 +416,7 @@ exports.WebSocket = class extends EventTarget {
 test('publisher retains only a bound, reprojected first Install error', () => {
   const { createInstallDiagnostics } = require('../.github/venue/r21-observer-diagnostics.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r21-first-error-publish-'));
-  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3', GITHUB_RUN_ID: '101', GITHUB_RUN_ATTEMPT: '2', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1', GITHUB_RUN_ID: '101', GITHUB_RUN_ATTEMPT: '2', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
   try {
     const evidenceDir = path.join(root, 'evidence'); fs.mkdirSync(evidenceDir);
     const binding = { request_id: env.R21_REQUEST_ID, runner_ref: env.R21_RUNNER_REF, run_id: env.GITHUB_RUN_ID, run_attempt: env.GITHUB_RUN_ATTEMPT };
@@ -450,7 +450,7 @@ test('publisher retains only a bound, reprojected first Install error', () => {
 test('publisher retains bounded native Install event and PTerm facts on failure', () => {
   const { createInstallDiagnostics, INSTALL_TRACE_LIMIT } = require('../.github/venue/r21-observer-diagnostics.cjs');
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-install-publish-'));
-  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-PROOF-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
   try {
     const input = path.join(root, 'evidence'); const destination = path.join(root, 'result');
     fs.mkdirSync(input);
