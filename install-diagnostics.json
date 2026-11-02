@@ -1,0 +1,144 @@
+{
+  "schema": 1,
+  "binding": {
+    "request_id": "R-21-PUBLISHED-TUPLE-R1",
+    "runner_ref": "a70615355d350f5eb95f896d333f451ad8e51c27",
+    "run_id": "41462939920",
+    "run_attempt": "1"
+  },
+  "events": [
+    {
+      "timestamp": "2026-11-02T14:36:11.687Z",
+      "kind": "start",
+      "index": 0,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:36:11.689Z",
+      "kind": "result",
+      "index": 0,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:36:11.697Z",
+      "kind": "start",
+      "index": 1,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:36:11.698Z",
+      "kind": "result",
+      "index": 1,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:36:11.705Z",
+      "kind": "start",
+      "index": 2,
+      "total": 4,
+      "method": "shell.run"
+    },
+    {
+      "timestamp": "2026-11-02T14:36:12.949Z",
+      "kind": "stream",
+      "index": 2,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:36:12.949Z",
+      "kind": "result",
+      "index": 2,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:36:12.950Z",
+      "kind": "stream",
+      "index": 2,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:36:12.959Z",
+      "kind": "start",
+      "index": 3,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:36:12.960Z",
+      "kind": "result",
+      "index": 3,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:36:12.960Z",
+      "kind": "stop",
+      "index": null,
+      "total": null,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T14:36:12.965Z",
+      "kind": "disconnect",
+      "index": null,
+      "total": null,
+      "method": null
+    }
+  ],
+  "last_activity": {
+    "timestamp": "2026-11-02T14:36:12.965Z",
+    "kind": "disconnect",
+    "index": null,
+    "total": null,
+    "method": null
+  },
+  "last_native_event": {
+    "timestamp": "2026-11-02T14:36:12.960Z",
+    "kind": "result",
+    "index": 3,
+    "total": 4,
+    "method": null
+  },
+  "last_start": {
+    "timestamp": "2026-11-02T14:36:12.959Z",
+    "kind": "start",
+    "index": 3,
+    "total": 4,
+    "method": null
+  },
+  "last_result": {
+    "timestamp": "2026-11-02T14:36:12.960Z",
+    "kind": "result",
+    "index": 3,
+    "total": 4,
+    "method": null
+  },
+  "last_error": null,
+  "first_error": null,
+  "last_terminal": {
+    "timestamp": "2026-11-02T14:36:12.965Z",
+    "kind": "disconnect",
+    "index": null,
+    "total": null,
+    "method": null
+  },
+  "timer": {
+    "started_at": "2026-11-02T14:36:11.471Z",
+    "deadline_at": "2026-11-02T15:21:11.471Z",
+    "fired_at": null
+  },
+  "child": {
+    "spawn_error_at": null,
+    "exited_at": "2026-11-02T14:36:12.970Z",
+    "code": 0,
+    "signal": null,
+    "signal_observed": false
+  }
+}

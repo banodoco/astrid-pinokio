@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "status": "blocked",
+  "category": "timeout",
+  "action_failure": null,
+  "last_operation": {
+    "operation": "runtime",
+    "category": "error",
+    "timestamp": "2026-11-02T14:40:12.614Z",
+    "runtime": {
+      "kind": "transport",
+      "error_class": "TypeError",
+      "error_code": "ECONNREFUSED"
+    }
+  },
+  "readiness_trace": [
+    {
+      "operation": "engine-resource",
+      "category": "pending",
+      "timestamp": "2026-11-02T14:40:06.566Z"
+    },
+    {
+      "operation": "engine-resource",
+      "category": "success",
+      "timestamp": "2026-11-02T14:40:06.573Z"
+    },
+    {
+      "operation": "runtime",
+      "category": "pending",
+      "timestamp": "2026-11-02T14:40:06.573Z"
+    },
+    {
+      "operation": "runtime",
+      "category": "error",
+      "timestamp": "2026-11-02T14:40:06.574Z",
+      "runtime": {
+        "kind": "transport",
+        "error_class": "TypeError",
+        "error_code": "ECONNREFUSED"
+      }
+    },
+    {
+      "operation": "engine-resource",
+      "category": "pending",
+      "timestamp": "2026-11-02T14:40:08.076Z"
+    },
+    {
+      "operation": "engine-resource",
+      "category": "success",
+      "timestamp": "2026-11-02T14:40:08.085Z"
+    },
+    {
+      "operation": "runtime",
+      "category": "pending",
+      "timestamp": "2026-11-02T14:40:08.085Z"
+    },
+    {
+      "operation": "runtime",
+      "category": "error",
+      "timestamp": "2026-11-02T14:40:08.086Z",
+      "runtime": {
+        "kind": "transport",
+        "error_class": "TypeError",
+        "error_code": "ECONNREFUSED"
+      }
+    },
+    {
+      "operation": "engine-resource",
+      "category": "pending",
+      "timestamp": "2026-11-02T14:40:09.587Z"
+    },
+    {
+      "operation": "engine-resource",
+      "category": "success",
+      "timestamp": "2026-11-02T14:40:09.595Z"
+    },
+    {
+      "operation": "runtime",
+      "category": "pending",
+      "timestamp": "2026-11-02T14:40:09.595Z"
+    },
+    {
+      "operation": "runtime",
+      "category": "error",
+      "timestamp": "2026-11-02T14:40:09.596Z",
+      "runtime": {
+        "kind": "transport",
+        "error_class": "TypeError",
+        "error_code": "ECONNREFUSED"
+      }
+    },
+    {
+      "operation": "engine-resource",
+      "category": "pending",
+      "timestamp": "2026-11-02T14:40:11.096Z"
+    },
+    {
+      "operation": "engine-resource",
+      "category": "success",
+      "timestamp": "2026-11-02T14:40:11.103Z"
+    },
+    {
+      "operation": "runtime",
+      "category": "pending",
+      "timestamp": "2026-11-02T14:40:11.104Z"
+    },
+    {
+      "operation": "runtime",
+      "category": "error",
+      "timestamp": "2026-11-02T14:40:11.105Z",
+      "runtime": {
+        "kind": "transport",
+        "error_class": "TypeError",
+        "error_code": "ECONNREFUSED"
+      }
+    },
+    {
+      "operation": "engine-resource",
+      "category": "pending",
+      "timestamp": "2026-11-02T14:40:12.606Z"
+    },
+    {
+      "operation": "engine-resource",
+      "category": "success",
+      "timestamp": "2026-11-02T14:40:12.613Z"
+    },
+    {
+      "operation": "runtime",
+      "category": "pending",
+      "timestamp": "2026-11-02T14:40:12.613Z"
+    },
+    {
+      "operation": "runtime",
+      "category": "error",
+      "timestamp": "2026-11-02T14:40:12.614Z",
+      "runtime": {
+        "kind": "transport",
+        "error_class": "TypeError",
+        "error_code": "ECONNREFUSED"
+      }
+    }
+  ]
+}
