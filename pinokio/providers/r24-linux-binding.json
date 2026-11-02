@@ -1,0 +1,42 @@
+{
+  "files": {
+    "agent": {
+      ".github/workflows/journey.yml": "6cd4e8cf38e6262f0e478fcb3b311ac12528b9e1a471263e4b6fd81b05c9e37e",
+      "scripts/check_journey_evidence.py": "3997179a37e67862582399ea6aeaa7de18ba6ceb1404bb429424ce1a341c3902",
+      "scripts/ci_journey.py": "0677686b1dfd7296fcd3fdf0358deae88117ac0e8dc4444bbafe5963ef61146a",
+      "scripts/ci_windows_journey.py": "c422398ac1b05251313213e70333e0b214d139efdab4d9cf3549ab710eb65535",
+      "scripts/journey_matrix.py": "2907b420f3143b33cc4fd862b318943ae04e54d09118a846bf6aaa60235a042d",
+      "scripts/journey_release2.py": "87b08a0a62e0acc4ca7d951f50b61ca5c5f73c978db5ce502fbc67c16cb20726",
+      "scripts/native_service_adapter.py": "6b9906fd8a8995d12aeac0f8e0ab23f0cdaffc722ea9d6c6b5452316c95436e7",
+      "scripts/pinokio_backend_executor.py": "f2447ea626bfd2269d97faa321a6c1a2224ae2a96d0873c95086800da9dcd874",
+      "scripts/pinokio_platform_adapter.py": "7b8409897ebc2888fd0f5688b4ab7459c3b4411f6683e0cba558ceeace5f715d",
+      "scripts/shared_journey_driver.py": "a304ed209863593b3b8ffc79e6a339fd18d5263c831cbdc9165d650547a942e6"
+    },
+    "app": {
+      "public/install": "100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d",
+      "public/install-manifest.json": "15ea3a2e0a4067773b727635e4eaa4b894eceb10f73aaa88cd29896a2364bd77",
+      "public/install.ps1": "bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258",
+      "public/install.sh": "591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285"
+    },
+    "pinokio": {
+      "pinokio/lib.js": "59bb0a556b425dafb4d986aaab54f0dbd23a988814a0d64a6cb4437c52d3d998",
+      "pinokio/lifecycle.mjs": "0ddc6a5596dc02a2f33afba799495c7834ebb193df33fe15c376c2b60859a3ad",
+      "pinokio/shell.mjs": "d8c2dfa774c0bda07d29f923f8b84d06055e76a8f4c5b6192980be2dffa8a7e9",
+      "pinokio/stop.js": "f9d62e4e6a826fccd9791ee211dae933f46c8f99019e145abb3db3bf9595fd48",
+      "pinokio/update.js": "1be13ca4d415d1693e0493a0d81d7aecf616f27ab3875a94ea5d9ebb69aba9e5"
+    },
+    "runtime": {
+      "pyproject.toml": "f56e14a32f1edf4693a1365d094cf2322a1c106ac61f4e5154719fbae62ff283",
+      "runtime_protocol/__init__.py": "4e4064e1d9b80c6637576490150f44f3c710fabc520af1e640abf2493dcbb0d2",
+      "runtime_protocol/platform.py": "dc1ab2158066b952e82b5c0957a7cd8085cb35eabdeaf0f6d5fddf7cf4a4892c"
+    }
+  },
+  "interface_sha256": "2f685c8aec21bef116f95645920717e4b12ef33c1ca820fe6185eb01ffea115d",
+  "manifest_sha256": "15ea3a2e0a4067773b727635e4eaa4b894eceb10f73aaa88cd29896a2364bd77",
+  "tuple": {
+    "agent": "dd6b48192c720c5346e6f140184e313b2cf84f31",
+    "app": "ae95eb455408b8c0e185bfded67798e2b307a6f6",
+    "pinokio": "2f085c5fc0cde192ac4a022065883c85dcccd0de",
+    "runtime": "1e6d899efa77a2d6ec247c38250f9748330bb587"
+  }
+}
