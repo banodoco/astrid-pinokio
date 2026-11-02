@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import https from 'node:https';
 import { createRequire } from 'node:module';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 
 const require = createRequire(import.meta.url);
@@ -46,4 +50,44 @@ test('R-21 runner serves only the built exact candidate App at the product origi
   assert.match(server, /https\.createServer/);
   assert.match(server, /host: '127\.0\.0\.1', port: 0/);
   assert.match(server, /astrid\\\.haus/);
+});
+
+test('R-21 local TLS server serves the generated build identity only to the production host', async () => {
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-candidate-app-server-'));
+  const dist = path.join(root, 'dist');
+  const key = path.join(root, 'key.pem');
+  const cert = path.join(root, 'cert.pem');
+  const ready = path.join(root, 'ready.json');
+  fs.mkdirSync(dist);
+  fs.writeFileSync(path.join(dist, 'index.html'), '<!doctype html><title>candidate</title>');
+  fs.writeFileSync(path.join(dist, 'build.json'), JSON.stringify({ app: TUPLE.app, release: 1 }));
+  const certificate = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-days', '1',
+    '-subj', '/CN=astrid.haus', '-addext', 'subjectAltName=DNS:astrid.haus', '-keyout', key, '-out', cert], { encoding: 'utf8' });
+  assert.equal(certificate.status, 0, certificate.stderr);
+  const child = spawn(process.execPath, ['.github/venue/r21-candidate-app-server.cjs', '--root', dist, '--key', key, '--cert', cert, '--ready', ready]);
+  const readReady = async () => {
+    for (let i = 0; i < 50; i++) {
+      if (fs.existsSync(ready)) return JSON.parse(fs.readFileSync(ready, 'utf8'));
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    throw new Error('candidate App TLS server did not start');
+  };
+  const request = (host) => new Promise((resolve, reject) => {
+    const started = https.request({ host: '127.0.0.1', port: server.port, path: '/build.json',
+      headers: { Host: host }, rejectUnauthorized: false }, response => {
+      let body = ''; response.setEncoding('utf8'); response.on('data', part => { body += part; });
+      response.on('end', () => resolve({ status: response.statusCode, body }));
+    });
+    started.once('error', reject); started.end();
+  });
+  let server;
+  try {
+    server = await readReady();
+    assert.deepEqual(await request('astrid.haus'), { status: 200, body: JSON.stringify({ app: TUPLE.app, release: 1 }) });
+    assert.deepEqual(await request('wrong.invalid'), { status: 421, body: '' });
+  } finally {
+    child.kill('SIGTERM');
+    await new Promise(resolve => child.once('close', resolve));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
