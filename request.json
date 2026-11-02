@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "request_id": "R-21-PUBLISHED-TUPLE-R1",
+  "runner_ref": "7a8ed0deb197821edb585088c7017b87c2756d7b",
+  "endpoint": "pinokio://127.0.0.1:42000/api/astrid",
+  "tuple": {
+    "runtime": "5453366458f7b4ee874c94d15ae7952e3e82d3c3",
+    "agent": "e425903f7a9fa5b82973281d15054c0716b46e2d",
+    "app": "5c95abb00525e1a77d00c32042b6453d9f14f4e7",
+    "pinokio": "2f085c5fc0cde192ac4a022065883c85dcccd0de",
+    "old_launcher": "bbba620e3d89eeff8021417f365e6ea584203105",
+    "pinokiod": "add4a674ad1ba95bb62ec427fce519fe5bf0e9bf",
+    "pterm": "5be43718701c448b43daf0ce51d8935f170065bb"
+  },
+  "app_manifest_sha256": "a6eef2804e58e198d56899f1b36d97688d5cbc4a0847a82078ba144df4a207eb",
+  "agent_journey_harness": {
+    "ref": "6e46e3bb45ec3feddbd0b0617a50a157e3a4df67",
+    "executed": false
+  },
+  "workflow": {
+    "event": "workflow_dispatch",
+    "ref": "refs/heads/lane/M-PIN/R-21-ADMISSION-BINDING-R1",
+    "workflow_ref": "banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-ADMISSION-BINDING-R1",
+    "sha": "7a8ed0deb197821edb585088c7017b87c2756d7b",
+    "run_id": "41442816057",
+    "run_attempt": "1"
+  }
+}
