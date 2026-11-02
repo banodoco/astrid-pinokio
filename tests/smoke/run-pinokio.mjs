@@ -137,8 +137,20 @@ function launchShell(step, environment, { background = false, onSpawn } = {}) {
     ? path.win32.join(environment.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
     : '/bin/bash';
   assert.ok(fs.existsSync(executable), `${shell} is missing from this runner: ${executable}`);
+  let message = step.params.message;
+  if (process.env.PINOKIO_DIAGNOSTIC_MANIFEST && message.includes('install-manifest.json')) {
+    assert.ok(windows, 'diagnostic manifest override is Windows-only');
+    const installer = 'https://raw.githubusercontent.com/banodoco/astrid-app/int%2Fr1/public/install.ps1';
+    assert.ok(message.includes(installer), 'expected the original App bootstrap URL');
+    message = message.replace(installer, 'https://raw.githubusercontent.com/banodoco/astrid-app/36ff224e3c9ad862e3f807e2548b997a36799543/public/install.ps1');
+    const download = /Invoke-WebRequest -UseBasicParsing '[^']+\/install-manifest\.json' -OutFile \(Join-Path \$tmp 'install-manifest\.json'\)/;
+    assert.match(message, download, 'expected exactly the hosted manifest download');
+    const manifest = process.env.PINOKIO_DIAGNOSTIC_MANIFEST.replaceAll("'", "''");
+    message = message.replace(download, `Copy-Item -LiteralPath '${manifest}' -Destination (Join-Path $tmp 'install-manifest.json')`);
+    log(`using diagnostic manifest ${process.env.PINOKIO_DIAGNOSTIC_MANIFEST}`);
+  }
   const child = spawn(executable, windows
-    ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', step.params.message]
+    ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', message]
     : ['--noprofile', '--norc', '-c', step.params.message], {
     cwd: step.params.path,
     env: withStepEnvironment(environment, step.params.env),
@@ -488,6 +500,15 @@ async function runHosted() {
     log('PASS: hosted install, Start, health, Stop, Update, restart, health, Stop, and Uninstall');
   } finally {
     if (daemon) await step('cleanup Start process', stop);
+    if (process.env.PINOKIO_DIAGNOSTIC_EVIDENCE) {
+      const source = path.join(userHome, 'AppData', 'Local', 'Astrid Runtime', 'logs', 'install.log');
+      const target = path.join(process.env.PINOKIO_DIAGNOSTIC_EVIDENCE, 'install.log');
+      if (fs.existsSync(source)) {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(source, target);
+        log(`retained complete installer log: ${target}`);
+      } else log(`installer log absent: ${source}`);
+    }
     fs.rmSync(pinokioHome, { recursive: true, force: true });
     fs.rmSync(userHome, { recursive: true, force: true });
   }

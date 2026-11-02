@@ -72,3 +72,96 @@ jobs:
         with:
           node-version: 20.19.4
       - run: node tests/smoke/run-pinokio.mjs fully-local
+
+  windows-schema-capture:
+    name: Windows schema capture
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/lane/M-PIN/R-26-AG-CAPTURE-R1'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Derive and verify diagnostic manifest
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/schema-capture"
+          curl -fsSL https://raw.githubusercontent.com/banodoco/astrid-app/36ff224e3c9ad862e3f807e2548b997a36799543/public/install-manifest.json -o "$RUNNER_TEMP/schema-capture/original-manifest.json"
+          node tests/smoke/diagnostic-manifest.mjs "$RUNNER_TEMP/schema-capture/original-manifest.json" "$RUNNER_TEMP/schema-capture/diagnostic-manifest.json"
+      - name: Run hosted smoke with diagnostic Agent
+        shell: bash
+        env:
+          PINOKIO_DIAGNOSTIC_MANIFEST: ${{ runner.temp }}/schema-capture/diagnostic-manifest.json
+          PINOKIO_DIAGNOSTIC_EVIDENCE: ${{ runner.temp }}/schema-capture
+        run: |
+          set +e
+          node tests/smoke/run-pinokio.mjs 2>&1 | tee "$RUNNER_TEMP/schema-capture/smoke.log"
+          result=${PIPESTATUS[0]}
+          echo "smoke inner exit: $result" | tee "$RUNNER_TEMP/schema-capture/smoke-exit.txt"
+          exit "$result"
+      - name: Hash retained evidence
+        if: always()
+        shell: bash
+        run: |
+          if [ -d "$RUNNER_TEMP/schema-capture" ]; then
+            cd "$RUNNER_TEMP/schema-capture"
+            sha256sum * | tee SHA256SUMS
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-schema-capture
+          path: ${{ runner.temp }}/schema-capture/
+          if-no-files-found: warn
+
+  windows-schema-tests:
+    name: Windows Agent schema diagnostic tests
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/lane/M-PIN/R-26-AG-CAPTURE-R1'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: banodoco/astrid-agent
+          ref: 42a685c163981682267dc49a21caa24c24cafdf3
+          path: agent
+      - uses: actions/checkout@v4
+        with:
+          repository: banodoco/astrid-runtime
+          ref: 47e5949465cb6f3afdfd1cb8a0e90009fd9d4020
+          path: runtime
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify checkouts and install test dependencies
+        shell: bash
+        run: |
+          test "$(git -C agent rev-parse HEAD)" = 42a685c163981682267dc49a21caa24c24cafdf3
+          test "$(git -C runtime rev-parse HEAD)" = 47e5949465cb6f3afdfd1cb8a0e90009fd9d4020
+          python -m pip install -e 'agent[dev]'
+          python -m pip install --no-deps -e ./runtime -e ./runtime/packages/python
+      - name: Run named tests
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/schema-tests"
+          cd agent
+          set +e
+          python -m pytest -q tests/core/rendering/test_local_schema.py::test_owner_mode_rejection_reports_paths_security_process_and_filesystem tests/core/rendering/test_local_schema.py::test_owner_diagnostics_do_not_run_on_admission tests/core/rendering/test_local_schema.py::test_owner_diagnostics_failure_preserves_rejection 2>&1 | tee "$RUNNER_TEMP/schema-tests/pytest.log"
+          result=${PIPESTATUS[0]}
+          echo "pytest inner exit: $result" | tee "$RUNNER_TEMP/schema-tests/pytest-exit.txt"
+          exit "$result"
+      - name: Hash test evidence
+        if: always()
+        shell: bash
+        run: |
+          if [ -d "$RUNNER_TEMP/schema-tests" ]; then
+            cd "$RUNNER_TEMP/schema-tests"
+            sha256sum * | tee SHA256SUMS
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-schema-tests
+          path: ${{ runner.temp }}/schema-tests/
+          if-no-files-found: warn

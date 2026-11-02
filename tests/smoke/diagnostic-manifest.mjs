@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+
+const [source, destination] = process.argv.slice(2);
+assert.ok(source && destination, 'usage: node diagnostic-manifest.mjs source destination');
+const original = fs.readFileSync(source);
+const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+assert.equal(hash(original), 'b78ae7e74188f6e0bbf01950b0d388d4cf36ea990c9bb574fd8aef57a8782777');
+const text = original.toString('utf8');
+const oldAgent = '020877f12ea490308a9e5f9564c8f4a4bf77ede1';
+const agent = '42a685c163981682267dc49a21caa24c24cafdf3';
+assert.equal(text.split(oldAgent).length, 2);
+const manifest = text.replace(oldAgent, agent);
+const parsed = JSON.parse(manifest);
+assert.equal(parsed.agent.sha, agent);
+assert.equal(parsed.runtime.sha, '47e5949465cb6f3afdfd1cb8a0e90009fd9d4020');
+fs.writeFileSync(destination, manifest, 'utf8');
+console.log(`original manifest SHA-256 ${hash(original)}`);
+console.log(`diagnostic manifest SHA-256 ${hash(fs.readFileSync(destination))}`);
+console.log(`Agent ${parsed.agent.sha}; Runtime ${parsed.runtime.sha}`);
