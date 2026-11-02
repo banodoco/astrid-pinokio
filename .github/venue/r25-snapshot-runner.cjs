@@ -33,11 +33,12 @@ function routeConfig(targetOs, slot, launchdTarget) {
       installMode: fullyLocal ? 'local' : 'backend',
     };
   }
-  if (targetOs === 'windows' && slot === 'pinokio-fully-local-windows') {
+  if (targetOs === 'windows' && ['pinokio-backend-windows', 'pinokio-fully-local-windows'].includes(slot)) {
+    const fullyLocal = slot === 'pinokio-fully-local-windows';
     return {
       targets: { os: 'windows', scheduled_task_paths: ['\\Astrid Runtime'], service_names: ['AstridRuntime'] },
-      // Preserve the pre-existing Windows route; this adapter is macOS-only.
-      installScript: 'pinokio/install.js', installMode: 'backend',
+      installScript: fullyLocal ? 'pinokio/install-local.js' : 'pinokio/install.js',
+      installMode: fullyLocal ? 'local' : 'backend',
     };
   }
   throw new Error('R25_TARGET_OS and R25_SLOT_ID are incompatible');
@@ -68,6 +69,20 @@ function writeCanonical(file, value) {
   fs.writeFileSync(file, `${canonical(value)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
 }
 function readJson(file) { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
+function readInstallModeReceipt(appRoot, expectedMode) {
+  const value = readJson(path.join(appRoot, 'app', 'install-mode.json'));
+  const fields = Object.keys(value || {}).sort();
+  if (value === null || typeof value !== 'object' || Array.isArray(value)
+      || fields.join('\0') !== ['mode', 'schema_version'].join('\0')
+      || value.schema_version !== 1
+      || !['backend', 'local'].includes(value.mode)
+      || value.mode !== expectedMode) {
+    throw new Error(`installed Pinokio mode receipt differs from the ${expectedMode} route`);
+  }
+  // Retain the parsed installed record; the route label is only a binding
+  // check and must never be used to manufacture this receipt.
+  return value;
+}
 function envInt(name) { const value = Number.parseInt(process.env[name] || '', 10); if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} is not a positive integer`); return value; }
 function fail(message, extra = {}) {
   const diagnostics = { schema: 'astrid.r25.pinokio-action-diagnostics.v1', first_error: String(message).slice(0, 240), ...extra };
@@ -324,8 +339,7 @@ async function main() {
   const logRoot = path.join(diagnostics, 'engine-logs');
   const preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: ROUTE.installScript, action: 'setup-install', logRoot, timeoutMs: 45 * 60 * 1000 });
   if (preparation.first_error || preparation.inner_exit.code !== 0 || preparation.terminal.error) throw new Error('disposable Pinokio install preparation failed');
-  const mode = readJson(path.join(appRoot, 'app', 'install-mode.json'));
-  if (mode.schema_version !== 1 || mode.mode !== ROUTE.installMode) throw new Error(`preparation did not retain ${ROUTE.installMode} install mode`);
+  readInstallModeReceipt(appRoot, ROUTE.installMode);
   const install = readJson(path.join(appRoot, 'app', 'astrid', 'install.json'));
   const dataRoot = path.resolve(install.data_root || '');
   const isolatedRoot = path.resolve(path.dirname(output));
@@ -355,15 +369,14 @@ async function main() {
       } else if (action === 'rollback') {
         const reset = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: 'pinokio/reset.js', action: 'rollback-reset', logRoot });
         const reinstall = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: ROUTE.installScript, action: 'rollback-reinstall', logRoot });
-        const rollbackMode = readJson(path.join(appRoot, 'app', 'install-mode.json'));
-        if (rollbackMode.schema_version !== 1 || rollbackMode.mode !== ROUTE.installMode) throw new Error(`rollback did not retain ${ROUTE.installMode} install mode`);
+        readInstallModeReceipt(appRoot, ROUTE.installMode);
         engine = { execution_kind: 'real-engine-reset-and-reinstall', steps: [reset, reinstall], inner_exit: reinstall.inner_exit, terminal: reinstall.terminal, first_error: reset.first_error || reinstall.first_error, status_after: reinstall.status_after };
       } else {
         engine = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: item.plan.script, action, logRoot });
       }
       const after = await filesystemState(home, appRoot, protectedData);
       const failed = Boolean(engine.first_error || engine.inner_exit?.code !== 0 || engine.terminal?.error || !after.data?.sentinel_preserved || engine.steps?.some(step => step.inner_exit?.code !== 0 || step.first_error));
-      const record = { schema: 'astrid.r25.pinokio-filesystem-record.v1', action, action_id: item.plan.action_id, action_sha256: item.action_sha256, tuple, origin: { run_id: origin.run_id, run_attempt: origin.run_attempt, producer_job_id: origin.producer_job_id }, before, after, engine, status: failed ? 'failed' : 'completed' };
+      const record = { schema: 'astrid.r25.pinokio-filesystem-record.v1', action, action_id: item.plan.action_id, action_sha256: item.action_sha256, slot_id: SLOT, tuple, origin: { run_id: origin.run_id, run_attempt: origin.run_attempt, producer_job_id: origin.producer_job_id }, pinokio_install_mode_receipt: readInstallModeReceipt(appRoot, ROUTE.installMode), before, after, engine, status: failed ? 'failed' : 'completed' };
       results.push(record);
       writeCanonical(path.join(diagnostics, 'action-records', `${String(item.plan.action_index).padStart(2, '0')}-${action}.json`), record);
       await workerSend(worker, { op: 'close', failed });
@@ -390,7 +403,7 @@ async function main() {
   }
 }
 
-module.exports = { actionPlan, routeConfig };
+module.exports = { actionPlan, readInstallModeReceipt, routeConfig };
 if (require.main === module) {
   main().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });
 }
