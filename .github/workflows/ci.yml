@@ -12,11 +12,17 @@ on:
   push:
     branches: [main, release-1, "int/**"]
   workflow_dispatch:
+    inputs:
+      agent_ref:
+        description: 'Agent commit SHA for the focused Windows installed-schema proof (empty runs normal CI)'
+        required: false
+        default: ''
+        type: string
   schedule:
     - cron: '17 4 * * *'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.agent_ref || 'standard' }}
   cancel-in-progress: true
 
 permissions:
@@ -25,6 +31,7 @@ permissions:
 jobs:
   unit:
     name: Unit (${{ matrix.os }})
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.agent_ref == '' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 5
     strategy:
@@ -41,6 +48,7 @@ jobs:
 
   pinokio-smoke:
     name: Pinokio smoke (${{ matrix.os }})
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.agent_ref == '' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 15 }}
     strategy:
@@ -57,7 +65,7 @@ jobs:
   fully-local:
     name: Fully local (ubuntu-latest)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.agent_ref == '' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -65,3 +73,103 @@ jobs:
         with:
           node-version: 20.19.4
       - run: node tests/smoke/run-pinokio.mjs fully-local
+
+  windows-installed-schema-proof:
+    name: Windows installed-schema candidate proof
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.agent_ref != '' }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      AGENT_REF: ${{ inputs.agent_ref }}
+      ASTRID_CI_JOB: windows-native-and-installer
+      PROOF_DIR: ${{ github.workspace }}/windows-schema-proof
+    steps:
+      - name: Require an immutable Agent SHA
+        shell: pwsh
+        run: |
+          if ($env:AGENT_REF -cnotmatch '^[0-9a-f]{40}$') { throw 'agent_ref must be a lowercase 40-character commit SHA' }
+          New-Item -ItemType Directory -Force $env:PROOF_DIR | Out-Null
+      - name: Check out candidate Agent
+        uses: actions/checkout@v4
+        with:
+          repository: banodoco/astrid-agent
+          ref: ${{ inputs.agent_ref }}
+          path: agent
+          persist-credentials: false
+      - name: Verify and record candidate identity
+        shell: pwsh
+        working-directory: agent
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:AGENT_REF) { throw "Agent checkout mismatch: $actual" }
+          $runtime = (Get-Content runtime.lock.json -Raw | ConvertFrom-Json).source_commit
+          if ($runtime -cnotmatch '^[0-9a-f]{40}$') { throw 'Invalid Runtime source pin' }
+          "Agent SHA: $actual`nRuntime source pin: $runtime`nPinokio workflow SHA: $env:GITHUB_SHA`nRunner: $env:RUNNER_OS" | Tee-Object -FilePath "$env:PROOF_DIR/identity.txt"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Agent test dependencies and its pinned Runtime
+        working-directory: agent
+        run: |
+          python -m pip install -e '.[dev]' build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/ci_install_runtime.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run installed validator and Windows ACL tests
+        working-directory: agent
+        shell: pwsh
+        run: |
+          @'
+          import dataclasses
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          sys.path.insert(0, os.getcwd())
+          import pytest
+          import tests.lanes as lanes
+          from runtime_protocol import windows_security
+
+          assert sys.platform == "win32"
+          user = windows_security._user_sid()
+          owner = windows_security._default_owner_sid()
+          same_owner = bool(windows_security._api()[0].EqualSid(user, owner))
+          print(f"Windows token user: {windows_security._sid_text(user)}; default owner: {windows_security._sid_text(owner)}; match: {same_owner}", flush=True)
+          if not same_owner:
+              raise SystemExit("The native positive ACL proof requires matching token user and default owner")
+          # This one installed-wheel test is marked linux_native at module scope.
+          # Enable its collection on Windows explicitly; all test assertions remain intact.
+          lanes.LANES["linux_native"] = dataclasses.replace(lanes.LANES["linux_native"], available=lambda: True)
+          installed = "tests/test_installer_installed_schema.py::test_stage_binds_installed_reader_validator_and_service_to_verified_schema"
+          local = "tests/core/rendering/test_local_schema.py::"
+          xml = Path(os.environ["PROOF_DIR"]) / "windows-schema.xml"
+          result = pytest.main([
+              "-q", "-rA", installed,
+              local + "test_windows_captured_acl_same_owner_is_admitted",
+              local + "test_windows_schema_rejects_unsafe_acl",
+              local + "test_windows_installed_schema_checks_both_source_and_destination",
+              local + "test_windows_schema_admission_uses_sid_policy",
+              local + "test_windows_native_schema_dacl_allows_privileged_and_rejects_foreign",
+              "tests/core/rendering/test_remotion_host_regressions.py::test_admission_reprobes_node_after_successful_launch",
+              f"--junitxml={xml}",
+          ])
+          if result != 0:
+              raise SystemExit(result)
+          cases = ET.parse(xml).getroot().iter("testcase")
+          cases = list(cases)
+          required = ("test_stage_binds_installed_reader_validator_and_service_to_verified_schema", "test_windows_native_schema_dacl_allows_privileged_and_rejects_foreign")
+          if any(sum(case.get("name") == name and not any(case.find(tag) is not None for tag in ("skipped", "failure", "error")) for case in cases) != 1 for name in required):
+              raise SystemExit("Required installed or native test did not pass exactly once")
+          if any(case.find("skipped") is not None for case in cases):
+              raise SystemExit("A selected proof test was skipped")
+          '@ | Set-Content -Encoding utf8 "$env:RUNNER_TEMP/run-windows-schema-proof.py"
+          python "$env:RUNNER_TEMP/run-windows-schema-proof.py"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload candidate proof evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-schema-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.PROOF_DIR }}/
+          if-no-files-found: warn
