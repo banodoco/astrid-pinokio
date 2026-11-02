@@ -20,11 +20,13 @@ test('R-21 always uploads only the named bounded diagnostic evidence', () => {
     'r21-evidence/r21-runner-failure.json',
     'r21-evidence/r21-observer-operation.json',
     'r21-evidence/r21-failure.json',
+    'r21-evidence/r21-install-diagnostics.json',
     'r21-result/request.json',
     'r21-result/verdict.json',
     'r21-result/r21-receipt.json',
     'r21-result/runner-failure.json',
     'r21-result/observer-failure.json',
+    'r21-result/install-diagnostics.json',
     'r21-result/SHA256SUMS',
   ];
   const expected = [

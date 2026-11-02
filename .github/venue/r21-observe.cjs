@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { createTrace, actionPhase, createActionTracker, ptermExit } = require('./r21-observer-diagnostics.cjs');
+const { createTrace, actionPhase, createActionTracker, ptermExit, createInstallDiagnostics } = require('./r21-observer-diagnostics.cjs');
 const { createObserverIO } = require('./r21-observer-io.cjs');
 const {
   ACTIONS, ENDPOINT, FIRST_REFUSAL, TUPLE, verifyReceipt,
@@ -115,6 +115,7 @@ async function digestProtectedState() {
 
 const trace = createTrace();
 const actionTracker = createActionTracker();
+let installDiagnostics = null;
 const io = createObserverIO({ WebSocket, fetch, spawn, appRoot, ptermRoot, home, endpoint: ENDPOINT,
   record: value => { trace.record(value); write('r21-observer-operation.json', trace.snapshot().at(-1)); } });
 const { openSocket, status, waitForReadiness, runtimeReady, applicationReady, startOldLauncher } = io;
@@ -139,6 +140,7 @@ async function observeAction(label, script, timeoutMs = ACTION_TIMEOUT_MS) {
       let packet;
       try { packet = JSON.parse(String(event.data)); }
       catch { return; }
+      if (progressKey === 'install') { try { installDiagnostics?.packet(packet); } catch {} }
       // Do not retain raw engine output.  These booleans are the entire
       // sanitised packet projection used by the verifier.
       if (packet.type === 'event' && packet.data === 'stop') observation.terminal.stop = true;
@@ -169,7 +171,7 @@ async function observeAction(label, script, timeoutMs = ACTION_TIMEOUT_MS) {
     const child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', ENDPOINT], {
       cwd: home, env: process.env, stdio: ['ignore', 'ignore', 'ignore'],
     });
-    observation.inner_exit = await ptermExit(child, label, timeoutMs);
+    observation.inner_exit = await ptermExit(child, label, timeoutMs, progressKey === 'install' ? (event, value) => installDiagnostics?.pterm(event, value) : null);
     setOperation(null);
     progress[progressKey] = observation;
     retainProgress();
@@ -227,6 +229,8 @@ async function main() {
   if (request.endpoint !== ENDPOINT || JSON.stringify(request.tuple) !== JSON.stringify(TUPLE)) {
     throw new Error('request did not retain the immutable R-21 tuple');
   }
+  installDiagnostics = createInstallDiagnostics({ request_id: request.request_id, runner_ref: request.runner_ref,
+    run_id: request.workflow?.run_id ?? null, run_attempt: request.workflow?.run_attempt ?? null }, value => write('r21-install-diagnostics.json', value));
   substage('install');
   const install = await observeAction('historical install', 'pinokio/install.js', INITIAL_INSTALL_TIMEOUT_MS);
   progress.install = install; retainProgress();

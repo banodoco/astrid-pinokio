@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { TRACE_LIMIT, projectOperation, projectActionFailure } = require('./r21-observer-diagnostics.cjs');
+const { TRACE_LIMIT, projectOperation, projectActionFailure, projectInstallEvidence } = require('./r21-observer-diagnostics.cjs');
 const { validateDispatch, verifyReceipt, TUPLE, ENDPOINT, REQUEST_ID } = require('./r21-verify.cjs');
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const bool = value => value === true ? true : value === false ? false : null;
@@ -78,6 +78,12 @@ function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
   if (receipt) files['r21-receipt.json'] = receipt;
   const failure = read(path.join(evidenceDir, 'r21-runner-failure.json'));
   if (failure && stages.includes(failure.stage)) files['runner-failure.json'] = { schema: 1, status: 'blocked', stage: failure.stage };
+  const installDiagnostics = read(path.join(evidenceDir, 'r21-install-diagnostics.json'));
+  const diagnosticBinding = { request_id: request.request_id, runner_ref: request.runner_ref,
+    run_id: env.GITHUB_RUN_ID, run_attempt: env.GITHUB_RUN_ATTEMPT };
+  if (installDiagnostics && Object.entries(diagnosticBinding).every(([key, value]) => installDiagnostics.binding?.[key] === value)) {
+    files['install-diagnostics.json'] = projectInstallEvidence(installDiagnostics, diagnosticBinding);
+  }
   const obsFailure = read(path.join(evidenceDir, 'r21-failure.json'));
   if (obsFailure && ['timeout','engine-or-observer'].includes(obsFailure.category)) {
     const trace = Array.isArray(obsFailure.readiness_trace) ? obsFailure.readiness_trace.slice(-TRACE_LIMIT).map(projectOperation).filter(Boolean) : [];

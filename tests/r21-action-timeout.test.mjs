@@ -18,7 +18,7 @@ test('only initial historical Install gets the larger PTerm bound', async () => 
   const timers = [];
   const context = vm.createContext({
     path, appRoot: '/app', ptermRoot: '/pterm', home: '/home', ENDPOINT: 'pinokio://test',
-    FIRST_REFUSAL: 'refusal', actionNumber: 0, progress: {}, process,
+    FIRST_REFUSAL: 'refusal', actionNumber: 0, progress: {}, process, installDiagnostics: null,
     openSocket: async () => {
       let onMessage;
       return { addEventListener: (_event, handler) => { onMessage = handler; },

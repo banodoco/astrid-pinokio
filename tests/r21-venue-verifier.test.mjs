@@ -131,9 +131,23 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
     }
     sample.secret = 'must-never-leave-runner';
     fs.writeFileSync(path.join(input, 'r21-receipt.json'), JSON.stringify(sample));
+    fs.writeFileSync(path.join(input, 'r21-install-diagnostics.json'), JSON.stringify({ binding: { request_id: REQUEST_ID, runner_ref: 'a'.repeat(40), run_id: '100', run_attempt: '1', secret: 'spoof' },
+      events: [{ kind: 'stream', timestamp: '2026-01-01T00:00:00.000Z', index: 2, total: 4, method: 'shell.run', raw: sample.secret }], secret: sample.secret }));
     const out = path.join(root, 'out');
     assert.equal(publish({ env: environment, evidenceDir: input, destination: out, setupExit: 0, journeyExit: 0 }).status, 'ACCEPTED');
     assert.equal(fs.readFileSync(path.join(out, 'r21-receipt.json'), 'utf8').includes(sample.secret), false);
+    const diagnosticText = fs.readFileSync(path.join(out, 'install-diagnostics.json'), 'utf8');
+    const diagnostic = JSON.parse(diagnosticText);
+    assert.doesNotMatch(diagnosticText, /must-never-leave-runner|spoof/);
+    assert.deepEqual(diagnostic.binding, { request_id: REQUEST_ID, runner_ref: 'a'.repeat(40), run_id: '100', run_attempt: '1' });
+    assert.equal(diagnostic.events[0].index, 2);
+    assert.match(fs.readFileSync(path.join(out, 'SHA256SUMS'), 'utf8'), /  install-diagnostics\.json/);
+    const wrongBinding = JSON.parse(fs.readFileSync(path.join(input, 'r21-install-diagnostics.json')));
+    wrongBinding.binding.run_id = '999';
+    fs.writeFileSync(path.join(input, 'r21-install-diagnostics.json'), JSON.stringify(wrongBinding));
+    const wrongDestination = path.join(root, 'wrong-binding');
+    publish({ env: environment, evidenceDir: input, destination: wrongDestination, setupExit: 0, journeyExit: 0 });
+    assert.equal(fs.existsSync(path.join(wrongDestination, 'install-diagnostics.json')), false);
     assert.equal(JSON.parse(fs.readFileSync(path.join(out, 'verdict.json'))).action_inner_exits.retry.code, 0);
     assert.throws(() => publish({ env: { ...environment, GITHUB_WORKFLOW_SHA: 'b'.repeat(40) }, evidenceDir: input, destination: out, setupExit: 0, journeyExit: 0 }), /workflow SHA/);
     assert.equal(publish({ env: environment, evidenceDir: input, destination: out, setupExit: 0, journeyExit: 1 }).status, 'FAILED');
