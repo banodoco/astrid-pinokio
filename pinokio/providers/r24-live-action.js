@@ -1,6 +1,6 @@
 'use strict';
 
-// A runner-local, read-only action used by the R-24 collector.  It executes
+// A runner-local, read-only action used by the R-24 collector. It executes
 // inside pinokiod, so its result and terminal packets are engine facts.  It
 // never calls the Runtime controller and has no mutation/retry authority.
 const fs = require('node:fs');

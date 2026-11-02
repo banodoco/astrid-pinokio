@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { terminalProjection, busyProjection, readControl } = require('../pinokio/providers/r24-action.cjs');
-const live = require('../pinokio/providers/r24-live-action.cjs');
+const live = require('../pinokio/providers/r24-live-action.js');
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 (async () => {
   const session = 'a'.repeat(32), request = 'b'.repeat(64), id = `r24-session=${session}-probe`;

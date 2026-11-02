@@ -1,85 +1,86 @@
-# R-24 Linux Stop observation producer
+# R-24 Linux live action and observation producer
 
-Run `python3 -B pinokio/providers/r24-linux.py REQUEST CONFIG [EXPORT_DIRECTORY]` on Linux. REQUEST
-uses the provisional `astrid.r24.provider-request.v1` shape: exact current tuple,
-provider commit and SHA-256 of each of `r24-linux.py`, `r24-action.cjs`,
-`r24-linux-binding.json`, and `r24-schema.json` under `pinokio/providers/`, the
-pinned Stop descriptor, a 32-hex run ID, and SHA-256 of canonical CONFIG.
-Canonical JSON is sorted, compact ASCII JSON with no NaN. Duplicate keys are
-rejected. The producer checkout must be clean at `provider.ref` and separate
-from each clean candidate checkout. CONFIG has exactly `checkouts` (absolute
-app/agent/runtime/pinokio checkout roots), `pterm` (absolute checkout at the
-binding's historical ref), `node` (absolute executable), and `node_sha256`,
-`pterm_entry_sha256`, `unws_sha256` (raw file hashes). The `unws` hash refers to
-`node_modules/unws/src/node.cjs`. These locally selected dependency hashes do not
-establish an approved execution profile. The full tuple manifest and Stop bytes
-are checked; this does not authenticate runner or daemon identity.
+Run the producer only on the Linux host that owns the already-running pinned
+Pinokio daemon:
 
-The native daemon must already be running on loopback port 42000 with the
-candidate checkout registered as `/api/astrid`; the listener URI is the absolute
-candidate Stop path. This is a necessary materializer input, not a verified
-registration. The process invokes the historical PTerm `start pinokio/stop.js`
-with the venue's fixed ref after subscribing. No shell command or caller-selected
-action is executed. It keeps only counters, bounded exit data, and fixed status
-strings. It does not export packets, control files, tokens or process output.
-A disconnect and client exit do not identify an engine task or prove terminal
-settlement; no remote cancellation is inferred from a client timeout. The
-listener has no readiness acknowledgement or loss-detection, and the Stop
-binding cannot prove the daemon actually used those bytes.
-
-No authentic busy/transport-unknown injection or fencing/restoration seam is
-bound. This prototype executes no such control and does not automatically retry.
-V1 is success-only: stdout is reserved for a complete
-`astrid.r24.provider-result.v1`; failures exit nonzero with no stdout result and
-a separate redacted JSON diagnostic on stderr. The caller must retain stderr as
-a separate diagnostic artifact, never as a result. The current collector always
-returns unavailable, so the production path cannot emit a result. It reports
-not-run/unknown even if the Stop client exits successfully. Validation failures
-produce a fixed `astrid.r24.producer-error.v1` diagnostic on stderr.
-
-The internal serializer checks exactly one busy, actual safely handled unknown,
-and restoration observation, each with the same request hash, run and session,
-the pinned source digest, safe outcome and matching nonempty evidence bytes. It
-exports only the consumer's fields and evidence digests. It does not authenticate
-those inputs. Only an internal collector may supply them; no request, config,
-environment variable or action output is accepted as a collector. The current
-collector is deliberately closed. A future collector must independently bind the
-real invocation and session, authenticate immutable sources and observations,
-and establish safe controls and restoration before returning anything. The
-serializer and synthetic tests do not provide those guarantees or custody.
-
-The optional export directory is an absolute, previously nonexistent path under
-existing, non-symlink directories. The producer creates it only after its internal
-collector returns complete successful observations and their bindings validate.
-There is no observations file, JSON, environment, or source override input. The
-currently closed collector therefore creates no export, including when a client
-exits successfully or a socket closes. Export errors yield no success result.
-
-The fixed allowlist is `junit.xml`, `manifest.json`, and
-`observation-result.json`. JSON is compact sorted ASCII; observation kinds are
-sorted. The manifest records the byte count and SHA-256 of the other two files;
-the internal seal function returns the same `{path, bytes, sha256}` inventory for
-all three. Raw evidence bytes are never exported, and each evidence input is
-limited to 64 KiB. The JUnit case is explicitly skipped and the manifest says
-qualification is not evaluated. The export does not create `run.json` or claim
-Actions identity, custody, source completeness, or qualification. The C-06g-R5
-collector authenticates the separately bound hosted artifact and returns its
-own run metadata and inventory; its caller is responsible for persisting any
-`run.json`. These files meet that collector's archive member requirements, not
-an approved R-23/R-30 observation profile.
-
-An R-23/R-30 export requires the separately owned binding, collector/session and
-authentic observation profiles; this is not that export. M-VENUE must provide
-the runner-local materializer and daemon/action mapping. M-QUAL's downstream
-gate and independently authenticated custody remain required.
-
-CONFIG example (all values must be materialized for the actual runner; the
-placeholder text below is not executable):
-
-```json
-{"checkouts":{"app":"/runner/app","agent":"/runner/agent","runtime":"/runner/runtime","pinokio":"/runner/pinokio"},"pterm":"/runner/pterm","node":"/runner/node","node_sha256":"<sha256>","pterm_entry_sha256":"<sha256>","unws_sha256":"<sha256>"}
+```text
+python3 -B pinokio/providers/r24-linux.py REQUEST CONFIG [EXPORT_DIRECTORY]
 ```
 
-The materializer also has to supply REQUEST with the exact immutable producer
-ref and four source hashes. No local configuration creates an authenticated
-observer, a qualifying session, a fault injection profile, or a remote fence.
+`REQUEST` is canonical `astrid.r24.provider-request.v1` JSON. It binds the
+recorded candidate tuple, the immutable provider commit and SHA-256 of every
+path in `r24-linux.py:FILES`, the pinned Stop descriptor, a 32-hex run ID, and
+the SHA-256 of canonical `CONFIG`. Canonical JSON is compact, sorted ASCII with
+no duplicate keys or non-finite values. The provider checkout must be clean at
+`provider.ref`; every candidate checkout must be clean, distinct, and at the
+recorded tuple. The recorded tuple and manifest are an export candidate, not a
+new qualification.
+
+`CONFIG` has exactly these fields:
+
+```json
+{"checkouts":{"app":"/runner/app","agent":"/runner/agent","runtime":"/runner/runtime","pinokio":"/runner/pinokio"},"pterm":"/runner/pterm","pinokiod":"/runner/pinokiod","node":"/runner/node","node_sha256":"<sha256>","pterm_entry_sha256":"<sha256>","unws_sha256":"<sha256>","engine":{"pid":123,"boot_id":"<linux-boot-id>","start_ticks":"<proc-start-ticks>","pinokio_home":"/runner/pinokio-home","port":42000},"scratch_root":"/runner/private-existing-scratch"}
+```
+
+The collector checks the exact historical daemon checkout and pinned daemon
+source hashes, PTerm ref and dependency bytes, Node bytes, Linux boot/process
+birth, daemon cwd/executable/command, `PINOKIO_HOME`, and ownership of the
+listening socket. `pinokio_home/api/astrid` must be an exact materialization of
+the candidate Stop/lifecycle bytes and immutable provider action bytes. A real
+managed Runtime must already be installed under
+`pinokio_home/api/astrid/app/astrid`, with a selected realm and at least one
+actual `running` or `cancel_requested` task. The producer does not create a
+synthetic task and will fail closed if genuine busy state is absent.
+
+The controller uses request IDs of the form `r24-session=<session>-<phase>`.
+Each action is dispatched on the socket that subscribed before processing, and
+only packets carrying that exact ID are accepted. A probe requires one result,
+the engine `stop` event, disconnect, and an idle status query. Busy is read by
+the engine-loaded `r24-live-action.js` through the candidate's actual
+`preflightStop`; the candidate `stop.js` must then refuse and name every real
+blocker. The exact request is fenced with Pinokio's listen/stop/status protocol.
+
+For the safely handled unknown case, the action invokes the same installed
+Runtime preflight but supplies a single-use runner that accepts only the exact
+pinned Python command and preflight code. It holds that child with `SIGSTOP`,
+records the child identity, waits until the observer has disconnected and the
+venue-side control is armed, then closes its pipes and sends `SIGKILL`. No
+Runtime controller or mutation command is called. The abandoned engine request
+is fenced explicitly. Restoration reruns the real preflight and must reproduce
+the same blocker set with a complete result/stop/disconnect terminal and an
+idle status. Independent read-only snapshots before and after must match,
+including installed records, catalog/discovery/instance records, selected
+realm/database identity, and the actual active-task census.
+
+Success reserves stdout for one complete `astrid.r24.provider-result.v1`.
+Failure exits nonzero, emits no result, and writes only a fixed redacted
+diagnostic to stderr. A socket close, client exit, missing drain, mismatched
+blocker, changed protected state, unavailable restoration, or export error can
+never become success. Control files are removed only after all live checks pass.
+
+If `EXPORT_DIRECTORY` is supplied, it must be an absolute nonexistent leaf
+under existing non-symlink directories. A successful run creates exactly:
+
+- `junit.xml`
+- `manifest.json`
+- `observation-result.json`
+- `observation-busy.json`
+- `observation-unknown.json`
+- `observation-restoration.json`
+
+The three raw observations retain the source-backed engine/process, request,
+session, run, fence, drain, task, and protected-state bindings. The manifest
+contains their byte counts and SHA-256 values and explicitly says
+`qualification: not-evaluated`. The JUnit case is skipped. There is no
+caller-supplied observation input.
+
+This producer establishes runner-local source and action/session bindings. It
+does not authenticate GitHub Actions identity, artifact custody, or R-24
+qualification. The venue must upload the unchanged six-file directory from the
+same invocation and bind its dispatch/session record. The C-06g-R5 consumer
+must receive `lane.repo` plus an exact hosted `lane.source` containing
+`repo`, `workflow_path`, `workflow_revision`, `run_id`, `run_attempt`, `job_id`,
+`artifact_id`, `artifact_name`, and `head_sha`; it independently checks the
+successful run/job, artifact identity and archive digest. Canonical Linux
+M4-4a/M4-4b/M4-5 receipts and the downstream qualification decision remain
+separately required.

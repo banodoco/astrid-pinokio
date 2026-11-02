@@ -14,7 +14,7 @@ HERE = Path(__file__).resolve().parent
 BASE = HERE.parent.parent
 BINDING = json.loads((HERE / 'r24-linux-binding.json').read_bytes())
 FILES = ('pinokio/providers/r24-linux.py', 'pinokio/providers/r24-action.cjs',
-         'pinokio/providers/r24-live-action.cjs',
+         'pinokio/providers/r24-live-action.js',
          'pinokio/providers/r24-linux-binding.json', 'pinokio/providers/r24-schema.json')
 HEX40 = re.compile(r'[0-9a-f]{40}\Z')
 HEX64 = re.compile(r'[0-9a-f]{64}\Z')
@@ -200,7 +200,7 @@ def validate(request, config):
                           ('pinokio/lifecycle.mjs', BINDING['lifecycle_sha256'])):
         if sha(regular(resource / rel)) != expected:
             raise ValueError('engine resource tuple mismatch')
-    for rel in ('pinokio/providers/r24-action.cjs', 'pinokio/providers/r24-live-action.cjs'):
+    for rel in ('pinokio/providers/r24-action.cjs', 'pinokio/providers/r24-live-action.js'):
         if sha(regular(resource / rel)) != sources[rel]:
             raise ValueError('engine provider source mismatch')
     scratch = Path(config['scratch_root']).resolve(strict=True) if isinstance(config['scratch_root'], str) else Path('.')
@@ -419,7 +419,7 @@ def collect_authenticated(request, session, context):
     installed = context['installed']
     control = {'schema': 'astrid.r24.live-control.v1', 'pterm': str(context['pterm']),
         'session': session, 'request_sha256': sha(canonical(request)),
-        'live_uri': str(context['resource'] / 'pinokio/providers/r24-live-action.cjs'),
+        'live_uri': str(context['resource'] / 'pinokio/providers/r24-live-action.js'),
         'stop_uri': str(context['resource'] / 'pinokio/stop.js'),
         'lifecycle': str(context['resource'] / 'pinokio/lifecycle.mjs'),
         'lifecycle_sha256': BINDING['lifecycle_sha256'], 'backend_root': str(installed['backend_root']),

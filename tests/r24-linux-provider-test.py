@@ -69,7 +69,7 @@ class ProviderTests(unittest.TestCase):
         (resource / 'pinokio/providers').mkdir(parents=True)
         (resource / 'pinokio/stop.js').write_bytes(stop)
         (resource / 'pinokio/lifecycle.mjs').write_bytes(lifecycle)
-        for name in ('pinokio/providers/r24-action.cjs', 'pinokio/providers/r24-live-action.cjs'):
+        for name in ('pinokio/providers/r24-action.cjs', 'pinokio/providers/r24-live-action.js'):
             (resource / name).write_bytes(files[name])
         scratch = root / 'scratch'
         scratch.mkdir(mode=0o700)
