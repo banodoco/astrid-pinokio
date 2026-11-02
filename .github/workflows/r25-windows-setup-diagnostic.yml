@@ -1,0 +1,103 @@
+name: R-25 bounded Windows setup diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  windows-setup-diagnostic:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      AGENT_REF: a6b68d5b5478326a4db1971966d33a2cfe61d091
+      SLOT_ID: pinokio-fully-local-windows
+      PINOKIOD_REF: add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
+      PTERM_REF: 5be43718701c448b43daf0ce51d8935f170065bb
+      R25_SETUP_TIMEOUT_MS: 600000
+      R25_TUPLE_JSON: >-
+        {"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","artifacts":{"public/install":"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d","public/install.sh":"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285","public/install.ps1":"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"},"published_at":"2026-11-02T17:55:27Z"}
+    steps:
+      - name: Preserve exact Git blob bytes on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Materialize exact Agent collector source
+        shell: pwsh
+        env:
+          AGENT_ROOT: ${{ runner.temp }}\astrid-agent
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:AGENT_REF -ne 'a6b68d5b5478326a4db1971966d33a2cfe61d091') { throw 'agent_ref differs' }
+          git clone --filter=blob:none --no-checkout https://github.com/banodoco/astrid-agent.git $env:AGENT_ROOT
+          git -C $env:AGENT_ROOT fetch --no-tags --depth=1 origin $env:AGENT_REF
+          git -C $env:AGENT_ROOT config core.autocrlf false
+          git -C $env:AGENT_ROOT config core.eol lf
+          git -C $env:AGENT_ROOT checkout --detach FETCH_HEAD
+          if ((git -C $env:AGENT_ROOT rev-parse HEAD) -ne $env:AGENT_REF) { throw 'Agent HEAD differs' }
+      - name: Materialize pinned native engine dependencies
+        shell: pwsh
+        env:
+          PINOKIOD_ROOT: ${{ runner.temp }}\pinokiod
+          PTERM_ROOT: ${{ runner.temp }}\pterm
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone --filter=blob:none --no-checkout https://github.com/pinokiocomputer/pinokiod.git $env:PINOKIOD_ROOT
+          git -C $env:PINOKIOD_ROOT fetch --no-tags --depth=1 origin $env:PINOKIOD_REF
+          git -C $env:PINOKIOD_ROOT config core.autocrlf false
+          git -C $env:PINOKIOD_ROOT config core.eol lf
+          git -C $env:PINOKIOD_ROOT checkout --detach FETCH_HEAD
+          if ((git -C $env:PINOKIOD_ROOT rev-parse HEAD) -ne $env:PINOKIOD_REF) { throw 'pinokiod HEAD differs' }
+          npm ci --omit=dev --prefix $env:PINOKIOD_ROOT --silent
+          git clone --filter=blob:none --no-checkout https://github.com/pinokiocomputer/pterm.git $env:PTERM_ROOT
+          git -C $env:PTERM_ROOT fetch --no-tags --depth=1 origin $env:PTERM_REF
+          git -C $env:PTERM_ROOT config core.autocrlf false
+          git -C $env:PTERM_ROOT config core.eol lf
+          git -C $env:PTERM_ROOT checkout --detach FETCH_HEAD
+          if ((git -C $env:PTERM_ROOT rev-parse HEAD) -ne $env:PTERM_REF) { throw 'pterm HEAD differs' }
+          npm ci --omit=dev --prefix $env:PTERM_ROOT --silent
+      - name: Validate exact sources and focused diagnostic checks
+        shell: pwsh
+        env:
+          AGENT_ROOT: ${{ runner.temp }}\astrid-agent
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node pinokio/providers/r25-native-collector-binding.cjs --validate-source-only true --agent-ref $env:AGENT_REF --agent-root $env:AGENT_ROOT --pinokio-root $env:GITHUB_WORKSPACE
+          node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-windows.test.cjs tests/r25-setup-diagnostics.test.mjs
+          node --check .github/venue/r25-snapshot-runner.cjs
+          node --check .github/venue/r21-observer-diagnostics.cjs
+          node --check pinokio/shell.mjs
+          git diff --check
+      - name: Run one real setup-only Windows diagnostic
+        shell: pwsh
+        env:
+          AGENT_ROOT: ${{ runner.temp }}\astrid-agent
+          PINOKIOD_ROOT: ${{ runner.temp }}\pinokiod
+          PTERM_ROOT: ${{ runner.temp }}\pterm
+          R25_OUTPUT: ${{ runner.temp }}\r25-setup-output
+          R25_DIAGNOSTICS: ${{ runner.temp }}\r25-diagnostics
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node .github/venue/r25-snapshot-runner.cjs --agent-root $env:AGENT_ROOT --pinokiod $env:PINOKIOD_ROOT --pterm $env:PTERM_ROOT --output $env:R25_OUTPUT --setup-only true --setup-timeout-ms $env:R25_SETUP_TIMEOUT_MS
+      - name: Retain bounded setup diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r25-windows-setup-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\r25-diagnostics
+          if-no-files-found: warn
+          retention-days: 30

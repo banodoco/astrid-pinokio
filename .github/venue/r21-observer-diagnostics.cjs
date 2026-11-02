@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('node:fs');
+
 // All retained fields are fixed labels, bounded numbers, booleans, or timestamps.
 const TRACE_LIMIT = 20;
 const operations = ['start-client', 'start-status', 'engine-resource', 'runtime', 'application'];
@@ -94,9 +96,30 @@ async function terminateChild(child, termGraceMs = 2000, killGraceMs = 1000) {
 const INSTALL_TRACE_LIMIT = 40;
 const installKinds = ['start', 'stream', 'result', 'error', 'installer-failure-marker', 'stop', 'disconnect'];
 const installMethods = ['shell.run', 'local.set', 'script.start', 'input'];
+const shellKinds = ['shell-child-spawn', 'shell-child-error', 'shell-child-exit', 'shell-child-close', 'bootstrap-stage'];
+const shellStages = ['bootstrap.download-installer', 'bootstrap.download-manifest', 'bootstrap.invoke-installer', 'bootstrap.cleanup'];
+const shellStatuses = ['start', 'complete'];
 const timestamp = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
   && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value ? value : null;
 const boundedIndex = value => Number.isInteger(value) && value >= 0 && value <= 10000 ? value : null;
+const shellTimestamp = value => typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? new Date(value).toISOString() : null;
+function projectShellEvent(value) {
+  if (!shellKinds.includes(value?.kind) || !shellTimestamp(value.at)) return null;
+  const result = { at: shellTimestamp(value.at), kind: value.kind };
+  if (value.kind === 'bootstrap-stage') {
+    if (!shellStages.includes(value.stage) || !shellStatuses.includes(value.status)) return null;
+    result.stage = value.stage;
+    result.status = value.status;
+  } else if (value.kind === 'shell-child-spawn') {
+    result.pid = Number.isInteger(value.pid) && value.pid > 0 && value.pid <= 2147483647 ? value.pid : null;
+  } else if (value.kind === 'shell-child-error') {
+    result.error = value.error === true;
+  } else {
+    result.code = Number.isInteger(value.code) && value.code >= 0 && value.code <= 255 ? value.code : null;
+    result.signal = ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', 'SIGABRT', 'SIGSEGV'].includes(value.signal) ? value.signal : null;
+  }
+  return result;
+}
 function projectInstallEvidence(raw, binding) {
   const timer = raw?.timer || {};
   const child = raw?.child || {};
@@ -106,7 +129,8 @@ function projectInstallEvidence(raw, binding) {
       method: installMethods.includes(item.method) ? item.method : null };
   const selectEvent = (item, kinds) => kinds.includes(item?.kind) ? projectEvent(item) : null;
   const events = Array.isArray(raw?.events) ? raw.events.slice(-INSTALL_TRACE_LIMIT).map(projectEvent).filter(Boolean) : [];
-  return { schema: 1, binding, events, last_activity: projectEvent(raw?.last_activity),
+  const shellEvents = Array.isArray(raw?.shell_events) ? raw.shell_events.slice(-INSTALL_TRACE_LIMIT).map(projectShellEvent).filter(Boolean) : [];
+  return { schema: 1, binding, events, shell_events: shellEvents, last_activity: projectEvent(raw?.last_activity),
     last_native_event: selectEvent(raw?.last_native_event, ['start', 'stream', 'result', 'error', 'installer-failure-marker']),
     last_start: selectEvent(raw?.last_start, ['start']),
     last_result: selectEvent(raw?.last_result, ['result']),
@@ -120,7 +144,7 @@ function projectInstallEvidence(raw, binding) {
       signal_observed: typeof child.signal_observed === 'boolean' ? child.signal_observed : null } };
 }
 function createInstallDiagnostics(binding, save, now = () => Date.now()) {
-  const state = { events: [], timer: {}, child: {} };
+  const state = { events: [], shell_events: [], timer: {}, child: {} };
   let lastStreamWrite = -Infinity;
   // Only a transient suffix is used to recognize a marker split across packets.
   // It is never included in the retained projection.
@@ -171,6 +195,15 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
       if (event === 'spawn-error') state.child.spawn_error_at = at;
       if (event === 'child-exit') { state.child.exited_at = at; state.child.code = value.code;
         state.child.signal = value.signal; state.child.signal_observed = value.signal !== null && value.signal !== undefined; }
+      persist();
+    },
+    shell(file) {
+      try {
+        const events = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/)
+          .map(line => { try { return projectShellEvent(JSON.parse(line)); } catch { return null; } })
+          .filter(Boolean);
+        state.shell_events = events.slice(-INSTALL_TRACE_LIMIT);
+      } catch { state.shell_events = []; }
       persist();
     },
   };

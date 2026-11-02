@@ -92,6 +92,9 @@ function materializeProduct(productRoot, appRoot) {
   fs.rmSync(appRoot, { recursive: true, force: true });
   fs.cpSync(productRoot, appRoot, { recursive: true });
   if (execFileSync('git', ['-C', appRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== PINOKIO_TUPLE_REF) throw new Error('Pinokio product checkout differs from CURRENT-TUPLE');
+  const overlay = path.join(process.cwd(), 'pinokio', 'shell.mjs');
+  fs.copyFileSync(overlay, path.join(appRoot, 'pinokio', 'shell.mjs'));
+  return { engine_ref: PINOKIO_TUPLE_REF, overlay: { path: 'pinokio/shell.mjs', sha256: digest(fs.readFileSync(overlay)) } };
 }
 async function fetchHash(url) { const response = await fetch(url); if (!response.ok) throw new Error(`App candidate fetch ${response.status}`); return Buffer.from(await response.arrayBuffer()); }
 async function verifyAppCandidate(tuple) {
@@ -157,6 +160,7 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
     await new Promise(resolve => setTimeout(resolve, 500));
     return { script, inner_exit: innerExit, terminal, first_error: firstError, status_after: await io.status(path.join(appRoot, script), `${action}-status`) };
   } finally {
+    diagnostic?.shell?.(path.join(appRoot, '_r25-setup-shell-diagnostics.jsonl'));
     await terminateChild(child);
     io.disposeSocket(socket);
   }
@@ -196,7 +200,7 @@ async function main() {
   if (!ptermRoot || !pinokiodRoot || !cli['agent-root']) throw new Error('runner roots are incomplete');
   await verifyAppCandidate(tuple);
   binding.validateSourceRoots({ agentRoot: path.resolve(cli['agent-root']), pinokioRoot: process.cwd(), agentRef: AGENT_REF });
-  materializeProduct(productRoot, appRoot);
+  const engineBinding = materializeProduct(productRoot, appRoot);
   const environment = path.join(appRoot, '_ENVIRONMENT');
   fs.writeFileSync(environment, '# R-25 run-owned candidate pin\nASTRID_APP_REF=lane/M-APP/PINOKIO-APP-BINDING\n', { encoding: 'utf8', flag: 'w', mode: 0o600 });
   fs.writeFileSync(requestPath, `${JSON.stringify(request, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
@@ -222,6 +226,10 @@ async function main() {
     run_id: process.env.GITHUB_RUN_ID || null,
     run_attempt: process.env.GITHUB_RUN_ATTEMPT || null,
     phase: 'setup-install',
+    pinokio_engine_ref: engineBinding.engine_ref,
+    pterm_ref: process.env.PTERM_REF || null,
+    pinokiod_ref: process.env.PINOKIOD_REF || null,
+    shell_overlay: engineBinding.overlay,
   }, value => {
     const file = path.join(diagnostics, 'r25-install-diagnostics.json');
     fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
@@ -234,8 +242,29 @@ async function main() {
     // boundaries. It is still driven through the real Pinokio engine and is
     // allowed to fail closed before an evidence session can begin. Keep its
     // bounded native trace even when PTerm times out before returning an exit.
-    const preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: 'pinokio/install.js', action: 'setup-install', timeoutMs: 45 * 60 * 1000, diagnostic: setupDiagnostics });
+    const setupOnly = cli['setup-only'] === 'true';
+    const requestedTimeout = Number.parseInt(cli['setup-timeout-ms'] || '', 10);
+    const setupTimeoutMs = setupOnly && Number.isSafeInteger(requestedTimeout) && requestedTimeout >= 1000 && requestedTimeout <= 15 * 60 * 1000
+      ? requestedTimeout : setupOnly ? 10 * 60 * 1000 : 45 * 60 * 1000;
+    const priorDiagnosticFlag = process.env.ASTRID_R25_SETUP_DIAGNOSTICS;
+    process.env.ASTRID_R25_SETUP_DIAGNOSTICS = '1';
+    let preparation;
+    try {
+      preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: 'pinokio/install.js', action: 'setup-install', timeoutMs: setupTimeoutMs, diagnostic: setupDiagnostics });
+    } finally {
+      if (priorDiagnosticFlag === undefined) delete process.env.ASTRID_R25_SETUP_DIAGNOSTICS;
+      else process.env.ASTRID_R25_SETUP_DIAGNOSTICS = priorDiagnosticFlag;
+    }
     if (preparation.first_error || preparation.inner_exit.code !== 0 || preparation.terminal.error) throw new Error('disposable Pinokio install preparation failed');
+    if (setupOnly) {
+      writeCanonical(path.join(diagnostics, 'r25-setup-result.json'), {
+        schema: 'astrid.r25.pinokio-setup-result.v1', status: 'completed', setup_timeout_ms: setupTimeoutMs,
+        tuple, pinned_refs: { pinokio_engine: PINOKIO_TUPLE_REF, pinokiod: process.env.PINOKIOD_REF || null, pterm: process.env.PTERM_REF || null },
+        preparation,
+      });
+      return;
+    }
+    try { fs.rmSync(path.join(appRoot, '_r25-setup-shell-diagnostics.jsonl'), { force: true }); } catch {}
     worker = spawn(process.env.PYTHON || 'python', [path.join(process.cwd(), '.github', 'venue', 'r25-snapshot-worker.py'), requestPath, output], { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: path.resolve(cli['agent-root']) }, stdio: ['pipe', 'pipe', 'ignore'] });
     for (const item of plans) {
       const action = item.plan.action;
