@@ -104,15 +104,19 @@ function runAction(create, { id, uri, input, closeOnStart = false, onObserverLos
         if (!packet || packet.id !== id || typeof packet.type !== 'string') throw new Error('foreign action packet');
         packets.push(packet);
         if (closeOnStart && packet.type === 'start' && !closedForFault) {
-          closedForFault = true; socket.close(); onObserverLost(); clearTimeout(timer);
-          resolve({ id, packets, observer_lost: true }); return;
+          closedForFault = true; socket.close(); return;
         }
         if (packet.type === 'error') { clearTimeout(timer); socket.close(); resolve({ id, packets, error: packet.data }); return; }
         if (packet.type === 'disconnect') { clearTimeout(timer); socket.close(); resolve({ id, packets }); }
       } catch (error) { fail(error); }
     });
     socket.addEventListener('close', () => {
-      if (!closedForFault && !packets.some(packet => packet.type === 'disconnect' || packet.type === 'error')) {
+      if (closedForFault) {
+        try {
+          onObserverLost(); clearTimeout(timer);
+          resolve({ id, packets, observer_lost: true });
+        } catch (error) { fail(error); }
+      } else if (!packets.some(packet => packet.type === 'disconnect' || packet.type === 'error')) {
         fail(new Error('premature close'));
       }
     });

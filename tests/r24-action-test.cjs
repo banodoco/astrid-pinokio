@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { LIVE_URI, requestId, terminalProjection, busyProjection, readControl } = require('../pinokio/providers/r24-action.cjs');
+const { LIVE_URI, requestId, runAction, terminalProjection, busyProjection, readControl } = require('../pinokio/providers/r24-action.cjs');
 const live = require('../pinokio/providers/r24-live-action.js');
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 (async () => {
@@ -37,6 +37,26 @@ const digest = value => crypto.createHash('sha256').update(value).digest('hex');
     const file = path.join(root, 'control.json'); fs.writeFileSync(file, JSON.stringify(full));
     assert.equal(readControl(file).session, session);
     assert.throws(() => requestId('/absolute/action.js', session, 'probe'));
+    let socket;
+    class FakeSocket {
+      constructor() { this.listeners = new Map(); this.closeObserved = false; }
+      addEventListener(type, listener) {
+        const listeners = this.listeners.get(type) || [];
+        listeners.push(listener); this.listeners.set(type, listeners);
+      }
+      emit(type, event = {}) { for (const listener of this.listeners.get(type) || []) listener(event); }
+      close() { queueMicrotask(() => { this.closeObserved = true; this.emit('close'); }); }
+      send(raw) {
+        const rpc = JSON.parse(raw);
+        queueMicrotask(() => this.emit('message', { data: JSON.stringify({ id: rpc.id, type: 'start' }) }));
+      }
+    }
+    const create = () => {
+      socket = new FakeSocket(); queueMicrotask(() => socket.emit('open')); return socket;
+    };
+    const fault = await runAction(create, { id, uri: LIVE_URI, input,
+      closeOnStart: true, onObserverLost: () => assert.equal(socket.closeObserved, true) });
+    assert.equal(fault.observer_lost, true);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
-  console.log('4 local action/control protocol fixtures passed');
+  console.log('5 local action/control protocol fixtures passed');
 })().catch(() => { console.error('action protocol fixture failed'); process.exitCode = 1; });
