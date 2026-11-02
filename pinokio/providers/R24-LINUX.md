@@ -16,12 +16,15 @@ no duplicate keys or non-finite values. The provider checkout must be clean at
 recorded tuple. The recorded tuple and manifest are an export candidate, not a
 new qualification.
 
-The bound Release-1 tuple is App
-`933c53a6fb1a11e5f8a01335d6252016d703beec`, Agent
+The bound execution candidate is provisional and is not the published
+Release-1 tuple. It uses App
+`a10b36b3ecf1365c7e122643b2e3cae5cb5c1c8a`, Agent
 `ab43bad818ef65ca1e929b973a2f61cd9fc4bf61`, Runtime
 `2776ba973b6c8f3555b5629b0840d9691a98d3c2`, and Pinokio
 `3a6a98ae251ca126505245286e2d3e760f4348e9`. The App manifest SHA-256 is
-`b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f`.
+`751bb2fcb489c1194c7a158f5d79d3532a594344ae93cc2da4902947382df3d7`;
+those exact bytes carry VibeComfy
+`e2905d068d5851b9c32856d32b8251852a01d6dd` derived from the Agent pin.
 
 `CONFIG` has exactly these fields:
 

@@ -38,6 +38,17 @@ def repo(path, files):
     return cmd(path, 'rev-parse', 'HEAD')
 
 
+class CandidateBindingTests(unittest.TestCase):
+    def test_provisional_candidate_binding_is_exact(self):
+        self.assertEqual(r24.BINDING['candidate'], {
+            'agent': 'ab43bad818ef65ca1e929b973a2f61cd9fc4bf61',
+            'app': 'a10b36b3ecf1365c7e122643b2e3cae5cb5c1c8a',
+            'manifest_sha256': '751bb2fcb489c1194c7a158f5d79d3532a594344ae93cc2da4902947382df3d7',
+            'pinokio': '3a6a98ae251ca126505245286e2d3e760f4348e9',
+            'runtime': '2776ba973b6c8f3555b5629b0840d9691a98d3c2',
+        })
+
+
 class InstalledContextTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
