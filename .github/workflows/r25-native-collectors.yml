@@ -1,6 +1,9 @@
 name: R-25 snapshot collector component route
 
 on:
+  push:
+    branches:
+      - venue/M-VENUE-V02-R25-SNAPSHOT-COMPONENT-R1
   workflow_dispatch:
     inputs:
       agent_ref:
