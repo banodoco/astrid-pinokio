@@ -1,94 +1,158 @@
 'use strict';
 
-// Component checks only.  These tests do not qualify a hosted venue.
+// Component checks only. These tests do not qualify a hosted venue.
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
 const test = require('node:test');
-const validator = require('../pinokio/providers/r25-snapshot-macos.cjs');
 
-function observation(overrides = {}) {
+const snapshot = require('../pinokio/providers/r25-snapshot-macos.cjs');
+
+function observation() {
   const value = {
-    schema: validator.SCHEMA,
-    source: validator.SOURCE,
-    profile: validator.PROFILE,
-    capture_utc: '2026-11-02T18:14:13.000000Z',
-    capture_monotonic_ns: 123,
-    collector_pid: 42,
+    schema: snapshot.SCHEMA,
+    source_profile: snapshot.SOURCE_PROFILE,
+    captured_at_utc: '2026-11-02T18:14:13.000000Z',
+    capture_started_monotonic_ns: '100',
+    capture_finished_monotonic_ns: '150',
+    collector_pid: 700,
     limits: {
-      max_processes: 1024,
-      max_targets: 64,
-      max_ps_bytes: 1048576,
-      max_command_line_bytes: 65536,
-      max_service_print_bytes: 65536,
+      command_timeout_seconds: 10,
+      max_processes: 4096,
+      max_ps_bytes: 4194304,
+      max_service_bytes: 262144,
+      max_service_targets: 64,
     },
-    processes: [{
-      pid: 101,
-      parent_pid: 1,
-      process_birth_id: 'Mon Jan  1 00:00:00 2024',
-      command_line: '/usr/bin/example --full command',
-      executable_path: '/usr/bin/example',
-      state: 'present',
-    }],
-    services: [
-      { target: 'gui/501/com.example.app', state: 'present', raw_print: 'gui/501/com.example.app\nstate = running\n', error: null },
-      { target: 'gui/501/com.example.missing', state: 'absent', raw_print: null, error: null },
+    processes: [
+      {
+        birth_text: 'Mon Nov 02 18:00:01 2026',
+        collection_state: 'present',
+        command_line: '/Applications/Pinokio.app/Contents/MacOS/Pinokio --serve café',
+        executable_path: '/Applications/Pinokio.app/Contents/MacOS/Pinokio',
+        parent_pid: 1,
+        pid: 42,
+      },
+      {
+        birth_text: 'Mon Nov 02 18:00:02 2026',
+        collection_state: 'vanished',
+        command_line: '/usr/local/bin/node child.js',
+        executable_path: null,
+        parent_pid: 42,
+        pid: 99,
+      },
     ],
-    collection_errors: [],
+    launchd: [
+      {
+        error: null,
+        raw_print: 'gui/501/com.pinokio.backend = {\n\tpid = 42\n}\n',
+        returncode: 0,
+        state: 'present',
+        target: 'gui/501/com.pinokio.backend',
+      },
+      {
+        error: 'not-found',
+        raw_print: null,
+        returncode: 113,
+        state: 'absent',
+        target: 'system/com.pinokio.missing',
+      },
+      {
+        error: 'launchctl exited 77',
+        raw_print: null,
+        returncode: 77,
+        state: 'error',
+        target: 'system/com.pinokio.problem',
+      },
+    ],
   };
-  Object.assign(value, overrides);
-  value.digest = validator.structuralDigest(value);
+  value.structural_sha256 = snapshot.structuralDigest(value);
   return value;
 }
 
-test('validates macos-15/bash present and absent rows with a structural digest', () => {
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+test('profile identifies macos-15 and bash without the retired source', () => {
+  assert.equal(snapshot.PROFILE.platform, 'macos-15');
+  assert.equal(snapshot.PROFILE.shell, 'bash');
+  assert.equal(snapshot.PROFILE.id, snapshot.SOURCE_PROFILE);
+  assert.match(snapshot.PROFILE.process_source, /ps.*libproc/);
+  assert.match(snapshot.PROFILE.service_source, /launchctl print/);
+  const source = fs.readFileSync(require.resolve('../pinokio/providers/r25-snapshot-macos.cjs'), 'utf8');
+  assert.doesNotMatch(source, /Endpoint\s+Security/i);
+});
+
+test('validates present, absent, error, and vanished rows with canonical digest', () => {
   const value = observation();
-  assert.equal(validator.validateObservation(value), value);
-  assert.deepEqual(validator.MACOS_PROFILE, {
-    id: 'macos-15/bash', runner: 'macos-15', shell: 'bash', source: validator.SOURCE,
-  });
+  assert.equal(snapshot.validateObservation(value), value);
+  const bytes = snapshot.canonicalBytes(value);
+  assert.match(bytes.toString('ascii'), /caf\\u00e9/);
+  assert.deepEqual(snapshot.parseObservation(bytes), value);
+
+  const unsigned = clone(value);
+  delete unsigned.structural_sha256;
+  assert.equal(
+    value.structural_sha256,
+    crypto.createHash('sha256').update(snapshot.canonicalBytes(unsigned)).digest('hex'),
+  );
 });
 
-test('rejects duplicate PID and duplicate target rows', () => {
-  const duplicatePid = observation();
-  duplicatePid.processes.push({ ...duplicatePid.processes[0], command_line: '/other' });
-  duplicatePid.digest = validator.structuralDigest(duplicatePid);
-  assert.throws(() => validator.validateObservation(duplicatePid), /duplicate process PID/);
-
-  const duplicateTarget = observation();
-  duplicateTarget.services.push({ ...duplicateTarget.services[1] });
-  duplicateTarget.digest = validator.structuralDigest(duplicateTarget);
-  assert.throws(() => validator.validateObservation(duplicateTarget), /duplicate service target/);
-});
-
-test('rejects missing, unknown, malformed, and digest-mismatched data', () => {
+test('rejects missing and unknown root or row fields', () => {
   const missing = observation();
-  delete missing.source;
-  assert.throws(() => validator.validateObservation(missing), /missing or unknown/);
+  delete missing.collector_pid;
+  assert.throws(() => snapshot.validateObservation(missing), /missing=collector_pid/);
 
-  const unknown = observation({ extra: true });
-  assert.throws(() => validator.validateObservation(unknown), /missing or unknown/);
-
-  const malformed = observation();
-  malformed.processes[0].state = 'present';
-  malformed.processes[0].executable_path = null;
-  malformed.digest = validator.structuralDigest(malformed);
-  assert.throws(() => validator.validateObservation(malformed), /lacks executable/);
-
-  const mismatched = observation();
-  mismatched.digest = '0'.repeat(64);
-  assert.throws(() => validator.validateObservation(mismatched), /digest does not match/);
+  const unknown = observation();
+  unknown.processes[0].claim = 'qualified';
+  unknown.structural_sha256 = snapshot.structuralDigest(unknown);
+  assert.throws(() => snapshot.validateObservation(unknown), /unknown=claim/);
 });
 
-test('rejects malformed service error and unsafe targets', () => {
-  const value = observation({
-    services: [{ target: 'gui/501/../bad', state: 'absent', raw_print: null, error: null }],
-  });
-  value.digest = validator.structuralDigest(value);
-  assert.throws(() => validator.validateObservation(value), /unsafe/);
+test('rejects duplicate or unsorted process and target rows', () => {
+  const process = observation();
+  process.processes[1].pid = 42;
+  process.structural_sha256 = snapshot.structuralDigest(process);
+  assert.throws(() => snapshot.validateObservation(process), /duplicate or unsorted PID/);
 
-  const error = observation({
-    services: [{ target: 'gui/501/com.example.app', state: 'error', raw_print: null, error: 'denied' }],
-    collection_errors: [],
-  });
-  error.digest = validator.structuralDigest(error);
-  assert.throws(() => validator.validateObservation(error), /collection error is missing/);
+  const target = observation();
+  target.launchd[1].target = target.launchd[0].target;
+  target.structural_sha256 = snapshot.structuralDigest(target);
+  assert.throws(() => snapshot.validateObservation(target), /duplicate or unsorted target/);
+});
+
+test('rejects malformed state, source, path, time, and bounded limits', () => {
+  const mutations = [
+    [value => { value.source_profile = 'alternate'; }, /unknown profile/],
+    [value => { value.processes[0].executable_path = 'relative'; }, /absolute path/],
+    [value => { value.processes[1].executable_path = '/stale'; }, /vanished process path/],
+    [value => { value.launchd[0].returncode = 1; }, /present state fields differ/],
+    [value => { value.launchd[1].error = 'maybe'; }, /absent state fields differ/],
+    [value => { value.capture_finished_monotonic_ns = '99'; }, /ordered decimal/],
+    [value => { value.limits.max_processes = 4097; }, /bounded integer/],
+  ];
+  for (const [mutate, expected] of mutations) {
+    const value = observation();
+    mutate(value);
+    value.structural_sha256 = snapshot.structuralDigest(value);
+    assert.throws(() => snapshot.validateObservation(value), expected);
+  }
+});
+
+test('rejects a digest mismatch after otherwise valid mutation', () => {
+  const value = observation();
+  value.processes[0].command_line += ' --changed';
+  assert.throws(() => snapshot.validateObservation(value), /digest mismatch/);
+});
+
+test('raw parser rejects duplicate object keys, invalid UTF-8, and trailing input', () => {
+  assert.throws(() => snapshot.parseJsonNoDuplicates('{"schema":"one","schema":"two"}'), /duplicate JSON key/);
+  assert.throws(() => snapshot.parseJsonNoDuplicates(Buffer.from([0xff])), /not UTF-8/);
+  assert.throws(() => snapshot.parseJsonNoDuplicates('{}{}'), /trailing JSON input/);
+});
+
+test('parser rejects duplicate keys inside a full otherwise-valid observation', () => {
+  const json = snapshot.canonicalBytes(observation()).toString('ascii');
+  const duplicated = json.replace('{', '{"schema":"astrid.r25.snapshot.macos.v1",');
+  assert.throws(() => snapshot.parseObservation(duplicated), /duplicate JSON key: schema/);
 });
