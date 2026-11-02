@@ -3,20 +3,22 @@ name: R-21 native old-launcher Update Stop retry
 on:
   push:
     branches:
-      - venue/M-PIN-R-21-R12
+      - venue/M-PIN-R-21-R13
   workflow_dispatch:
     inputs:
       request_id:
         description: Exact authorised venue request ID
-        required: true
+        required: false
+        default: R-21-R13
         type: string
       runner_ref:
-        description: Immutable R-21 lane commit SHA; must equal this run's GitHub SHA
-        required: true
+        description: Immutable R-21 lane commit SHA; defaults to this run's GitHub SHA
+        required: false
         type: string
       confirmation:
         description: Required literal REAL_ENGINE_UPDATE_STOP_RETRY
-        required: true
+        required: false
+        default: REAL_ENGINE_UPDATE_STOP_RETRY
         type: string
 
 permissions:
@@ -31,8 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      R21_REQUEST_ID: ${{ github.event_name == 'push' && 'R-21-R12' || inputs.request_id }}
-      R21_RUNNER_REF: ${{ github.event_name == 'push' && github.sha || inputs.runner_ref }}
+      R21_REQUEST_ID: ${{ github.event_name == 'push' && 'R-21-R13' || inputs.request_id }}
+      R21_RUNNER_REF: ${{ github.event_name == 'push' && github.sha || inputs.runner_ref || github.sha }}
       R21_CONFIRMATION: ${{ github.event_name == 'push' && 'REAL_ENGINE_UPDATE_STOP_RETRY' || inputs.confirmation }}
       GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
@@ -65,7 +67,7 @@ jobs:
           set -euo pipefail
           result="$RUNNER_TEMP/r21-result"
           node .github/venue/r21-publish.cjs "$RUNNER_TEMP/r21-evidence" "$result" "$SETUP_EXIT" "$JOURNEY_EXIT"
-          ref="refs/heads/venue-results/M-PIN-R-21-R12/${R21_REQUEST_ID}/${GITHUB_WORKFLOW_SHA}/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
+          ref="refs/heads/venue-results/M-PIN-R-21-R13/${R21_REQUEST_ID}/${GITHUB_WORKFLOW_SHA}/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
           git check-ref-format "$ref"
           git init --quiet "$result"
           git -C "$result" config user.name 'github-actions[bot]'

@@ -39,7 +39,7 @@ function receipt() {
 test('R-21 venue verifier accepts only a complete native old-launcher receipt', () => {
   assert.deepEqual(TUPLE, {
     runtime: '1e6d899efa77a2d6ec247c38250f9748330bb587',
-    agent: '751547766957f0a907871617d9261318a1c8cdb8',
+    agent: 'dd6b48192c720c5346e6f140184e313b2cf84f31',
     app: 'cd2788e0830a96f1abb771a515b5b6abad50ecc9',
     pinokio: '89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4',
     old_launcher: 'bbba620e3d89eeff8021417f365e6ea584203105',
@@ -76,9 +76,9 @@ test('R-21 venue verifier rejects a successful-looking wrapper with a nonzero in
 test('R-21 dispatch binding accepts only the exact product dispatch or self-serve venue ref', () => {
   const environment = {
     GITHUB_EVENT_NAME: 'push',
-    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-R12',
+    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-R13',
     GITHUB_SHA: 'a'.repeat(40),
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-R12',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-R13',
     GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1',
   };
   const bound = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment);
@@ -91,8 +91,8 @@ test('R-21 dispatch binding accepts only the exact product dispatch or self-serv
   const manual = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, {
     ...environment,
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-R12',
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R12',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-R13',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R13',
   });
   assert.equal(manual.workflow.event, 'workflow_dispatch');
 });
@@ -106,9 +106,9 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-publisher-'));
   try {
     const environment = {
-      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-R12',
+      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-R13',
       GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-R12',
+      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-R13',
       GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: REQUEST_ID,
       R21_CONFIRMATION: CONFIRMATION, R21_RUNNER_REF: 'a'.repeat(40),
     };

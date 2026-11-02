@@ -152,12 +152,12 @@ node .github/venue/r21-inputs.cjs --output "$request"
 git init --quiet "$agent_source"
 git -C "$agent_source" remote add origin https://github.com/banodoco/astrid-agent.git
 git -C "$agent_source" fetch --quiet --filter=blob:none origin \
-  751547766957f0a907871617d9261318a1c8cdb8 \
+  dd6b48192c720c5346e6f140184e313b2cf84f31 \
   cb71f548caf6f06051eaeb161cce45e44401e145
-test "$(git -C "$agent_source" rev-parse 751547766957f0a907871617d9261318a1c8cdb8^{commit})" = '751547766957f0a907871617d9261318a1c8cdb8'
+test "$(git -C "$agent_source" rev-parse dd6b48192c720c5346e6f140184e313b2cf84f31^{commit})" = 'dd6b48192c720c5346e6f140184e313b2cf84f31'
 git -C "$agent_source" merge-base --is-ancestor \
   cb71f548caf6f06051eaeb161cce45e44401e145 \
-  751547766957f0a907871617d9261318a1c8cdb8
+  dd6b48192c720c5346e6f140184e313b2cf84f31
 
 stage='retain-historical-launcher'
 progress "$stage"
@@ -191,7 +191,7 @@ node - "$manifest" <<'NODE'
 const fs = require('node:fs');
 const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const expected = {
-  agent: '751547766957f0a907871617d9261318a1c8cdb8',
+  agent: 'dd6b48192c720c5346e6f140184e313b2cf84f31',
   runtime: '1e6d899efa77a2d6ec247c38250f9748330bb587',
 };
 for (const [name, sha] of Object.entries(expected)) {
