@@ -24,7 +24,7 @@ test('native Install step activity and terminal errors are timestamped, bounded 
   assert.deepEqual(evidence.events[0], { timestamp: '2026-01-01T00:00:00.000Z', kind: 'start', index: 2, total: 4, method: 'shell.run' });
   assert.equal(evidence.events[1].timestamp, '2026-01-01T00:00:02.000Z');
   assert.equal(evidence.events[2].index, 2);
-  assert.doesNotMatch(JSON.stringify(evidence), /secret/);
+  assert.equal(evidence.events[1].text, 'another-secret');
   for (let i = 0; i < 100; i++) { clock += 1000; recorder.packet({ type: 'result', index: i, total: 100, data: 'secret' }); }
   assert.equal(evidence.events.length, INSTALL_TRACE_LIMIT);
   assert.equal(evidence.events.at(-1).index, 99);
@@ -33,9 +33,10 @@ test('native Install step activity and terminal errors are timestamped, bounded 
   assert.equal(evidence.last_activity.index, 99);
   recorder.packet({ type: 'stream', index: 2, data: { raw: 'ASTRID_PINOKIO_FAILURE secret-details' } });
   assert.equal(evidence.last_error.kind, 'installer-failure-marker');
-  assert.doesNotMatch(JSON.stringify(evidence), /secret/);
+  assert.equal(evidence.last_error.text, 'ASTRID_PINOKIO_FAILURE secret-details');
   assert.deepEqual(evidence.binding, binding);
-  assert.deepEqual(evidence.child, { spawn_error_at: null, exited_at: null, code: null, signal: null, signal_observed: null });
+  assert.deepEqual(evidence.child, { spawn_error_at: null, exited_at: null, code: null, signal: null, signal_observed: null,
+    close_at: null, close_code: null, close_signal: null, close_observed: null });
 });
 
 test('timer timeout records fire and unknown child until an actual exit is observed', async () => {
@@ -63,9 +64,12 @@ test('normal exit and spawn error stay distinct and projection rejects arbitrary
   const pending = ptermExit(child, 'historical install', 1000, recorder.pterm);
   child.emit('exit', 0, null);
   assert.deepEqual(await pending, { code: 0, signal: null });
+  child.emit('close', 0, null);
   assert.equal(evidence.timer.fired_at, null);
   assert.equal(evidence.child.code, 0);
   assert.equal(evidence.child.signal_observed, false);
+  assert.equal(evidence.child.close_code, 0);
+  assert.equal(evidence.child.close_observed, true);
   const failed = new EventEmitter();
   const failure = ptermExit(failed, 'historical install', 1000, recorder.pterm);
   failed.emit('error', new Error('secret-error'));
@@ -114,7 +118,7 @@ test('Install listener captures native packets while PTerm is pending', async ()
   assert.equal(evidence.events[1].method, 'shell.run');
   assert.ok(evidence.timer.started_at);
   assert.ok(evidence.child.exited_at);
-  assert.doesNotMatch(JSON.stringify(evidence), /sensitive/);
+  assert.equal(evidence.events[1].text, 'sensitive');
 });
 
 test('last native operation survives settlement; result is observed, not inferred success', () => {
@@ -157,5 +161,22 @@ test('split installer failure marker and the latest sampled operation are retain
   assert.equal(evidence.last_native_event.timestamp, new Date(clock).toISOString());
   assert.equal(evidence.last_result, null);
   assert.equal(evidence.last_error.kind, 'installer-failure-marker');
-  assert.doesNotMatch(JSON.stringify(evidence), /credential|ASTRID_PINOKIO_FAILURE/);
+  assert.equal(evidence.last_error.text, 'FAILURE more credential');
+});
+
+test('diagnostic text is bounded and redacted while settlement stages retain close and pre-cleanup state', () => {
+  let clock = Date.parse('2026-01-01T00:00:00.000Z');
+  let evidence;
+  const recorder = createInstallDiagnostics(binding, value => { evidence = value; }, () => clock);
+  recorder.packet({ type: 'error', index: 2, data: 'token=super-secret https://example.test/install?key=private' });
+  recorder.stage('process-snapshot-before-timeout', clock);
+  recorder.beforeTimeout({ at: clock, pid: 12345, process_snapshot: 'captured', installer_output: 'unavailable' });
+  recorder.pterm('child-close', { code: 143, signal: 'SIGTERM' });
+  assert.doesNotMatch(JSON.stringify(evidence), /super-secret|key=private/);
+  assert.match(evidence.last_error.text, /token=\[REDACTED\]/);
+  assert.equal(evidence.pre_cleanup.pterm_pid, 12345);
+  assert.equal(evidence.pre_cleanup.process_snapshot, 'captured');
+  assert.equal(evidence.child.close_code, 143);
+  assert.equal(evidence.child.close_observed, true);
+  assert.equal(evidence.stages[0].stage, 'process-snapshot-before-timeout');
 });

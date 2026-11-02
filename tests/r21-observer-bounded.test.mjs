@@ -311,7 +311,7 @@ test('publisher retains bounded native Install event and PTerm facts on failure'
       recorder.packet({ type: 'start', data: { current: i, total: 100, method: 'shell.run', token: 'secret-token' } });
       now++;
     }
-    recorder.packet({ type: 'error', rpc: { current: 99, total: 100, method: 'shell.run' }, data: 'secret-token' });
+    recorder.packet({ type: 'error', rpc: { current: 99, total: 100, method: 'shell.run' }, data: 'token=secret-token' });
     recorder.pterm('timer-start', { started: now, deadline: now + 1000 });
     recorder.pterm('timer-fire', { at: now + 1000 });
     evidence.events.push(...Array(100).fill({ timestamp: new Date(now).toISOString(), kind: 'stream', method: 'secret-token', raw: 'secret-token' }));
