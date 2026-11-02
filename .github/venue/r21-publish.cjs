@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { TRACE_LIMIT, projectOperation, projectActionFailure, projectInstallEvidence } = require('./r21-observer-diagnostics.cjs');
+const { projectBootstrapEvidence } = require('./r21-bootstrap-diagnostics.cjs');
 const { projectStartDiagnostics } = require('./r21-start-diagnostics.cjs');
 const { validateDispatch, verifyReceipt, TUPLE, ENDPOINT, MANIFEST_SHA256, REQUEST_ID } = require('./r21-verify.cjs');
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -109,6 +110,10 @@ function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
     run_id: env.GITHUB_RUN_ID, run_attempt: env.GITHUB_RUN_ATTEMPT };
   if (installDiagnostics && Object.entries(diagnosticBinding).every(([key, value]) => installDiagnostics.binding?.[key] === value)) {
     files['install-diagnostics.json'] = projectInstallEvidence(installDiagnostics, diagnosticBinding);
+  }
+  const bootstrapDiagnostics = read(path.join(evidenceDir, 'r21-bootstrap-diagnostics.json'));
+  if (bootstrapDiagnostics && Object.entries(diagnosticBinding).every(([key, value]) => bootstrapDiagnostics.binding?.[key] === value)) {
+    files['bootstrap-diagnostics.json'] = projectBootstrapEvidence(bootstrapDiagnostics, diagnosticBinding);
   }
   const startDiagnostics = read(path.join(evidenceDir, 'r21-start-diagnostics.json'));
   if (startDiagnostics && Object.entries(diagnosticBinding).every(([key, value]) => startDiagnostics.binding?.[key] === value)) {

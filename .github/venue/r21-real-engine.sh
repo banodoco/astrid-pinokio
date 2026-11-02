@@ -127,6 +127,7 @@ candidate_app_provenance="$RUNNER_TEMP/r21-candidate-app-build.json"
 candidate_app_key="$RUNNER_TEMP/r21-candidate-app.key"
 candidate_app_cert="$RUNNER_TEMP/r21-candidate-app.crt"
 candidate_app_ready="$RUNNER_TEMP/r21-candidate-app-server.json"
+bootstrap_trace="$RUNNER_TEMP/r21-bootstrap-strace.log"
 candidate_app_pid=''
 candidate_app_port=''
 candidate_app_nat=false
@@ -169,6 +170,16 @@ failure_receipt() {
   if [ -n "$candidate_app_pid" ]; then
     kill "$candidate_app_pid" 2>/dev/null || true
     wait "$candidate_app_pid" 2>/dev/null || true
+  fi
+  # Stop the tracee first so strace flushes every process exit. The reducer
+  # deletes the private argument-bearing trace in a finally block.
+  if [ -e "$bootstrap_trace" ]; then
+    diagnostic_status=0
+    node .github/venue/r21-bootstrap-diagnostics.cjs \
+      --trace "$bootstrap_trace" --request "$request" \
+      --install "$out/r21-install-diagnostics.json" \
+      --output "$out/r21-bootstrap-diagnostics.json" || diagnostic_status=$?
+    if [ "$diagnostic_status" -ne 0 ] && [ "$status" -eq 0 ]; then status=$diagnostic_status; fi
   fi
   if [ -d "$out" ]; then
     (cd "$out" && rm -f SHA256SUMS && sha256sum ./* > SHA256SUMS) || true
@@ -267,6 +278,7 @@ process.stdout.write(String(value.port));
 NODE
 )
 command -v sudo >/dev/null
+command -v strace >/dev/null
 sudo -n true
 sudo -n iptables -w -t nat -I OUTPUT 1 -p tcp -d 127.0.0.1 --dport 443 -j REDIRECT --to-ports "$candidate_app_port"
 candidate_app_nat=true
@@ -284,9 +296,11 @@ progress "$stage"
 node -e 'const s=require("node:net").createServer();s.on("error",()=>process.exit(1));s.listen(42000,"127.0.0.1",()=>s.close());'
 (
   cd "$RUNNER_TEMP/pinokiod"
+  umask 077
   exec env HOME="$venue_home/user-home" XDG_DATA_HOME="$venue_home/data" \
     PINOKIO_HOME="$venue_home" PINOKIO_HTTPS_ACTIVE=0 PINOKIO_NETWORK_ACTIVE=0 \
-    node script/index.js
+    strace --kill-on-exit -f -qq -ttt -s 4096 -e trace=execve,exit_group \
+      -o "$bootstrap_trace" node script/index.js
 ) >/dev/null 2>&1 &
 daemon_pid=$!
 ready=0
@@ -302,12 +316,16 @@ test "$ready" = 1
 
 stage='run-r21-journey'
 progress "$stage"
+set +e
 env HOME="$venue_home/user-home" XDG_DATA_HOME="$venue_home/data" PINOKIO_HOME="$venue_home" \
   R21_APP_ROOT="$app_root" R21_PTERM_ROOT="$RUNNER_TEMP/pterm" R21_VENUE_HOME="$venue_home" \
   R21_CHROME_PATH="$chrome_path" R21_CANDIDATE_APP_PROVENANCE="$candidate_app_provenance" \
   R21_CANDIDATE_APP_HOST_RULES='MAP astrid.haus 127.0.0.1' \
   R21_CANDIDATE_APP_CERTIFICATE_SPKI="$candidate_app_spki" \
   node .github/venue/r21-observe.cjs "$request" "$out"
+journey_status=$?
+set -e
+if [ "$journey_status" -ne 0 ]; then exit "$journey_status"; fi
 
 stage='complete'
 progress "$stage"

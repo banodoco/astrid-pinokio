@@ -26,6 +26,7 @@ test('R-21 always uploads only the named bounded diagnostic evidence', () => {
     'r21-evidence/r21-observer-operation.json',
     'r21-evidence/r21-failure.json',
     'r21-evidence/r21-install-diagnostics.json',
+    'r21-evidence/r21-bootstrap-diagnostics.json',
     'r21-evidence/r21-start-diagnostics.json',
     'r21-result/request.json',
     'r21-result/verdict.json',
@@ -33,6 +34,7 @@ test('R-21 always uploads only the named bounded diagnostic evidence', () => {
     'r21-result/runner-failure.json',
     'r21-result/observer-failure.json',
     'r21-result/install-diagnostics.json',
+    'r21-result/bootstrap-diagnostics.json',
     'r21-result/start-diagnostics.json',
     'r21-result/SHA256SUMS',
   ];
