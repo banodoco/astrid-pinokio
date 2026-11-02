@@ -89,6 +89,18 @@ jobs:
         run: |
           if ($env:AGENT_REF -cnotmatch '^[0-9a-f]{40}$') { throw 'agent_ref must be a lowercase 40-character commit SHA' }
           New-Item -ItemType Directory -Force $env:PROOF_DIR | Out-Null
+      - name: Check out and verify diagnostic route
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: route
+          persist-credentials: false
+      - name: Verify diagnostic route identity
+        shell: pwsh
+        working-directory: route
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:GITHUB_SHA) { throw "Diagnostic route checkout mismatch: $actual" }
       - name: Check out candidate Agent
         uses: actions/checkout@v4
         with:
@@ -119,57 +131,7 @@ jobs:
         working-directory: agent
         shell: pwsh
         run: |
-          @'
-          import dataclasses
-          import os
-          import sys
-          import xml.etree.ElementTree as ET
-          from pathlib import Path
-
-          sys.path.insert(0, os.getcwd())
-          import pytest
-          import tests.lanes as lanes
-          from runtime_protocol import windows_security
-
-          assert sys.platform == "win32"
-          user = windows_security._user_sid()
-          owner = windows_security._default_owner_sid()
-          same_owner = bool(windows_security._api()[0].EqualSid(user, owner))
-          identity = (
-              f"Windows token user SID: {windows_security._sid_text(user)}\n"
-              f"Windows default owner SID: {windows_security._sid_text(owner)}\n"
-              f"Windows token user/default owner match: {same_owner}\n"
-          )
-          print(identity, end="", flush=True)
-          with (Path(os.environ["PROOF_DIR"]) / "identity.txt").open("a", encoding="utf-8") as stream:
-              stream.write(identity)
-          # This one installed-wheel test is marked linux_native at module scope.
-          # Enable its collection on Windows explicitly; all test assertions remain intact.
-          lanes.LANES["linux_native"] = dataclasses.replace(lanes.LANES["linux_native"], available=lambda: True)
-          installed = "tests/test_installer_installed_schema.py::test_stage_binds_installed_reader_validator_and_service_to_verified_schema"
-          local = "tests/core/rendering/test_local_schema.py::"
-          xml = Path(os.environ["PROOF_DIR"]) / "windows-schema.xml"
-          result = pytest.main([
-              "-q", "-rA", installed,
-              local + "test_windows_captured_acl_same_owner_is_admitted",
-              local + "test_windows_schema_rejects_unsafe_acl",
-              local + "test_windows_installed_schema_checks_both_source_and_destination",
-              local + "test_windows_schema_admission_uses_sid_policy",
-              local + "test_windows_native_schema_dacl_allows_privileged_and_rejects_foreign",
-              "tests/core/rendering/test_remotion_host_regressions.py::test_admission_reprobes_node_after_successful_launch",
-              f"--junitxml={xml}",
-          ])
-          if result != 0:
-              raise SystemExit(result)
-          cases = ET.parse(xml).getroot().iter("testcase")
-          cases = list(cases)
-          required = ("test_stage_binds_installed_reader_validator_and_service_to_verified_schema", "test_windows_native_schema_dacl_allows_privileged_and_rejects_foreign")
-          if any(sum(case.get("name") == name and not any(case.find(tag) is not None for tag in ("skipped", "failure", "error")) for case in cases) != 1 for name in required):
-              raise SystemExit("Required installed or native test did not pass exactly once")
-          if any(case.find("skipped") is not None for case in cases):
-              raise SystemExit("A selected proof test was skipped")
-          '@ | Set-Content -Encoding utf8 "$env:RUNNER_TEMP/run-windows-schema-proof.py"
-          python "$env:RUNNER_TEMP/run-windows-schema-proof.py"
+          python "$env:GITHUB_WORKSPACE/route/.github/scripts/windows-installed-schema-proof.py"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload candidate proof evidence
         if: ${{ always() }}
