@@ -296,3 +296,44 @@ exports.WebSocket = class extends EventTarget {
     assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('publisher retains bounded native Install event and PTerm facts on failure', () => {
+  const { createInstallDiagnostics, INSTALL_TRACE_LIMIT } = require('../.github/venue/r21-observer-diagnostics.cjs');
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-install-publish-'));
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUBLISHED-TUPLE-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  try {
+    const input = path.join(root, 'evidence'); const destination = path.join(root, 'result');
+    fs.mkdirSync(input);
+    let evidence;
+    let now = Date.parse('2026-01-01T00:00:00.000Z');
+    const recorder = createInstallDiagnostics({ request_id: env.R21_REQUEST_ID, runner_ref: env.R21_RUNNER_REF, run_id: '1', run_attempt: '1' }, value => { evidence = value; }, () => now);
+    for (let i = 0; i < 100; i++) {
+      recorder.packet({ type: 'start', data: { current: i, total: 100, method: 'shell.run', token: 'secret-token' } });
+      now++;
+    }
+    recorder.packet({ type: 'error', rpc: { current: 99, total: 100, method: 'shell.run' }, data: 'secret-token' });
+    recorder.pterm('timer-start', { started: now, deadline: now + 1000 });
+    recorder.pterm('timer-fire', { at: now + 1000 });
+    evidence.events.push(...Array(100).fill({ timestamp: new Date(now).toISOString(), kind: 'stream', method: 'secret-token', raw: 'secret-token' }));
+    evidence.extra = 'secret-token';
+    fs.writeFileSync(path.join(input, 'r21-install-diagnostics.json'), JSON.stringify(evidence));
+    const verdict = publish({ env, evidenceDir: input, destination, setupExit: 0, journeyExit: 1 });
+    const text = fs.readFileSync(path.join(destination, 'install-diagnostics.json'), 'utf8');
+    const retained = JSON.parse(text);
+    assert.equal(verdict.status, 'FAILED');
+    assert.equal(verdict.reason, 'journey_receipt_missing');
+    assert.equal(retained.events.length, INSTALL_TRACE_LIMIT);
+    assert.equal(retained.last_native_event.kind, 'error');
+    assert.equal(retained.last_native_event.index, 99);
+    assert.equal(retained.last_start.method, 'shell.run');
+    assert.equal(retained.last_error.method, 'shell.run');
+    assert.equal(retained.last_result, null);
+    assert.equal(retained.last_terminal, null);
+    assert.equal(retained.timer.fired_at, new Date(now + 1000).toISOString());
+    assert.equal(retained.child.exited_at, null);
+    assert.equal(retained.child.signal_observed, null);
+    assert.doesNotMatch(text, /secret-token/);
+    assert.ok(Buffer.byteLength(text) < 12000);
+    assert.match(fs.readFileSync(path.join(destination, 'SHA256SUMS'), 'utf8'), /  install-diagnostics\.json/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
