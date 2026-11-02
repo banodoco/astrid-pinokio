@@ -1,0 +1,113 @@
+{
+  "schema": 1,
+  "task": "R-21-PROTECTED-STATE-FIX-R1",
+  "generated_at": "2026-11-02T13:37:51Z",
+  "disposition": "SCOPED_F1_CORRECTION_READY_FOR_REVIEW",
+  "acceptance_claimed": false,
+  "repository": "banodoco/astrid-pinokio",
+  "branch": "lane/M-PIN/R-21-PROTECTED-STATE-FIX-R1",
+  "base": "ca0714648a01f59bd556852256ae65226023952f",
+  "base_parents": [
+    "c0804f235cfd9053ab11f2c2499ce51034048194"
+  ],
+  "head": "82c48fc7a976e52de7782e8667dc5ce34486da25",
+  "head_parents": [
+    "01ff5749451db87ca28f9bfcdea4b10b020fa43c"
+  ],
+  "remote_head_verified": true,
+  "review": {
+    "requested_receipt": "queue/done/O-03-PIN-R21-CORRECTION-REVIEW/review-receipt.md",
+    "available_in_this_workspace": false,
+    "unresolved_detail": "The receipt directory is not mounted here. The newest available M-OPS relay (2026-11-02T13:26:20Z) says: F1 remains open for missing/linked protected user data and unbounded/escaped links; F2 also remains open for the separate pinned-App browser actor issue. This change addresses F1 only."
+  },
+  "scope": {
+    "changed": [
+      ".github/venue/r21-protected-state.cjs",
+      "tests/r21-protected-state.test.mjs"
+    ],
+    "not_changed": [
+      "shared installer",
+      "App, Runtime, and Agent product files",
+      "browser actor files",
+      "workflow and acceptance assertions",
+      "F2 browser-actor work"
+    ]
+  },
+  "commands": [
+    {
+      "command": "/home/user/merge/kit/codex/task-clone.sh astrid-pinokio /home/user/merge/ws/M-PIN/queue/running/R-21-PROTECTED-STATE-FIX-R1/product ca0714648a01f59bd556852256ae65226023952f",
+      "inner_exit": 0
+    },
+    {
+      "command": "git switch -c lane/M-PIN/R-21-PROTECTED-STATE-FIX-R1",
+      "inner_exit": 0
+    },
+    {
+      "command": "node --check .github/venue/r21-protected-state.cjs",
+      "inner_exit": 0
+    },
+    {
+      "command": "node --test --test-reporter=spec tests/r21-protected-state.test.mjs",
+      "inner_exit": 0,
+      "result": "8 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo"
+    },
+    {
+      "command": "git diff --check ca0714648a01f59bd556852256ae65226023952f..HEAD",
+      "inner_exit": 0
+    },
+    {
+      "command": "git commit -m 'Harden R-21 protected state links'",
+      "inner_exit": 0,
+      "result": "01ff5749451db87ca28f9bfcdea4b10b020fa43c"
+    },
+    {
+      "command": "git commit -m 'Tighten R-21 protected state records'",
+      "inner_exit": 0,
+      "result": "82c48fc7a976e52de7782e8667dc5ce34486da25"
+    },
+    {
+      "command": "/home/user/merge/kit/codex/env-safe.sh git push origin HEAD:refs/heads/lane/M-PIN/R-21-PROTECTED-STATE-FIX-R1-wip",
+      "inner_exit": 0
+    },
+    {
+      "command": "/home/user/merge/kit/codex/env-safe.sh git push -u origin lane/M-PIN/R-21-PROTECTED-STATE-FIX-R1",
+      "inner_exit": 0
+    },
+    {
+      "command": "/home/user/merge/kit/codex/env-safe.sh git push origin HEAD:refs/heads/lane/M-PIN/R-21-PROTECTED-STATE-FIX-R1-wip",
+      "inner_exit": 0,
+      "result": "82c48fc7a976e52de7782e8667dc5ce34486da25"
+    },
+    {
+      "command": "/home/user/merge/kit/codex/env-safe.sh git push",
+      "inner_exit": 0,
+      "result": "82c48fc7a976e52de7782e8667dc5ce34486da25"
+    },
+    {
+      "command": "/home/user/merge/kit/codex/env-safe.sh git ls-remote --heads origin lane/M-PIN/R-21-PROTECTED-STATE-FIX-R1",
+      "inner_exit": 0,
+      "result": "82c48fc7a976e52de7782e8667dc5ce34486da25 refs/heads/lane/M-PIN/R-21-PROTECTED-STATE-FIX-R1"
+    }
+  ],
+  "test_inventory": [
+    "valid plain selected-version and user-data state remains comparable",
+    "valid in-root regular-file links bind target-byte changes for installed bytes and user data",
+    "missing selected version, required selected Python, and missing user-data root reject observation",
+    "ordinary selected installed-file deletion changes installed_bytes",
+    "dangling links reject observation",
+    "linked user-data root rejects observation",
+    "escaped installed and user-data links reject observation",
+    "directory-link recursion rejects observation"
+  ],
+  "source_hashes": {
+    ".github/venue/r21-protected-state.cjs": "78d80f2dde456847bb8523b1e7876525e776dc490bfbab402d2830140bf0f39d",
+    "tests/r21-protected-state.test.mjs": "37dd03af8905366399fc04a3017765cf29aa966d84d3edf14647e07b0382083e"
+  },
+  "limitations": [
+    "This is focused local observer evidence only; no full suite was run.",
+    "No request-bound exact-head hosted run, protected journey proof, or protected acceptance is claimed.",
+    "The M-OPS correction-review receipt was unavailable on this machine, so its exact text could not be independently inspected; the retained M-OPS relay is quoted in review.unresolved_detail.",
+    "F2 remains outside this task and requires its independent pinned-App browser-actor correction and review.",
+    "Protected snapshots reject symbolic-link roots, escaped targets, dangling targets, and directory targets; supported links are in-root regular-file links whose declarations and bytes are bound."
+  ]
+}
