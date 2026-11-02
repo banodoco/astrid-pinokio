@@ -10,10 +10,16 @@ const test = require('node:test');
 
 const sequencePath = path.join(__dirname, '..', '.github', 'venue', 'r25-option-b-macos-sequence.sh');
 const wrapperPath = path.join(__dirname, '..', '.github', 'venue', 'r25-local-macos-option-b.sh');
+const runnerPath = path.join(__dirname, '..', '.github', 'venue', 'r25-snapshot-runner.cjs');
 const sequence = fs.readFileSync(sequencePath, 'utf8');
 const wrapper = fs.readFileSync(wrapperPath, 'utf8');
+const runner = fs.readFileSync(runnerPath, 'utf8');
 
-const venueRef = '327d0fc29f0b63d58e6c6c3449c81af5912ac85c';
+const venueRef = '4dd993439fea508aaafbad0e1f4794f97a99e7bf';
+const runnerSha256 = 'cabaa255d629c375e949574748d28992e4e10d638dca37a7247f813af2709d2e';
+const runnerBlob = 'b399c6ec85a9cbf24d0565234a612e75d575b523';
+const observerSha256 = 'b3eb6d0943efaf8aaae268f6ffd94ab8826a7053aff4df142238cc74b73fc94f';
+const observerBlob = 'd7eb13d3716528d95f8c24bd4b02033adb03faaa';
 const wrapperRef = '37e2337271cffe275374fe9a2eda73e8948ef17a';
 const wrapperSha256 = 'c9abcd60a839de2001195f207e63133632d457bc2c4fa921f3ba4c09efdd0570';
 const installPs1Digest = 'bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258';
@@ -22,6 +28,15 @@ const correctedWrapperSha256 = '2f208fdf12154769f4ff524144cc83bf177ac341f7f2c477
 
 test('macOS sequence binds and invokes the corrected immutable wrapper', () => {
   assert.match(sequence, new RegExp(`venue_ref=${venueRef}`));
+  assert.match(sequence, new RegExp(`inner_snapshot_runner_sha256=${runnerSha256}`));
+  assert.match(sequence, new RegExp(`inner_snapshot_runner_blob=${runnerBlob}`));
+  assert.match(sequence, new RegExp(`inner_observer_diagnostics_sha256=${observerSha256}`));
+  assert.match(sequence, new RegExp(`inner_observer_diagnostics_blob=${observerBlob}`));
+  assert.match(sequence, /outer_pinokio_head="\$\(git rev-parse HEAD\)"/);
+  assert.match(sequence, /inner_pinokio_head="\$\(git -C "\$sources\/astrid-pinokio" rev-parse HEAD\)"/);
+  assert.match(sequence, /test "\$inner_pinokio_head" = "\$venue_ref"/);
+  assert.match(sequence, /verify_inner_source \.github\/venue\/r25-snapshot-runner\.cjs/);
+  assert.match(sequence, /verify_inner_source \.github\/venue\/r21-observer-diagnostics\.cjs/);
   assert.match(sequence, new RegExp(`wrapper_ref=${wrapperRef}`));
   assert.match(sequence, new RegExp(`wrapper_sha256=${wrapperSha256}`));
   assert.match(sequence, /wrapper_url=.*\$wrapper_ref\/\.github\/venue\/r25-local-macos-option-b\.sh/);
@@ -42,6 +57,29 @@ test('macOS sequence binds and invokes the corrected immutable wrapper', () => {
   assert.equal(installPs1Digest.length, 64);
   assert.match(wrapper, /python_bin="\$\{PYTHON:-python3\.11\}"/);
   assert.match(wrapper, /\[ "\$python_version" = 3\.11 \]/);
+
+  const observerPath = path.join(__dirname, '..', '.github', 'venue', 'r21-observer-diagnostics.cjs');
+  assert.match(wrapper, /cd "\$venue_root"/);
+  assert.match(wrapper, /node \.github\/venue\/r25-snapshot-runner\.cjs/);
+  assert.match(runner, /require\('\.\/r21-observer-diagnostics\.cjs'\)/);
+  assert.ok(sequence.indexOf('verify_inner_source .github/venue/r21-observer-diagnostics.cjs')
+    < sequence.indexOf('bash "$wrapper_path"'));
+  assert.equal(crypto.createHash('sha256').update(fs.readFileSync(runnerPath)).digest('hex'), runnerSha256);
+  assert.equal(crypto.createHash('sha256').update(fs.readFileSync(observerPath)).digest('hex'), observerSha256);
+  assert.equal(childProcess.execFileSync('git', ['rev-parse', `HEAD:${path.relative(path.join(__dirname, '..'), runnerPath)}`], { encoding: 'utf8' }).trim(), runnerBlob);
+  assert.equal(childProcess.execFileSync('git', ['rev-parse', `HEAD:${path.relative(path.join(__dirname, '..'), observerPath)}`], { encoding: 'utf8' }).trim(), observerBlob);
+});
+
+test('macOS route preserves both inner row exit codes and returns the wrapper result', () => {
+  assert.match(wrapper, /run_slot pinokio-backend-macos 1/);
+  assert.match(wrapper, /backend_exit=\$\?/);
+  assert.match(wrapper, /run_slot pinokio-fully-local-macos 2/);
+  assert.match(wrapper, /local_exit=\$\?/);
+  assert.match(wrapper, /runner\.exit/);
+  assert.match(sequence, /bash "\$wrapper_path"/);
+  assert.match(sequence, /route_exit=\$\?/);
+  assert.match(sequence, /printf '%s\\n' "\$route_exit" >"\$run_root\/route\.exit"/);
+  assert.match(sequence, /exit "\$route_exit"/);
 });
 
 test('macOS preflight accepts portable 700 mode and rejects 755 and Darwin 40700 output', () => {

@@ -110,7 +110,14 @@ test -x "$python_actual_executable"
 # The local wrapper accepts this real, explicitly supported Python 3.11
 # interpreter. No alternate executable is installed.
 
-venue_ref=327d0fc29f0b63d58e6c6c3449c81af5912ac85c
+# Bind the disposable inner venue to the immutable observability input. Keep
+# this distinct from the outer sequence commit so the binding cannot become
+# self-referential when this candidate is committed.
+venue_ref=4dd993439fea508aaafbad0e1f4794f97a99e7bf
+inner_snapshot_runner_sha256=cabaa255d629c375e949574748d28992e4e10d638dca37a7247f813af2709d2e
+inner_snapshot_runner_blob=b399c6ec85a9cbf24d0565234a612e75d575b523
+inner_observer_diagnostics_sha256=b3eb6d0943efaf8aaae268f6ffd94ab8826a7053aff4df142238cc74b73fc94f
+inner_observer_diagnostics_blob=d7eb13d3716528d95f8c24bd4b02033adb03faaa
 wrapper_ref=37e2337271cffe275374fe9a2eda73e8948ef17a
 wrapper_sha256=c9abcd60a839de2001195f207e63133632d457bc2c4fa921f3ba4c09efdd0570
 wrapper_url="https://raw.githubusercontent.com/banodoco/astrid-pinokio/$wrapper_ref/.github/venue/r25-local-macos-option-b.sh"
@@ -121,6 +128,7 @@ agent_ref=a6b68d5b5478326a4db1971966d33a2cfe61d091
 pinokiod_ref=add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
 pterm_ref=5be43718701c448b43daf0ce51d8935f170065bb
 pinokio_product_ref=3a6a98ae251ca126505245286e2d3e760f4348e9
+outer_pinokio_head="$(git rev-parse HEAD)"
 
 printf '%s\n' \
   "bundle_os=macOS 15.4 arm64" \
@@ -131,7 +139,12 @@ printf '%s\n' \
   "python_actual_executable=$python_actual_executable" \
   "python_actual_version=$python_actual_version" \
   "python_version_guard=explicitly-supported-3.11" \
+  "outer_pinokio_head=$outer_pinokio_head" \
   "pinokio_source_ref=$venue_ref" \
+  "inner_snapshot_runner_sha256=$inner_snapshot_runner_sha256" \
+  "inner_snapshot_runner_blob=$inner_snapshot_runner_blob" \
+  "inner_observer_diagnostics_sha256=$inner_observer_diagnostics_sha256" \
+  "inner_observer_diagnostics_blob=$inner_observer_diagnostics_blob" \
   "executed_wrapper_ref=$wrapper_ref" \
   "wrapper_source_sha256=$wrapper_sha256" \
   "wrapper_normalization=public/install.ps1:$stale_install_ps1_digest->$install_ps1_digest" \
@@ -153,8 +166,24 @@ clone_pinned() {
   test "$(git -C "$root" rev-parse HEAD)" = "$ref"
 }
 
+verify_inner_source() {
+  local relative_path="$1" expected_sha256="$2" expected_blob="$3" path actual blob
+  path="$sources/astrid-pinokio/$relative_path"
+  test ! -L "$path"
+  actual="$(shasum -a 256 "$path" | awk '{print $1}')"
+  test "$actual" = "$expected_sha256"
+  blob="$(git -C "$sources/astrid-pinokio" rev-parse "$inner_pinokio_head:$relative_path")"
+  test "$blob" = "$expected_blob"
+}
+
 mkdir -m 700 "$sources"
 clone_pinned astrid-pinokio https://github.com/banodoco/astrid-pinokio.git "$venue_ref"
+inner_pinokio_head="$(git -C "$sources/astrid-pinokio" rev-parse HEAD)"
+test "$inner_pinokio_head" = "$venue_ref"
+printf '%s\n' \
+  "inner_pinokio_head=$inner_pinokio_head" >>"$run_root/sequence.env"
+verify_inner_source .github/venue/r25-snapshot-runner.cjs "$inner_snapshot_runner_sha256" "$inner_snapshot_runner_blob"
+verify_inner_source .github/venue/r21-observer-diagnostics.cjs "$inner_observer_diagnostics_sha256" "$inner_observer_diagnostics_blob"
 clone_pinned astrid-agent https://github.com/banodoco/astrid-agent.git "$agent_ref"
 clone_pinned pinokiod https://github.com/pinokiocomputer/pinokiod.git "$pinokiod_ref"
 clone_pinned pterm https://github.com/pinokiocomputer/pterm.git "$pterm_ref"
