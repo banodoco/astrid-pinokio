@@ -157,3 +157,46 @@ test('split marker is captured before stream sampling and does not join differen
   assert.equal(evidence.first_error.source, 'installer_failure_marker');
   assert.doesNotMatch(JSON.stringify(evidence), /private|ASTRID_PINOKIO_FAILURE/);
 });
+
+test('last native operation survives settlement; result is observed, not inferred success', () => {
+  let clock = Date.parse('2026-01-01T00:00:00.000Z');
+  let evidence;
+  const recorder = createInstallDiagnostics(binding, value => { evidence = value; }, () => clock);
+  assert.equal(evidence.last_native_event, null);
+  assert.equal(evidence.last_start, null);
+  assert.equal(evidence.last_result, null);
+  assert.equal(evidence.last_error, null);
+  assert.equal(evidence.last_terminal, null);
+  recorder.packet({ type: 'start', data: { current: 2, total: 4, method: 'shell.run' } });
+  recorder.packet({ type: 'result', index: 2, total: 4, data: { secret: 'credential' } });
+  clock++;
+  recorder.packet({ type: 'event', data: 'stop' });
+  recorder.packet({ type: 'disconnect' });
+  assert.equal(evidence.last_native_event.kind, 'result');
+  assert.equal(evidence.last_start.method, 'shell.run');
+  assert.deepEqual(evidence.last_native_event, evidence.last_result);
+  assert.equal(evidence.last_terminal.kind, 'disconnect');
+  assert.equal(evidence.last_error, null);
+  assert.doesNotMatch(JSON.stringify(evidence), /credential|success/);
+});
+
+test('split installer failure marker and the latest sampled operation are retained without output', () => {
+  let clock = Date.parse('2026-01-01T00:00:00.000Z');
+  let evidence;
+  const recorder = createInstallDiagnostics(binding, value => { evidence = value; }, () => clock);
+  recorder.packet({ type: 'stream', index: 2, data: { raw: 'credential ASTRID_PINOKIO_' }, rpc: { method: 'shell.run' } });
+  clock += 1;
+  recorder.packet({ type: 'stream', index: 2, data: { raw: 'FAILURE more credential' }, rpc: { method: 'shell.run' } });
+  assert.equal(evidence.last_error.kind, 'installer-failure-marker');
+  assert.equal(evidence.last_native_event.kind, 'installer-failure-marker');
+  clock += 1;
+  recorder.packet({ type: 'stream', index: 3, data: { raw: 'credential' }, rpc: { method: 'shell.run' } });
+  clock += 1;
+  recorder.packet({ type: 'stream', index: 3, data: { raw: 'credential' }, rpc: { method: 'shell.run' } });
+  recorder.pterm('timer-fire', { at: clock });
+  assert.equal(evidence.last_native_event.index, 3);
+  assert.equal(evidence.last_native_event.timestamp, new Date(clock).toISOString());
+  assert.equal(evidence.last_result, null);
+  assert.equal(evidence.last_error.kind, 'installer-failure-marker');
+  assert.doesNotMatch(JSON.stringify(evidence), /credential|ASTRID_PINOKIO_FAILURE/);
+});

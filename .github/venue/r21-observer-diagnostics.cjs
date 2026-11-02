@@ -90,9 +90,15 @@ function projectInstallEvidence(raw, binding) {
     { timestamp: timestamp(item.timestamp), kind: item.kind,
       index: boundedIndex(item.index), total: boundedIndex(item.total),
       method: installMethods.includes(item.method) ? item.method : null };
+  const selectEvent = (item, kinds) => kinds.includes(item?.kind) ? projectEvent(item) : null;
   const events = Array.isArray(raw?.events) ? raw.events.slice(-INSTALL_TRACE_LIMIT).map(projectEvent).filter(Boolean) : [];
   return { schema: 1, binding, events, last_activity: projectEvent(raw?.last_activity),
-    last_error: projectEvent(raw?.last_error), first_error: projectFirstError(raw?.first_error), last_terminal: projectEvent(raw?.last_terminal),
+    last_native_event: selectEvent(raw?.last_native_event, ['start', 'stream', 'result', 'error', 'installer-failure-marker']),
+    last_start: selectEvent(raw?.last_start, ['start']),
+    last_result: selectEvent(raw?.last_result, ['result']),
+    last_error: selectEvent(raw?.last_error, ['error', 'installer-failure-marker']),
+    first_error: projectFirstError(raw?.first_error),
+    last_terminal: selectEvent(raw?.last_terminal, ['stop', 'disconnect']),
     timer: { started_at: timestamp(timer.started_at), deadline_at: timestamp(timer.deadline_at), fired_at: timestamp(timer.fired_at) },
     child: { spawn_error_at: timestamp(child.spawn_error_at), exited_at: timestamp(child.exited_at),
       code: Number.isInteger(child.code) && child.code >= 0 && child.code <= 255 ? child.code : null,
@@ -127,11 +133,9 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
         markerSeen ? 'installer-failure-marker' : packet?.type;
       if (!installKinds.includes(kind)) return;
       const ms = now();
-      if (kind === 'stream' && ms - lastStreamWrite < 1000) return;
-      if (kind === 'stream') lastStreamWrite = ms;
       const rpc = packet.type === 'start' ? packet.data : packet.rpc;
-      const item = { timestamp: iso(ms), kind, index: packet.index ?? rpc?.current,
-        total: packet.total ?? rpc?.total, method: rpc?.method };
+      const item = { timestamp: iso(ms), kind, index: boundedIndex(packet.index ?? rpc?.current),
+        total: boundedIndex(packet.total ?? rpc?.total), method: installMethods.includes(rpc?.method) ? rpc.method : null };
       if (!state.first_error && (kind === 'error' || kind === 'installer-failure-marker')) {
         state.first_error = projectFirstError({ ...item,
           source: kind === 'error' ? 'engine_error' : 'installer_failure_marker',
@@ -139,13 +143,22 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
       }
       // Consecutive stream samples represent the latest observed activity, so
       // keep step boundaries and errors instead of filling the ring with output.
-      if (kind === 'stream' && state.events.at(-1)?.kind === 'stream'
+      const previous = state.events.at(-1);
+      if (kind === 'stream' && previous?.kind === 'stream'
           && state.events.at(-1)?.index === item.index) state.events.pop();
       state.last_activity = item;
+      if (!['stop', 'disconnect'].includes(kind)) state.last_native_event = item;
+      if (kind === 'start') state.last_start = item;
+      if (kind === 'result') state.last_result = item;
       if (kind === 'error' || kind === 'installer-failure-marker') state.last_error = item;
       if (kind === 'stop' || kind === 'disconnect') state.last_terminal = item;
       state.events.push(item);
       if (state.events.length > INSTALL_TRACE_LIMIT) state.events.shift();
+      // Update the in-memory last event for every packet. Persist immediately
+      // when the step changes; later timer or terminal writes flush samples.
+      if (kind === 'stream' && ms - lastStreamWrite < 1000
+          && previous?.kind === 'stream' && previous?.index === item.index) return;
+      if (kind === 'stream') lastStreamWrite = ms;
       persist();
     },
     pterm(event, value) {
