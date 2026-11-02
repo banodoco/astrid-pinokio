@@ -1,0 +1,1343 @@
+{
+  "linux": {
+    "acceptance_state": "DISPATCH_INPUT_TEMPLATE_ONLY",
+    "pinned_agent_contract": {
+      "status": "RESOLVED_M_QUAL_R05_CUSTOM_STEP_SCHEMA_R1",
+      "schema_source": "banodoco/astrid-agent lane/M-QUAL/R-05-CUSTOM-STEP-SCHEMA-R1@258ccddc4fc02de864487518a45ca745e0a23855",
+      "retry_custom_step": {"kind": "custom", "bootstrap_action": "preflightStop"}
+    },
+    "actions": {
+      "first": {
+        "command": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-action-runner",
+            "--action",
+            "first"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.linux.action.first",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 180
+        },
+        "kind": "pinokio-action",
+        "provenance": {
+          "path": "pinokio/update.js",
+          "ref": "bbba620e3d89eeff8021417f365e6ea584203105",
+          "sha256": "a0f998c03bbba57966c8863a3bd38411d7859d970ddc4c93af1e28b04a66291b"
+        },
+        "refusal_exit_codes": [
+          42
+        ],
+        "refusal_text": "Astrid is still running. Choose Pinokio's Stop button, then try again.",
+        "steps": [
+          {
+            "bootstrap_action": null,
+            "kind": "git-shell",
+            "message": "node '__M4_4A_PINOKIO_CHECKOUT__/pinokio/shell.mjs' '__M4_4A_PINOKIO_CHECKOUT__' 'git -C '\\''__M4_4A_PINOKIO_CHECKOUT__'\\'' pull --ff-only || { printf '\\''%s\\n'\\'' '\\''Couldn'\\''\\'\\'''\\''t update the Pinokio launcher. If you edited its files, undo those edits, then choose Update again.'\\'' >&2; exit 1; }' '{}'\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf 'ASTRID_PINOKIO_%s\\n' FAILURE; fi\n(exit \"$status\")"
+          },
+          {
+            "bootstrap_action": "update-app",
+            "kind": "shell",
+            "message": "node '__M4_4A_PINOKIO_CHECKOUT__/pinokio/shell.mjs' '__M4_4A_PINOKIO_CHECKOUT__' 'set -eu\ntmp=$(mktemp -d)\ntrap '\\''rm -rf \"$tmp\"'\\'' EXIT\ntrap '\\''exit 129'\\'' HUP\ntrap '\\''exit 130'\\'' INT\ntrap '\\''exit 143'\\'' TERM\ncurl -fsSL '\\''https://astrid.haus/install'\\'' -o \"$tmp/install\"\nsh \"$tmp/install\" '\\''--root'\\'' '\\''__M4_4A_PINOKIO_CHECKOUT__/app/astrid'\\'' '\\''--managed-by'\\'' '\\''pinokio'\\'' '\\''--update-app'\\''' '{}'\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf 'ASTRID_PINOKIO_%s\\n' FAILURE; fi\n(exit \"$status\")"
+          }
+        ]
+      },
+      "retry": {
+        "command": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-action-runner",
+            "--action",
+            "retry"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.linux.action.retry",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 180
+        },
+        "kind": "pinokio-action",
+        "provenance": {
+          "path": "pinokio/update.js",
+          "ref": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+          "sha256": "1be13ca4d415d1693e0493a0d81d7aecf616f27ab3875a94ea5d9ebb69aba9e5"
+        },
+        "refusal_exit_codes": [
+          42
+        ],
+        "steps": [
+          {
+            "kind": "custom",
+            "bootstrap_action": "preflightStop"
+          },
+          {
+            "bootstrap_action": null,
+            "kind": "git-shell",
+            "message": "node '__M4_4A_PINOKIO_CHECKOUT__/pinokio/shell.mjs' '__M4_4A_PINOKIO_CHECKOUT__' 'git -C '\\''__M4_4A_PINOKIO_CHECKOUT__'\\'' pull --ff-only || { printf '\\''%s\\n'\\'' '\\''Couldn'\\''\\'\\'''\\''t update the Pinokio launcher. If you edited its files, undo those edits, then choose Update again.'\\'' >&2; exit 1; }' '{}'\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf 'ASTRID_PINOKIO_%s\\n' FAILURE; fi\n(exit \"$status\")"
+          },
+          {
+            "bootstrap_action": "install",
+            "kind": "shell",
+            "message": "node '__M4_4A_PINOKIO_CHECKOUT__/pinokio/shell.mjs' '__M4_4A_PINOKIO_CHECKOUT__' 'set -eu\ntmp=$(mktemp -d)\ntrap '\\''rm -rf \"$tmp\"'\\'' EXIT\ntrap '\\''exit 129'\\'' HUP\ntrap '\\''exit 130'\\'' INT\ntrap '\\''exit 143'\\'' TERM\ncurl -fsSL '\\''https://astrid.haus/install'\\'' -o \"$tmp/install\"\nsh \"$tmp/install\" '\\''--root'\\'' '\\''__M4_4A_PINOKIO_CHECKOUT__/app/astrid'\\'' '\\''--managed-by'\\'' '\\''pinokio'\\''' '{}'\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf 'ASTRID_PINOKIO_%s\\n' FAILURE; fi\n(exit \"$status\")"
+          }
+        ]
+      }
+    },
+    "bridge_schema_version": "m4-4a-journey-config.v1",
+    "candidate_checkouts": {
+      "agent": {
+        "files": {
+          ".github/workflows/journey.yml": "6cd4e8cf38e6262f0e478fcb3b311ac12528b9e1a471263e4b6fd81b05c9e37e",
+          "scripts/ci_journey.py": "0677686b1dfd7296fcd3fdf0358deae88117ac0e8dc4444bbafe5963ef61146a",
+          "scripts/journey_matrix.py": "2907b420f3143b33cc4fd862b318943ae04e54d09118a846bf6aaa60235a042d",
+          "scripts/pinokio_backend_executor.py": "f2447ea626bfd2269d97faa321a6c1a2224ae2a96d0873c95086800da9dcd874",
+          "scripts/pinokio_platform_adapter.py": "7b8409897ebc2888fd0f5688b4ab7459c3b4411f6683e0cba558ceeace5f715d",
+          "scripts/shared_journey_driver.py": "a304ed209863593b3b8ffc79e6a339fd18d5263c831cbdc9165d650547a942e6"
+        },
+        "path": "/__M4_4A_RUNNER_WORKSPACE__/candidate-agent",
+        "ref": "dd6b48192c720c5346e6f140184e313b2cf84f31"
+      },
+      "app": {
+        "files": {
+          "public/install-manifest.json": "15ea3a2e0a4067773b727635e4eaa4b894eceb10f73aaa88cd29896a2364bd77"
+        },
+        "path": "/__M4_4A_RUNNER_WORKSPACE__/app",
+        "ref": "ae95eb455408b8c0e185bfded67798e2b307a6f6"
+      },
+      "pinokio": {
+        "files": {
+          "pinokio/lib.js": "59bb0a556b425dafb4d986aaab54f0dbd23a988814a0d64a6cb4437c52d3d998",
+          "pinokio/lifecycle.mjs": "0ddc6a5596dc02a2f33afba799495c7834ebb193df33fe15c376c2b60859a3ad",
+          "pinokio/shell.mjs": "d8c2dfa774c0bda07d29f923f8b84d06055e76a8f4c5b6192980be2dffa8a7e9",
+          "pinokio/stop.js": "f9d62e4e6a826fccd9791ee211dae933f46c8f99019e145abb3db3bf9595fd48",
+          "pinokio/update.js": "1be13ca4d415d1693e0493a0d81d7aecf616f27ab3875a94ea5d9ebb69aba9e5"
+        },
+        "path": "/__M4_4A_RUNNER_WORKSPACE__/pinokio",
+        "ref": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4"
+      },
+      "runtime": {
+        "files": {
+          "pyproject.toml": "f56e14a32f1edf4693a1365d094cf2322a1c106ac61f4e5154719fbae62ff283",
+          "runtime_protocol/__init__.py": "4e4064e1d9b80c6637576490150f44f3c710fabc520af1e640abf2493dcbb0d2",
+          "runtime_protocol/platform.py": "dc1ab2158066b952e82b5c0957a7cd8085cb35eabdeaf0f6d5fddf7cf4a4892c"
+        },
+        "path": "/__M4_4A_RUNNER_WORKSPACE__/runtime",
+        "ref": "1e6d899efa77a2d6ec247c38250f9748330bb587"
+      }
+    },
+    "execution_owner": "M-VENUE",
+    "immutable_tuple": {
+      "agent": "dd6b48192c720c5346e6f140184e313b2cf84f31",
+      "app": "ae95eb455408b8c0e185bfded67798e2b307a6f6",
+      "pinokio": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+      "runtime": "1e6d899efa77a2d6ec247c38250f9748330bb587"
+    },
+    "negative_controls": {
+      "busy_stop": {
+        "expected_reason": "busy",
+        "guard_paths": [
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json",
+          "/__M4_4A_RUNNER_WORKSPACE__/pinokio/stop.js"
+        ],
+        "recovery": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "recovery",
+            "--spec",
+            "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.linux.recovery",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        },
+        "refusal": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "busy-refusal",
+            "--spec",
+            "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.linux.busy-refusal",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      },
+      "identity_mismatch": {
+        "probe": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "identity-mismatch",
+            "--spec",
+            "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.linux.identity-mismatch",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      },
+      "instance_mismatch": {
+        "probe": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "instance-mismatch",
+            "--spec",
+            "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.linux.instance-mismatch",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      },
+      "unknown_stop": {
+        "expected_reason": "unknown",
+        "guard_paths": [
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json",
+          "/__M4_4A_RUNNER_WORKSPACE__/pinokio/stop.js"
+        ],
+        "recovery": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "recovery",
+            "--spec",
+            "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.linux.recovery",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        },
+        "refusal": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "unknown-refusal",
+            "--spec",
+            "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.linux.unknown-refusal",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      }
+    },
+    "old_launcher": {
+      "checkout": "/__M4_4A_RUNNER_WORKSPACE__/pinokio",
+      "file": "pinokio/update.js",
+      "ref": "bbba620e3d89eeff8021417f365e6ea584203105",
+      "sha256": "a0f998c03bbba57966c8863a3bd38411d7859d970ddc4c93af1e28b04a66291b"
+    },
+    "path_binding": {
+      "must_not_dispatch_unmaterialized": true,
+      "pinokio_action_token": "__M4_4A_PINOKIO_CHECKOUT__",
+      "provider_root_token": "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__",
+      "runner_temp_token": "/__M4_4A_RUNNER_TEMP__",
+      "status": "REQUIRES_M_VENUE_RUNNER_MATERIALIZATION",
+      "workspace_token": "/__M4_4A_RUNNER_WORKSPACE__"
+    },
+    "platform": {
+      "evidence_class": "hosted-lifecycle",
+      "hosted": true,
+      "os": "linux",
+      "runner": "ubuntu-24.04",
+      "shell": "sh"
+    },
+    "platform_adapter": {
+      "adoption": {
+        "artifacts": {
+          "provider_executable": {
+            "path": "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-adoption-provider",
+            "sha256": "__M4_4A_PROVIDER_EXECUTABLE_SHA256__"
+          }
+        },
+        "command": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-adoption-provider"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__",
+          "env": {},
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      },
+      "spec": "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json",
+      "stop_action": {
+        "checkout": "/__M4_4A_RUNNER_WORKSPACE__/pinokio",
+        "file": "pinokio/stop.js",
+        "ref": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+        "sha256": "f9d62e4e6a826fccd9791ee211dae933f46c8f99019e145abb3db3bf9595fd48"
+      }
+    },
+    "runtime": {
+      "expected_identity": "__M4_4A_RUNTIME_IDENTITY_BOUND_BY_PROVIDER__",
+      "expected_instance_id": "__M4_4A_RUNTIME_INSTANCE_AFTER_UPDATE__",
+      "expected_restart_instance_id": "__M4_4A_RUNTIME_INSTANCE_AFTER_RESTART__",
+      "health": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "health",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.linux.health",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "menu": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "menu",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.linux.menu",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "processes": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "processes",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.linux.processes",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "ready": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "ready",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.linux.ready",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "start": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "start",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.linux.start",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "status": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "status",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.linux.status",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "stop": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "stop",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.linux.stop",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      }
+    },
+    "slot_mapping": {
+      "contract": "R-25 six slots unchanged",
+      "mapped_slots": [
+        {
+          "channel": "pinokio-backend",
+          "mode": "backend",
+          "request_id": "R-25-EXECUTOR-CONFIG-RC-0-pinokio-backend-linux",
+          "runner": "ubuntu-24.04",
+          "shell": "sh",
+          "slot_id": "pinokio-backend-linux"
+        },
+        {
+          "channel": "pinokio-fully-local",
+          "mode": "fully-local",
+          "request_id": "R-25-EXECUTOR-CONFIG-RC-0-pinokio-fully-local-linux",
+          "runner": "ubuntu-24.04",
+          "shell": "sh",
+          "slot_id": "pinokio-fully-local-linux"
+        }
+      ]
+    },
+    "source_override_test_mode": false,
+    "source_provenance": {
+      "agent_schema_sha": "dd6b48192c720c5346e6f140184e313b2cf84f31",
+      "app_manifest_path": "public/install-manifest.json",
+      "app_manifest_sha256": "15ea3a2e0a4067773b727635e4eaa4b894eceb10f73aaa88cd29896a2364bd77",
+      "approved_old_launcher_ref": "bbba620e3d89eeff8021417f365e6ea584203105",
+      "approved_old_launcher_sha256": "a0f998c03bbba57966c8863a3bd38411d7859d970ddc4c93af1e28b04a66291b",
+      "pinokio_base_sha": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+      "repository": "banodoco/astrid-pinokio",
+      "required_stopped_path_agent_ancestors": [
+        "14d87abe38cd2545411a84549d5e4edc5a33561d",
+        "b97a4757a908982c978e46c90898a816c0c5d9ee"
+      ]
+    },
+    "unavailable_seams": {
+      "adoption_provider_identity": "NOT_ASSERTED; M-VENUE must bind an approved executable and SHA-256 before dispatch",
+      "platform_spec": "NOT_PRESENT; M-VENUE must materialize it from the actual runner/runtime and platform adapter",
+      "real_engine_provider": "UNAVAILABLE_IN_THIS_PACKET"
+    }
+  },
+  "macos": {
+    "acceptance_state": "DISPATCH_INPUT_TEMPLATE_ONLY",
+    "pinned_agent_contract": {
+      "status": "RESOLVED_M_QUAL_R05_CUSTOM_STEP_SCHEMA_R1",
+      "schema_source": "banodoco/astrid-agent lane/M-QUAL/R-05-CUSTOM-STEP-SCHEMA-R1@258ccddc4fc02de864487518a45ca745e0a23855",
+      "retry_custom_step": {"kind": "custom", "bootstrap_action": "preflightStop"}
+    },
+    "actions": {
+      "first": {
+        "command": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-action-runner",
+            "--action",
+            "first"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.macos.action.first",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 180
+        },
+        "kind": "pinokio-action",
+        "provenance": {
+          "path": "pinokio/update.js",
+          "ref": "bbba620e3d89eeff8021417f365e6ea584203105",
+          "sha256": "a0f998c03bbba57966c8863a3bd38411d7859d970ddc4c93af1e28b04a66291b"
+        },
+        "refusal_exit_codes": [
+          42
+        ],
+        "refusal_text": "Astrid is still running. Choose Pinokio's Stop button, then try again.",
+        "steps": [
+          {
+            "bootstrap_action": null,
+            "kind": "git-shell",
+            "message": "node '__M4_4A_PINOKIO_CHECKOUT__/pinokio/shell.mjs' '__M4_4A_PINOKIO_CHECKOUT__' 'git -C '\\''__M4_4A_PINOKIO_CHECKOUT__'\\'' pull --ff-only || { printf '\\''%s\\n'\\'' '\\''Couldn'\\''\\'\\'''\\''t update the Pinokio launcher. If you edited its files, undo those edits, then choose Update again.'\\'' >&2; exit 1; }' '{}'\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf 'ASTRID_PINOKIO_%s\\n' FAILURE; fi\n(exit \"$status\")"
+          },
+          {
+            "bootstrap_action": "update-app",
+            "kind": "shell",
+            "message": "node '__M4_4A_PINOKIO_CHECKOUT__/pinokio/shell.mjs' '__M4_4A_PINOKIO_CHECKOUT__' 'set -eu\ntmp=$(mktemp -d)\ntrap '\\''rm -rf \"$tmp\"'\\'' EXIT\ntrap '\\''exit 129'\\'' HUP\ntrap '\\''exit 130'\\'' INT\ntrap '\\''exit 143'\\'' TERM\ncurl -fsSL '\\''https://astrid.haus/install'\\'' -o \"$tmp/install\"\nsh \"$tmp/install\" '\\''--root'\\'' '\\''__M4_4A_PINOKIO_CHECKOUT__/app/astrid'\\'' '\\''--managed-by'\\'' '\\''pinokio'\\'' '\\''--update-app'\\''' '{}'\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf 'ASTRID_PINOKIO_%s\\n' FAILURE; fi\n(exit \"$status\")"
+          }
+        ]
+      },
+      "retry": {
+        "command": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-action-runner",
+            "--action",
+            "retry"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.macos.action.retry",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 180
+        },
+        "kind": "pinokio-action",
+        "provenance": {
+          "path": "pinokio/update.js",
+          "ref": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+          "sha256": "1be13ca4d415d1693e0493a0d81d7aecf616f27ab3875a94ea5d9ebb69aba9e5"
+        },
+        "refusal_exit_codes": [
+          42
+        ],
+        "steps": [
+          {
+            "kind": "custom",
+            "bootstrap_action": "preflightStop"
+          },
+          {
+            "bootstrap_action": null,
+            "kind": "git-shell",
+            "message": "node '__M4_4A_PINOKIO_CHECKOUT__/pinokio/shell.mjs' '__M4_4A_PINOKIO_CHECKOUT__' 'git -C '\\''__M4_4A_PINOKIO_CHECKOUT__'\\'' pull --ff-only || { printf '\\''%s\\n'\\'' '\\''Couldn'\\''\\'\\'''\\''t update the Pinokio launcher. If you edited its files, undo those edits, then choose Update again.'\\'' >&2; exit 1; }' '{}'\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf 'ASTRID_PINOKIO_%s\\n' FAILURE; fi\n(exit \"$status\")"
+          },
+          {
+            "bootstrap_action": "install",
+            "kind": "shell",
+            "message": "node '__M4_4A_PINOKIO_CHECKOUT__/pinokio/shell.mjs' '__M4_4A_PINOKIO_CHECKOUT__' 'set -eu\ntmp=$(mktemp -d)\ntrap '\\''rm -rf \"$tmp\"'\\'' EXIT\ntrap '\\''exit 129'\\'' HUP\ntrap '\\''exit 130'\\'' INT\ntrap '\\''exit 143'\\'' TERM\ncurl -fsSL '\\''https://astrid.haus/install'\\'' -o \"$tmp/install\"\nsh \"$tmp/install\" '\\''--root'\\'' '\\''__M4_4A_PINOKIO_CHECKOUT__/app/astrid'\\'' '\\''--managed-by'\\'' '\\''pinokio'\\''' '{}'\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf 'ASTRID_PINOKIO_%s\\n' FAILURE; fi\n(exit \"$status\")"
+          }
+        ]
+      }
+    },
+    "bridge_schema_version": "m4-4a-journey-config.v1",
+    "candidate_checkouts": {
+      "agent": {
+        "files": {
+          ".github/workflows/journey.yml": "6cd4e8cf38e6262f0e478fcb3b311ac12528b9e1a471263e4b6fd81b05c9e37e",
+          "scripts/ci_journey.py": "0677686b1dfd7296fcd3fdf0358deae88117ac0e8dc4444bbafe5963ef61146a",
+          "scripts/journey_matrix.py": "2907b420f3143b33cc4fd862b318943ae04e54d09118a846bf6aaa60235a042d",
+          "scripts/pinokio_backend_executor.py": "f2447ea626bfd2269d97faa321a6c1a2224ae2a96d0873c95086800da9dcd874",
+          "scripts/pinokio_platform_adapter.py": "7b8409897ebc2888fd0f5688b4ab7459c3b4411f6683e0cba558ceeace5f715d",
+          "scripts/shared_journey_driver.py": "a304ed209863593b3b8ffc79e6a339fd18d5263c831cbdc9165d650547a942e6"
+        },
+        "path": "/__M4_4A_RUNNER_WORKSPACE__/candidate-agent",
+        "ref": "dd6b48192c720c5346e6f140184e313b2cf84f31"
+      },
+      "app": {
+        "files": {
+          "public/install-manifest.json": "15ea3a2e0a4067773b727635e4eaa4b894eceb10f73aaa88cd29896a2364bd77"
+        },
+        "path": "/__M4_4A_RUNNER_WORKSPACE__/app",
+        "ref": "ae95eb455408b8c0e185bfded67798e2b307a6f6"
+      },
+      "pinokio": {
+        "files": {
+          "pinokio/lib.js": "59bb0a556b425dafb4d986aaab54f0dbd23a988814a0d64a6cb4437c52d3d998",
+          "pinokio/lifecycle.mjs": "0ddc6a5596dc02a2f33afba799495c7834ebb193df33fe15c376c2b60859a3ad",
+          "pinokio/shell.mjs": "d8c2dfa774c0bda07d29f923f8b84d06055e76a8f4c5b6192980be2dffa8a7e9",
+          "pinokio/stop.js": "f9d62e4e6a826fccd9791ee211dae933f46c8f99019e145abb3db3bf9595fd48",
+          "pinokio/update.js": "1be13ca4d415d1693e0493a0d81d7aecf616f27ab3875a94ea5d9ebb69aba9e5"
+        },
+        "path": "/__M4_4A_RUNNER_WORKSPACE__/pinokio",
+        "ref": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4"
+      },
+      "runtime": {
+        "files": {
+          "pyproject.toml": "f56e14a32f1edf4693a1365d094cf2322a1c106ac61f4e5154719fbae62ff283",
+          "runtime_protocol/__init__.py": "4e4064e1d9b80c6637576490150f44f3c710fabc520af1e640abf2493dcbb0d2",
+          "runtime_protocol/platform.py": "dc1ab2158066b952e82b5c0957a7cd8085cb35eabdeaf0f6d5fddf7cf4a4892c"
+        },
+        "path": "/__M4_4A_RUNNER_WORKSPACE__/runtime",
+        "ref": "1e6d899efa77a2d6ec247c38250f9748330bb587"
+      }
+    },
+    "execution_owner": "M-VENUE",
+    "immutable_tuple": {
+      "agent": "dd6b48192c720c5346e6f140184e313b2cf84f31",
+      "app": "ae95eb455408b8c0e185bfded67798e2b307a6f6",
+      "pinokio": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+      "runtime": "1e6d899efa77a2d6ec247c38250f9748330bb587"
+    },
+    "negative_controls": {
+      "busy_stop": {
+        "expected_reason": "busy",
+        "guard_paths": [
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json",
+          "/__M4_4A_RUNNER_WORKSPACE__/pinokio/stop.js"
+        ],
+        "recovery": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "recovery",
+            "--spec",
+            "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.macos.recovery",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        },
+        "refusal": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "busy-refusal",
+            "--spec",
+            "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.macos.busy-refusal",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      },
+      "identity_mismatch": {
+        "probe": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "identity-mismatch",
+            "--spec",
+            "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.macos.identity-mismatch",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      },
+      "instance_mismatch": {
+        "probe": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "instance-mismatch",
+            "--spec",
+            "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.macos.instance-mismatch",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      },
+      "unknown_stop": {
+        "expected_reason": "unknown",
+        "guard_paths": [
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json",
+          "/__M4_4A_RUNNER_WORKSPACE__/pinokio/stop.js"
+        ],
+        "recovery": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "recovery",
+            "--spec",
+            "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.macos.recovery",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        },
+        "refusal": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "unknown-refusal",
+            "--spec",
+            "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.macos.unknown-refusal",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      }
+    },
+    "old_launcher": {
+      "checkout": "/__M4_4A_RUNNER_WORKSPACE__/pinokio",
+      "file": "pinokio/update.js",
+      "ref": "bbba620e3d89eeff8021417f365e6ea584203105",
+      "sha256": "a0f998c03bbba57966c8863a3bd38411d7859d970ddc4c93af1e28b04a66291b"
+    },
+    "path_binding": {
+      "must_not_dispatch_unmaterialized": true,
+      "pinokio_action_token": "__M4_4A_PINOKIO_CHECKOUT__",
+      "provider_root_token": "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__",
+      "runner_temp_token": "/__M4_4A_RUNNER_TEMP__",
+      "status": "REQUIRES_M_VENUE_RUNNER_MATERIALIZATION",
+      "workspace_token": "/__M4_4A_RUNNER_WORKSPACE__"
+    },
+    "platform": {
+      "evidence_class": "hosted-lifecycle",
+      "hosted": true,
+      "os": "macos",
+      "runner": "macos-14",
+      "shell": "sh"
+    },
+    "platform_adapter": {
+      "adoption": {
+        "artifacts": {
+          "provider_executable": {
+            "path": "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-adoption-provider",
+            "sha256": "__M4_4A_PROVIDER_EXECUTABLE_SHA256__"
+          }
+        },
+        "command": {
+          "argv": [
+            "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-adoption-provider"
+          ],
+          "cwd": "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__",
+          "env": {},
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      },
+      "spec": "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json",
+      "stop_action": {
+        "checkout": "/__M4_4A_RUNNER_WORKSPACE__/pinokio",
+        "file": "pinokio/stop.js",
+        "ref": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+        "sha256": "f9d62e4e6a826fccd9791ee211dae933f46c8f99019e145abb3db3bf9595fd48"
+      }
+    },
+    "runtime": {
+      "expected_identity": "__M4_4A_RUNTIME_IDENTITY_BOUND_BY_PROVIDER__",
+      "expected_instance_id": "__M4_4A_RUNTIME_INSTANCE_AFTER_UPDATE__",
+      "expected_restart_instance_id": "__M4_4A_RUNTIME_INSTANCE_AFTER_RESTART__",
+      "health": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "health",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.macos.health",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "menu": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "menu",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.macos.menu",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "processes": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "processes",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.macos.processes",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "ready": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "ready",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.macos.ready",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "start": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "start",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.macos.start",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "status": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "status",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.macos.status",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "stop": {
+        "argv": [
+          "/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "stop",
+          "--spec",
+          "/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.macos.stop",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      }
+    },
+    "slot_mapping": {
+      "contract": "R-25 six slots unchanged",
+      "mapped_slots": [
+        {
+          "channel": "pinokio-backend",
+          "mode": "backend",
+          "request_id": "R-25-EXECUTOR-CONFIG-RC-0-pinokio-backend-macos",
+          "runner": "macos-14",
+          "shell": "sh",
+          "slot_id": "pinokio-backend-macos"
+        },
+        {
+          "channel": "pinokio-fully-local",
+          "mode": "fully-local",
+          "request_id": "R-25-EXECUTOR-CONFIG-RC-0-pinokio-fully-local-macos",
+          "runner": "macos-14",
+          "shell": "sh",
+          "slot_id": "pinokio-fully-local-macos"
+        }
+      ]
+    },
+    "source_override_test_mode": false,
+    "source_provenance": {
+      "agent_schema_sha": "dd6b48192c720c5346e6f140184e313b2cf84f31",
+      "app_manifest_path": "public/install-manifest.json",
+      "app_manifest_sha256": "15ea3a2e0a4067773b727635e4eaa4b894eceb10f73aaa88cd29896a2364bd77",
+      "approved_old_launcher_ref": "bbba620e3d89eeff8021417f365e6ea584203105",
+      "approved_old_launcher_sha256": "a0f998c03bbba57966c8863a3bd38411d7859d970ddc4c93af1e28b04a66291b",
+      "pinokio_base_sha": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+      "repository": "banodoco/astrid-pinokio",
+      "required_stopped_path_agent_ancestors": [
+        "14d87abe38cd2545411a84549d5e4edc5a33561d",
+        "b97a4757a908982c978e46c90898a816c0c5d9ee"
+      ]
+    },
+    "unavailable_seams": {
+      "adoption_provider_identity": "NOT_ASSERTED; M-VENUE must bind an approved executable and SHA-256 before dispatch",
+      "platform_spec": "NOT_PRESENT; M-VENUE must materialize it from the actual runner/runtime and platform adapter",
+      "real_engine_provider": "UNAVAILABLE_IN_THIS_PACKET"
+    }
+  },
+  "windows": {
+    "acceptance_state": "DISPATCH_INPUT_TEMPLATE_ONLY",
+    "pinned_agent_contract": {
+      "status": "RESOLVED_M_QUAL_R05_CUSTOM_STEP_SCHEMA_R1",
+      "schema_source": "banodoco/astrid-agent lane/M-QUAL/R-05-CUSTOM-STEP-SCHEMA-R1@258ccddc4fc02de864487518a45ca745e0a23855",
+      "retry_custom_step": {"kind": "custom", "bootstrap_action": "preflightStop"}
+    },
+    "actions": {
+      "first": {
+        "command": {
+          "argv": [
+            "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-action-runner",
+            "--action",
+            "first"
+          ],
+          "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.windows.action.first",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 180
+        },
+        "kind": "pinokio-action",
+        "provenance": {
+          "path": "pinokio/update.js",
+          "ref": "bbba620e3d89eeff8021417f365e6ea584203105",
+          "sha256": "a0f998c03bbba57966c8863a3bd38411d7859d970ddc4c93af1e28b04a66291b"
+        },
+        "refusal_exit_codes": [
+          42
+        ],
+        "refusal_text": "Astrid is still running. Choose Pinokio's Stop button, then try again.",
+        "steps": [
+          {
+            "bootstrap_action": null,
+            "kind": "git-shell",
+            "message": "node '__M4_4A_PINOKIO_CHECKOUT__/pinokio/shell.mjs' '__M4_4A_PINOKIO_CHECKOUT__' 'git -C '\\''__M4_4A_PINOKIO_CHECKOUT__'\\'' pull --ff-only || { printf '\\''%s\\n'\\'' '\\''Couldn'\\''\\'\\'''\\''t update the Pinokio launcher. If you edited its files, undo those edits, then choose Update again.'\\'' >&2; exit 1; }' '{}'\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf 'ASTRID_PINOKIO_%s\\n' FAILURE; fi\n(exit \"$status\")"
+          },
+          {
+            "bootstrap_action": "update-app",
+            "kind": "shell",
+            "message": "node '__M4_4A_PINOKIO_CHECKOUT__/pinokio/shell.mjs' '__M4_4A_PINOKIO_CHECKOUT__' 'set -eu\ntmp=$(mktemp -d)\ntrap '\\''rm -rf \"$tmp\"'\\'' EXIT\ntrap '\\''exit 129'\\'' HUP\ntrap '\\''exit 130'\\'' INT\ntrap '\\''exit 143'\\'' TERM\ncurl -fsSL '\\''https://astrid.haus/install'\\'' -o \"$tmp/install\"\nsh \"$tmp/install\" '\\''--root'\\'' '\\''__M4_4A_PINOKIO_CHECKOUT__/app/astrid'\\'' '\\''--managed-by'\\'' '\\''pinokio'\\'' '\\''--update-app'\\''' '{}'\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf 'ASTRID_PINOKIO_%s\\n' FAILURE; fi\n(exit \"$status\")"
+          }
+        ]
+      },
+      "retry": {
+        "command": {
+          "argv": [
+            "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-action-runner",
+            "--action",
+            "retry"
+          ],
+          "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.windows.action.retry",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 180
+        },
+        "kind": "pinokio-action",
+        "provenance": {
+          "path": "pinokio/update.js",
+          "ref": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+          "sha256": "1be13ca4d415d1693e0493a0d81d7aecf616f27ab3875a94ea5d9ebb69aba9e5"
+        },
+        "refusal_exit_codes": [
+          42
+        ],
+        "steps": [
+          {
+            "kind": "custom",
+            "bootstrap_action": "preflightStop"
+          },
+          {
+            "bootstrap_action": null,
+            "kind": "git-shell",
+            "message": "node '__M4_4A_PINOKIO_CHECKOUT__/pinokio/shell.mjs' '__M4_4A_PINOKIO_CHECKOUT__' 'git -C '\\''__M4_4A_PINOKIO_CHECKOUT__'\\'' pull --ff-only || { printf '\\''%s\\n'\\'' '\\''Couldn'\\''\\'\\'''\\''t update the Pinokio launcher. If you edited its files, undo those edits, then choose Update again.'\\'' >&2; exit 1; }' '{}'\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf 'ASTRID_PINOKIO_%s\\n' FAILURE; fi\n(exit \"$status\")"
+          },
+          {
+            "bootstrap_action": "install",
+            "kind": "shell",
+            "message": "node '__M4_4A_PINOKIO_CHECKOUT__/pinokio/shell.mjs' '__M4_4A_PINOKIO_CHECKOUT__' 'set -eu\ntmp=$(mktemp -d)\ntrap '\\''rm -rf \"$tmp\"'\\'' EXIT\ntrap '\\''exit 129'\\'' HUP\ntrap '\\''exit 130'\\'' INT\ntrap '\\''exit 143'\\'' TERM\ncurl -fsSL '\\''https://astrid.haus/install'\\'' -o \"$tmp/install\"\nsh \"$tmp/install\" '\\''--root'\\'' '\\''__M4_4A_PINOKIO_CHECKOUT__/app/astrid'\\'' '\\''--managed-by'\\'' '\\''pinokio'\\''' '{}'\nstatus=$?\nif [ \"$status\" -ne 0 ]; then printf 'ASTRID_PINOKIO_%s\\n' FAILURE; fi\n(exit \"$status\")"
+          }
+        ]
+      }
+    },
+    "bridge_schema_version": "m4-4a-journey-config.v1",
+    "candidate_checkouts": {
+      "agent": {
+        "files": {
+          ".github/workflows/journey.yml": "6cd4e8cf38e6262f0e478fcb3b311ac12528b9e1a471263e4b6fd81b05c9e37e",
+          "scripts/ci_journey.py": "0677686b1dfd7296fcd3fdf0358deae88117ac0e8dc4444bbafe5963ef61146a",
+          "scripts/journey_matrix.py": "2907b420f3143b33cc4fd862b318943ae04e54d09118a846bf6aaa60235a042d",
+          "scripts/pinokio_backend_executor.py": "f2447ea626bfd2269d97faa321a6c1a2224ae2a96d0873c95086800da9dcd874",
+          "scripts/pinokio_platform_adapter.py": "7b8409897ebc2888fd0f5688b4ab7459c3b4411f6683e0cba558ceeace5f715d",
+          "scripts/shared_journey_driver.py": "a304ed209863593b3b8ffc79e6a339fd18d5263c831cbdc9165d650547a942e6"
+        },
+        "path": "C:/__M4_4A_RUNNER_WORKSPACE__/candidate-agent",
+        "ref": "dd6b48192c720c5346e6f140184e313b2cf84f31"
+      },
+      "app": {
+        "files": {
+          "public/install-manifest.json": "15ea3a2e0a4067773b727635e4eaa4b894eceb10f73aaa88cd29896a2364bd77"
+        },
+        "path": "C:/__M4_4A_RUNNER_WORKSPACE__/app",
+        "ref": "ae95eb455408b8c0e185bfded67798e2b307a6f6"
+      },
+      "pinokio": {
+        "files": {
+          "pinokio/lib.js": "59bb0a556b425dafb4d986aaab54f0dbd23a988814a0d64a6cb4437c52d3d998",
+          "pinokio/lifecycle.mjs": "0ddc6a5596dc02a2f33afba799495c7834ebb193df33fe15c376c2b60859a3ad",
+          "pinokio/shell.mjs": "d8c2dfa774c0bda07d29f923f8b84d06055e76a8f4c5b6192980be2dffa8a7e9",
+          "pinokio/stop.js": "f9d62e4e6a826fccd9791ee211dae933f46c8f99019e145abb3db3bf9595fd48",
+          "pinokio/update.js": "1be13ca4d415d1693e0493a0d81d7aecf616f27ab3875a94ea5d9ebb69aba9e5"
+        },
+        "path": "C:/__M4_4A_RUNNER_WORKSPACE__/pinokio",
+        "ref": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4"
+      },
+      "runtime": {
+        "files": {
+          "pyproject.toml": "f56e14a32f1edf4693a1365d094cf2322a1c106ac61f4e5154719fbae62ff283",
+          "runtime_protocol/__init__.py": "4e4064e1d9b80c6637576490150f44f3c710fabc520af1e640abf2493dcbb0d2",
+          "runtime_protocol/platform.py": "dc1ab2158066b952e82b5c0957a7cd8085cb35eabdeaf0f6d5fddf7cf4a4892c"
+        },
+        "path": "C:/__M4_4A_RUNNER_WORKSPACE__/runtime",
+        "ref": "1e6d899efa77a2d6ec247c38250f9748330bb587"
+      }
+    },
+    "execution_owner": "M-VENUE",
+    "immutable_tuple": {
+      "agent": "dd6b48192c720c5346e6f140184e313b2cf84f31",
+      "app": "ae95eb455408b8c0e185bfded67798e2b307a6f6",
+      "pinokio": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+      "runtime": "1e6d899efa77a2d6ec247c38250f9748330bb587"
+    },
+    "negative_controls": {
+      "busy_stop": {
+        "expected_reason": "busy",
+        "guard_paths": [
+          "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json",
+          "C:/__M4_4A_RUNNER_WORKSPACE__/pinokio/stop.js"
+        ],
+        "recovery": {
+          "argv": [
+            "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "recovery",
+            "--spec",
+            "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.windows.recovery",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        },
+        "refusal": {
+          "argv": [
+            "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "busy-refusal",
+            "--spec",
+            "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.windows.busy-refusal",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      },
+      "identity_mismatch": {
+        "probe": {
+          "argv": [
+            "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "identity-mismatch",
+            "--spec",
+            "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.windows.identity-mismatch",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      },
+      "instance_mismatch": {
+        "probe": {
+          "argv": [
+            "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "instance-mismatch",
+            "--spec",
+            "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.windows.instance-mismatch",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      },
+      "unknown_stop": {
+        "expected_reason": "unknown",
+        "guard_paths": [
+          "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json",
+          "C:/__M4_4A_RUNNER_WORKSPACE__/pinokio/stop.js"
+        ],
+        "recovery": {
+          "argv": [
+            "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "recovery",
+            "--spec",
+            "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.windows.recovery",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        },
+        "refusal": {
+          "argv": [
+            "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+            "unknown-refusal",
+            "--spec",
+            "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+          ],
+          "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+          "env": {},
+          "id": "m4-4a.windows.unknown-refusal",
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      }
+    },
+    "old_launcher": {
+      "checkout": "C:/__M4_4A_RUNNER_WORKSPACE__/pinokio",
+      "file": "pinokio/update.js",
+      "ref": "bbba620e3d89eeff8021417f365e6ea584203105",
+      "sha256": "a0f998c03bbba57966c8863a3bd38411d7859d970ddc4c93af1e28b04a66291b"
+    },
+    "path_binding": {
+      "must_not_dispatch_unmaterialized": true,
+      "pinokio_action_token": "__M4_4A_PINOKIO_CHECKOUT__",
+      "provider_root_token": "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__",
+      "runner_temp_token": "C:/__M4_4A_RUNNER_TEMP__",
+      "status": "REQUIRES_M_VENUE_RUNNER_MATERIALIZATION",
+      "workspace_token": "C:/__M4_4A_RUNNER_WORKSPACE__"
+    },
+    "platform": {
+      "evidence_class": "hosted-lifecycle",
+      "hosted": true,
+      "os": "windows",
+      "runner": "windows-2022",
+      "shell": "powershell.exe"
+    },
+    "platform_adapter": {
+      "adoption": {
+        "artifacts": {
+          "provider_executable": {
+            "path": "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-adoption-provider",
+            "sha256": "__M4_4A_PROVIDER_EXECUTABLE_SHA256__"
+          }
+        },
+        "command": {
+          "argv": [
+            "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-adoption-provider"
+          ],
+          "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__",
+          "env": {},
+          "inherit_env": [],
+          "redact_argv_indices": [],
+          "redact_env": [],
+          "timeout_seconds": 60
+        }
+      },
+      "spec": "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json",
+      "stop_action": {
+        "checkout": "C:/__M4_4A_RUNNER_WORKSPACE__/pinokio",
+        "file": "pinokio/stop.js",
+        "ref": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+        "sha256": "f9d62e4e6a826fccd9791ee211dae933f46c8f99019e145abb3db3bf9595fd48"
+      }
+    },
+    "runtime": {
+      "expected_identity": "__M4_4A_RUNTIME_IDENTITY_BOUND_BY_PROVIDER__",
+      "expected_instance_id": "__M4_4A_RUNTIME_INSTANCE_AFTER_UPDATE__",
+      "expected_restart_instance_id": "__M4_4A_RUNTIME_INSTANCE_AFTER_RESTART__",
+      "health": {
+        "argv": [
+          "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "health",
+          "--spec",
+          "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.windows.health",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "menu": {
+        "argv": [
+          "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "menu",
+          "--spec",
+          "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.windows.menu",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "processes": {
+        "argv": [
+          "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "processes",
+          "--spec",
+          "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.windows.processes",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "ready": {
+        "argv": [
+          "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "ready",
+          "--spec",
+          "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.windows.ready",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "start": {
+        "argv": [
+          "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "start",
+          "--spec",
+          "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.windows.start",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "status": {
+        "argv": [
+          "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "status",
+          "--spec",
+          "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.windows.status",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      },
+      "stop": {
+        "argv": [
+          "C:/__M4_4A_RUNNER_WORKSPACE__/__M4_4A_PROVIDER__/pinokio-runtime-adapter",
+          "stop",
+          "--spec",
+          "C:/__M4_4A_RUNNER_TEMP__/pinokio-platform-spec.json"
+        ],
+        "cwd": "C:/__M4_4A_RUNNER_WORKSPACE__",
+        "env": {},
+        "id": "m4-4a.windows.stop",
+        "inherit_env": [],
+        "redact_argv_indices": [],
+        "redact_env": [],
+        "timeout_seconds": 60
+      }
+    },
+    "slot_mapping": {
+      "contract": "R-25 six slots unchanged",
+      "mapped_slots": [
+        {
+          "channel": "pinokio-backend",
+          "mode": "backend",
+          "request_id": "R-25-EXECUTOR-CONFIG-RC-0-pinokio-backend-windows",
+          "runner": "windows-2022",
+          "shell": "powershell.exe",
+          "slot_id": "pinokio-backend-windows"
+        },
+        {
+          "channel": "pinokio-fully-local",
+          "mode": "fully-local",
+          "request_id": "R-25-EXECUTOR-CONFIG-RC-0-pinokio-fully-local-windows",
+          "runner": "windows-2022",
+          "shell": "powershell.exe",
+          "slot_id": "pinokio-fully-local-windows"
+        }
+      ]
+    },
+    "source_override_test_mode": false,
+    "source_provenance": {
+      "agent_schema_sha": "dd6b48192c720c5346e6f140184e313b2cf84f31",
+      "app_manifest_path": "public/install-manifest.json",
+      "app_manifest_sha256": "15ea3a2e0a4067773b727635e4eaa4b894eceb10f73aaa88cd29896a2364bd77",
+      "approved_old_launcher_ref": "bbba620e3d89eeff8021417f365e6ea584203105",
+      "approved_old_launcher_sha256": "a0f998c03bbba57966c8863a3bd38411d7859d970ddc4c93af1e28b04a66291b",
+      "pinokio_base_sha": "89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4",
+      "repository": "banodoco/astrid-pinokio",
+      "required_stopped_path_agent_ancestors": [
+        "14d87abe38cd2545411a84549d5e4edc5a33561d",
+        "b97a4757a908982c978e46c90898a816c0c5d9ee"
+      ]
+    },
+    "unavailable_seams": {
+      "adoption_provider_identity": "NOT_ASSERTED; M-VENUE must bind an approved executable and SHA-256 before dispatch",
+      "platform_spec": "NOT_PRESENT; M-VENUE must materialize it from the actual runner/runtime and platform adapter",
+      "real_engine_provider": "UNAVAILABLE_IN_THIS_PACKET"
+    }
+  }
+}
