@@ -28,10 +28,14 @@ jobs:
     timeout-minutes: 15
     env:
       AGENT_REF: ${{ inputs.agent_ref }}
-      AGENT_ROOT: ${{ runner.temp }}/astrid-agent
-      SNAPSHOT: ${{ runner.temp }}/r25-macos-component-snapshot.json
-      ROUTE: ${{ runner.temp }}/r25-macos-component-route.json
     steps:
+      - name: Set component temp paths
+        shell: bash
+        env:
+          AGENT_ROOT: ${{ runner.temp }}/astrid-agent
+          SNAPSHOT: ${{ runner.temp }}/r25-macos-component-snapshot.json
+          ROUTE: ${{ runner.temp }}/r25-macos-component-route.json
+        run: printf '%s\n' "AGENT_ROOT=$AGENT_ROOT" "SNAPSHOT=$SNAPSHOT" "ROUTE=$ROUTE" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -84,10 +88,14 @@ jobs:
     timeout-minutes: 15
     env:
       AGENT_REF: ${{ inputs.agent_ref }}
-      AGENT_ROOT: ${{ runner.temp }}\astrid-agent
-      SNAPSHOT: ${{ runner.temp }}\r25-windows-component-snapshot.json
-      ROUTE: ${{ runner.temp }}\r25-windows-component-route.json
     steps:
+      - name: Set component temp paths
+        shell: bash
+        env:
+          AGENT_ROOT: ${{ runner.temp }}\astrid-agent
+          SNAPSHOT: ${{ runner.temp }}\r25-windows-component-snapshot.json
+          ROUTE: ${{ runner.temp }}\r25-windows-component-route.json
+        run: printf '%s\n' "AGENT_ROOT=$AGENT_ROOT" "SNAPSHOT=$SNAPSHOT" "ROUTE=$ROUTE" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
