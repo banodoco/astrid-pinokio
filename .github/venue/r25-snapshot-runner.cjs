@@ -10,7 +10,7 @@ const net = require('node:net');
 const { execFileSync, spawn } = require('node:child_process');
 const binding = require('../../pinokio/providers/r25-native-collector-binding.cjs');
 const { createObserverIO } = require('./r21-observer-io.cjs');
-const { ptermExit } = require('./r21-observer-diagnostics.cjs');
+const { ptermExit, createInstallDiagnostics } = require('./r21-observer-diagnostics.cjs');
 
 const AGENT_REF = binding.AGENT_SOURCE_REF;
 const PINOKIO_SOURCE_REF = '95aafb5a029c3f53cb2268d8596909eab0deb3c4';
@@ -214,13 +214,14 @@ async function waitForRouteReadiness(trace, timeoutMs = 120000) {
   throw new Error('independent fully-local editor/Runtime readiness timeout');
 }
 
-async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, action, logRoot, timeoutMs = 30 * 60 * 1000 }) {
+async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, action, logRoot, timeoutMs = 30 * 60 * 1000, diagnostic = null }) {
   const socket = await io.openSocket();
   let terminal = { stop: false, disconnect: false, error: false };
   let firstError = null;
   const onMessage = event => {
     try {
       const packet = JSON.parse(String(event.data));
+      diagnostic?.packet(packet);
       if (packet?.type === 'event' && packet.data === 'stop') terminal.stop = true;
       if (packet?.type === 'event' && packet.data === 'disconnect') terminal.disconnect = true;
       if (packet?.type === 'error' || packet?.type === 'installer-failure-marker') {
@@ -241,7 +242,7 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
       cwd: home, env: process.env, stdio: ['ignore', stdout, stderr],
     });
     let innerExit;
-    try { innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs); }
+    try { innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs, diagnostic?.pterm); }
     finally { fs.closeSync(stdout); fs.closeSync(stderr); }
     await new Promise(resolve => setTimeout(resolve, 500));
     return { script, inner_exit: innerExit, terminal, first_error: firstError,
@@ -322,7 +323,13 @@ async function main() {
   // boundaries. It is still driven through the real Pinokio engine and is
   // allowed to fail closed before an evidence session can begin.
   const logRoot = path.join(diagnostics, 'engine-logs');
-  const preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: ROUTE.installScript, action: 'setup-install', logRoot, timeoutMs: 45 * 60 * 1000 });
+  const setupDiagnostic = createInstallDiagnostics({
+    action: 'setup-install', script: ROUTE.installScript, slot_id: SLOT,
+    run_id: origin.run_id, run_attempt: origin.run_attempt,
+  }, value => fs.writeFileSync(path.join(diagnostics, 'setup-install-diagnostics.json'), `${JSON.stringify(value)}\n`, {
+    encoding: 'utf8', flag: 'w', mode: 0o600,
+  }));
+  const preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: ROUTE.installScript, action: 'setup-install', logRoot, timeoutMs: 45 * 60 * 1000, diagnostic: setupDiagnostic });
   if (preparation.first_error || preparation.inner_exit.code !== 0 || preparation.terminal.error) throw new Error('disposable Pinokio install preparation failed');
   const mode = readJson(path.join(appRoot, 'app', 'install-mode.json'));
   if (mode.schema_version !== 1 || mode.mode !== ROUTE.installMode) throw new Error(`preparation did not retain ${ROUTE.installMode} install mode`);
