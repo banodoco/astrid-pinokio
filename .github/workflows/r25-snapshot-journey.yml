@@ -1,6 +1,9 @@
 name: R-25 authenticated six-action snapshot journey
 
 on:
+  push:
+    branches:
+      - lane/M-PIN/R-25-WINDOWS-PUSH-ROUTE-R1
   workflow_dispatch:
     inputs:
       agent_ref:
@@ -21,12 +24,13 @@ permissions:
 
 jobs:
   windows-six-action:
-    if: inputs.slot_id == 'pinokio-fully-local-windows'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.slot_id == 'pinokio-fully-local-windows')
     runs-on: windows-2022
     timeout-minutes: 90
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      AGENT_REF: ${{ inputs.agent_ref }}
+      AGENT_REF: ${{ github.event_name == 'push' && 'a6b68d5b5478326a4db1971966d33a2cfe61d091' || inputs.agent_ref }}
+      SLOT_ID: ${{ github.event_name == 'push' && 'pinokio-fully-local-windows' || inputs.slot_id }}
       PINOKIOD_REF: add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
       PTERM_REF: 5be43718701c448b43daf0ce51d8935f170065bb
       R25_TUPLE_JSON: >-
