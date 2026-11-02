@@ -128,7 +128,7 @@ async function processTreeKill(child) {
   }
 }
 
-function launchShell(step, environment, { background = false, onSpawn } = {}) {
+function launchShell(step, environment, { background = false, onSpawn, requireDiagnosticManifest = false } = {}) {
   assert.equal(step.method, 'shell.run');
   assert.equal(step.params.shell, shell);
   assert.equal(path.resolve(step.params.path), path.resolve(environment.ASTRID_PINOKIO_APP_DIR),
@@ -138,13 +138,14 @@ function launchShell(step, environment, { background = false, onSpawn } = {}) {
     : '/bin/bash';
   assert.ok(fs.existsSync(executable), `${shell} is missing from this runner: ${executable}`);
   let message = step.params.message;
+  let diagnosticManifestSelected = false;
   if (process.env.PINOKIO_DIAGNOSTIC_MANIFEST && windows) {
     // The Windows launcher carries the actual shell command in a base64 payload.
     const payloadMatch = message.match(/--pinokio-payload=([A-Za-z0-9+/=]+)/);
     if (payloadMatch) {
       const payload = JSON.parse(Buffer.from(payloadMatch[1], 'base64').toString('utf8'));
       if (payload.message.includes('install-manifest.json')) {
-        const installer = 'https://raw.githubusercontent.com/banodoco/astrid-app/int%2Fr1/public/install.ps1';
+        const installer = 'https://raw.githubusercontent.com/banodoco/astrid-app/int/r1/public/install.ps1';
         assert.ok(payload.message.includes(installer), 'expected the original App bootstrap URL');
         payload.message = payload.message.replace(installer, 'https://raw.githubusercontent.com/banodoco/astrid-app/36ff224e3c9ad862e3f807e2548b997a36799543/public/install.ps1');
         const download = /Invoke-WebRequest -UseBasicParsing '[^']+\/install-manifest\.json' -OutFile \(Join-Path \$tmp 'install-manifest\.json'\)/;
@@ -153,10 +154,12 @@ function launchShell(step, environment, { background = false, onSpawn } = {}) {
         payload.message = payload.message.replace(download, `Copy-Item -LiteralPath '${manifest}' -Destination (Join-Path $tmp 'install-manifest.json')`);
         const encoded = Buffer.from(JSON.stringify(payload)).toString('base64');
         message = message.replace(payloadMatch[1], encoded);
+        diagnosticManifestSelected = true;
         log(`using diagnostic manifest ${process.env.PINOKIO_DIAGNOSTIC_MANIFEST}`);
       }
     }
   }
+  if (requireDiagnosticManifest) assert.ok(diagnosticManifestSelected, 'diagnostic install must select the temporary manifest');
   const child = spawn(executable, windows
     ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', message]
     : ['--noprofile', '--norc', '-c', step.params.message], {
@@ -374,7 +377,9 @@ async function invokeAction(name, app, appDirectory, environment, home, getDaemo
             background: true, onSpawn: getDaemon.set,
           });
         } else {
-          await launchShell(step, { ...environment, ASTRID_PINOKIO_APP_DIR: appDirectory });
+          await launchShell(step, { ...environment, ASTRID_PINOKIO_APP_DIR: appDirectory }, {
+            requireDiagnosticManifest: name === 'install' && Boolean(process.env.PINOKIO_DIAGNOSTIC_MANIFEST),
+          });
         }
       } else if (step.method === 'script.start') {
         await invokeAction('start', app, appDirectory, environment, home, getDaemon, stopDaemon);
