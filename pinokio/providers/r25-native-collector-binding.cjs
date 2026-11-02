@@ -10,7 +10,7 @@ const windows = require('./r25-snapshot-windows.cjs');
 
 const SCHEMA = 'astrid.r25.pinokio-snapshot-request.v1';
 const ROUTE_SCHEMA = 'astrid.r25.pinokio-snapshot-route.v1';
-const AGENT_SOURCE_REF = 'a6b68d5b5478326a4db1971966d33a2cfe61d091';
+const AGENT_SOURCE_REF = '21a53a9c241f403a80b103cd136d6e785c12b3fc';
 const R36_REF = '010e8f25c70109f0a93a6fccb0a16f7f40e06739';
 const HEX40 = /^[0-9a-f]{40}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -34,7 +34,7 @@ const sourceFiles = Object.freeze({
   agent: Object.freeze({
     'scripts/pinokio_snapshot_collector.py': 'a94ef58088702aba984c920a7d718ee6b03713a52d93b41298ccdd958a230a99',
     'scripts/pinokio_snapshot_macos.py': '086faf864e821ef53e7502179cdd322a7b86b462e4403e0f7af6abf789b2db6d',
-    'scripts/pinokio_snapshot_windows.py': '6ab995a1829ddfeaf78cf738985f9a03c77a22b1c88ef36c462a0f34b3a83611',
+    'scripts/pinokio_snapshot_windows.py': '6651f962034abe2522644beaf5c4258442f6933b2bcb5cd3cc83ee9a6f10fd6d',
   }),
   pinokio: Object.freeze({
     'pinokio/providers/r25-snapshot-macos.cjs': 'eceba872257c310f1ad638e475ee1954facef43866ee95f443170fda408631da',

@@ -6,7 +6,7 @@ on:
       agent_ref:
         description: Immutable astrid-agent snapshot collector commit
         required: true
-        default: a6b68d5b5478326a4db1971966d33a2cfe61d091
+        default: 21a53a9c241f403a80b103cd136d6e785c12b3fc
         type: string
       target_os:
         description: Platform component probe(s); not M4-6 evidence
@@ -38,7 +38,7 @@ jobs:
           AGENT_ROOT: ${{ runner.temp }}/astrid-agent
         run: |
           set -euo pipefail
-          test "$AGENT_REF" = a6b68d5b5478326a4db1971966d33a2cfe61d091
+          test "$AGENT_REF" = 21a53a9c241f403a80b103cd136d6e785c12b3fc
           git clone --filter=blob:none --no-checkout https://github.com/banodoco/astrid-agent.git "$AGENT_ROOT"
           git -C "$AGENT_ROOT" fetch --no-tags --depth=1 origin "$AGENT_REF"
           git -C "$AGENT_ROOT" checkout --detach FETCH_HEAD
@@ -99,7 +99,7 @@ jobs:
           AGENT_ROOT: ${{ runner.temp }}\astrid-agent
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:AGENT_REF -ne 'a6b68d5b5478326a4db1971966d33a2cfe61d091') { throw 'agent_ref differs' }
+          if ($env:AGENT_REF -ne '21a53a9c241f403a80b103cd136d6e785c12b3fc') { throw 'agent_ref differs' }
           git clone --filter=blob:none --no-checkout https://github.com/banodoco/astrid-agent.git $env:AGENT_ROOT
           git -C $env:AGENT_ROOT fetch --no-tags --depth=1 origin $env:AGENT_REF
           git -C $env:AGENT_ROOT checkout --detach FETCH_HEAD
