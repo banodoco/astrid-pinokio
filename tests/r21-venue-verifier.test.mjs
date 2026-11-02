@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import verifier from '../.github/venue/r21-verify.cjs';
 
-const { ACTIONS, CONFIRMATION, ENDPOINT, REQUEST_ID, TUPLE, validateDispatch, verifyReceipt } = verifier;
+const { ACTIONS, APP_RUNTIME, CONFIRMATION, ENDPOINT, REQUEST_ID, TUPLE, validateDispatch, verifyReceipt } = verifier;
 
 function innerExit() { return { code: 0, signal: null }; }
 function terminal(refusal = false) { return { stop: true, disconnect: true, expected_refusal: refusal }; }
@@ -13,25 +13,29 @@ function receipt() {
     endpoint: ENDPOINT,
     tuple: { ...TUPLE },
     installed_tuple: { before: true, after_retry: true },
+    install: {
+      action_id: 1, action_uri: ACTIONS.install, inner_exit: innerExit(), terminal: terminal(),
+      installer_dispatch: true, installer_success: true, engine_error: false, launcher_failure: false, running_after: false,
+    },
     first_click: {
-      action_id: 1, action_uri: ACTIONS.update, inner_exit: innerExit(), terminal: terminal(true),
+      action_id: 2, action_uri: ACTIONS.update, inner_exit: innerExit(), terminal: terminal(true),
       installer_dispatch: true, running_after: false,
     },
     protected_state: {
-      before: { program: 'a'.repeat(64), selected_version: 'b'.repeat(64), user_data: 'c'.repeat(64) },
-      after_first_click: { program: 'a'.repeat(64), selected_version: 'b'.repeat(64), user_data: 'c'.repeat(64) },
-      after_retry: { program: 'd'.repeat(64), selected_version: 'e'.repeat(64), user_data: 'c'.repeat(64) },
+      before: { program: 'a'.repeat(64), selected_version: 'b'.repeat(64), installed_bytes: 'f'.repeat(64), user_data: 'c'.repeat(64) },
+      after_first_click: { program: 'a'.repeat(64), selected_version: 'b'.repeat(64), installed_bytes: 'f'.repeat(64), user_data: 'c'.repeat(64) },
+      after_retry: { program: 'd'.repeat(64), selected_version: 'e'.repeat(64), installed_bytes: '0'.repeat(64), user_data: 'c'.repeat(64) },
     },
     stop: {
-      action_id: 2, action_uri: ACTIONS.stop, inner_exit: innerExit(), terminal: terminal(),
+      action_id: 3, action_uri: ACTIONS.stop, inner_exit: innerExit(), terminal: terminal(),
       stopped: true, lock_free: true, start_running_after: false,
     },
     retry: {
-      action_id: 3, action_uri: ACTIONS.update, inner_exit: innerExit(), terminal: terminal(),
-      installer_dispatch: true, installer_success: true, engine_error: false, launcher_failure: false, running_after: false, runtime_ready: true, application_ready: true, start_running_after_retry: true, start_to_ready: true,
+      action_id: 4, action_uri: ACTIONS.update, inner_exit: innerExit(), terminal: terminal(),
+      installer_dispatch: true, installer_success: true, engine_error: false, launcher_failure: false, running_after: false, runtime_ready: true, application_ready: true, candidate_app_runtime_ready: true, start_running_after_retry: true, start_to_ready: true,
     },
     cleanup: {
-      action_id: 4, action_uri: ACTIONS.stop, inner_exit: innerExit(), terminal: terminal(),
+      action_id: 5, action_uri: ACTIONS.stop, inner_exit: innerExit(), terminal: terminal(),
       lock_free: true, start_running_after: false, daemon_idle: false,
     },
   };
@@ -47,6 +51,8 @@ test('R-21 venue verifier accepts only a complete native old-launcher receipt', 
     pinokiod: 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf',
     pterm: '5be43718701c448b43daf0ce51d8935f170065bb',
   });
+  assert.equal(APP_RUNTIME.schema_digest, 'sha256:9628bb5fd6e1dbbec392dd39f2e01031622dcf52d7ccff7cd1f0ad10743dcb1c');
+  assert.equal(APP_RUNTIME.origin, 'https://astrid.haus');
   assert.deepEqual(verifyReceipt(receipt()), { accepted: true, request_id: REQUEST_ID });
 });
 
@@ -77,10 +83,10 @@ test('R-21 venue verifier rejects a successful-looking wrapper with a nonzero in
 test('R-21 dispatch binding accepts only the exact product dispatch or self-serve venue ref', () => {
   const environment = {
     GITHUB_EVENT_NAME: 'push',
-    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-ADMISSION-BINDING-R1',
+    GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1',
     GITHUB_SHA: 'a'.repeat(40),
     GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-ADMISSION-BINDING-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1',
     GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1',
   };
   const bound = validateDispatch({ request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) }, environment);
@@ -96,8 +102,8 @@ test('R-21 dispatch binding accepts only the exact product dispatch or self-serv
   const manualEnvironment = {
     ...environment,
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-ADMISSION-BINDING-R1',
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-ADMISSION-BINDING-R1',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-REVIEW-FIX-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-REVIEW-FIX-R1',
   };
   const manualInput = { request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) };
   const manual = validateDispatch(manualInput, manualEnvironment);
@@ -121,9 +127,9 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-publisher-'));
   try {
     const environment = {
-      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-ADMISSION-BINDING-R1',
+      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1',
       GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
-      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-ADMISSION-BINDING-R1',
+      GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1',
       GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: REQUEST_ID,
       R21_CONFIRMATION: CONFIRMATION, R21_RUNNER_REF: 'a'.repeat(40),
     };
@@ -134,7 +140,8 @@ test('publisher binds the run and only retains sanitized evidence with inner exi
     fs.mkdirSync(input);
     const sample = receipt();
     for (const v of Object.values(sample.protected_state)) {
-      v.program = 'a'.repeat(64); v.selected_version = 'b'.repeat(64); v.user_data = 'c'.repeat(64);
+      v.program = 'a'.repeat(64); v.selected_version = 'b'.repeat(64);
+      v.installed_bytes = 'd'.repeat(64); v.user_data = 'c'.repeat(64);
     }
     sample.secret = 'must-never-leave-runner';
     fs.writeFileSync(path.join(input, 'r21-receipt.json'), JSON.stringify(sample));
@@ -186,6 +193,31 @@ test('R-21 rejects absent protected digests even if both sides are absent', () =
   delete value.protected_state.before.program;
   delete value.protected_state.after_first_click.program;
   assert.throws(() => verifyReceipt(value), /protected state digest/);
+});
+
+test('R-21 rejects a first click that changes protected installed bytes', () => {
+  const value = receipt();
+  value.protected_state.after_first_click.installed_bytes = '1'.repeat(64);
+  assert.throws(() => verifyReceipt(value), /installed bytes/);
+});
+
+test('R-21 requires accepted initial Install evidence', () => {
+  for (const mutate of [
+    value => { delete value.install; },
+    value => { value.install.action_uri = ACTIONS.update; },
+    value => { value.install.installer_dispatch = false; },
+    value => { value.install.installer_success = false; },
+    value => { value.install.engine_error = true; },
+    value => { value.install.running_after = true; },
+  ]) {
+    const value = receipt(); mutate(value);
+    assert.throws(() => verifyReceipt(value), /install/i);
+  }
+});
+
+test('R-21 requires candidate App-to-Runtime readiness after retry', () => {
+  const value = receipt(); value.retry.candidate_app_runtime_ready = false;
+  assert.throws(() => verifyReceipt(value), /App-to-Runtime/);
 });
 
 test('R-21 rejects retry without positive installer completion or with failures', () => {

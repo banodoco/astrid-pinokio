@@ -20,10 +20,12 @@ const action = source => source && typeof source === 'object' ? {
   engine_error: bool(source.engine_error), launcher_failure: bool(source.launcher_failure), stopped: bool(source.stopped), lock_free: bool(source.lock_free),
   running_after: bool(source.running_after), start_running_after: bool(source.start_running_after),
   daemon_idle: bool(source.daemon_idle), runtime_ready: bool(source.runtime_ready),
-  application_ready: bool(source.application_ready), start_running_after_retry: bool(source.start_running_after_retry), start_to_ready: bool(source.start_to_ready),
+  application_ready: bool(source.application_ready), candidate_app_runtime_ready: bool(source.candidate_app_runtime_ready),
+  start_running_after_retry: bool(source.start_running_after_retry), start_to_ready: bool(source.start_to_ready),
 } : null;
 const state = source => source && typeof source === 'object' ? {
-  program: hash(source.program), selected_version: hash(source.selected_version), user_data: hash(source.user_data),
+  program: hash(source.program), selected_version: hash(source.selected_version),
+  installed_bytes: hash(source.installed_bytes), user_data: hash(source.user_data),
 } : null;
 function projectReceipt(raw) {
   if (!raw || typeof raw !== 'object') return null;
@@ -33,7 +35,8 @@ function projectReceipt(raw) {
     endpoint: raw.endpoint === ENDPOINT ? ENDPOINT : null,
     tuple: Object.fromEntries(Object.entries(TUPLE).map(([k, v]) => [k, raw.tuple?.[k] === v ? v : null])),
     installed_tuple: { before: bool(raw.installed_tuple?.before), after_retry: bool(raw.installed_tuple?.after_retry) },
-    first_click: action(raw.first_click), stop: action(raw.stop), retry: action(raw.retry), cleanup: action(raw.cleanup),
+    install: action(raw.install), first_click: action(raw.first_click), stop: action(raw.stop),
+    retry: action(raw.retry), cleanup: action(raw.cleanup),
     protected_state: { before: state(raw.protected_state?.before), after_first_click: state(raw.protected_state?.after_first_click), after_retry: state(raw.protected_state?.after_retry) },
   };
 }

@@ -3,7 +3,7 @@ name: R-21 native old-launcher Update Stop retry
 on:
   push:
     branches:
-      - venue/M-PIN-R-21-ADMISSION-BINDING-R1
+      - venue/M-PIN-R-21-REVIEW-FIX-R1
   workflow_dispatch:
     inputs:
       request_id:

@@ -5,15 +5,15 @@
 // normal terminal packet and an engine error, so the selected packets and a
 // fresh engine status query are independently checked as well.
 
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createTrace, actionPhase, createActionTracker, ptermExit, createInstallDiagnostics } = require('./r21-observer-diagnostics.cjs');
 const { createObserverIO } = require('./r21-observer-io.cjs');
+const { digestProtectedState, installedTupleMatches } = require('./r21-protected-state.cjs');
 const {
-  ACTIONS, ENDPOINT, FIRST_REFUSAL, TUPLE, verifyReceipt,
+  ACTIONS, APP_RUNTIME, ENDPOINT, FIRST_REFUSAL, TUPLE, verifyReceipt,
 } = require('./r21-verify.cjs');
 
 const [requestPath, output] = process.argv.slice(2);
@@ -26,6 +26,7 @@ if (!appRoot || !ptermRoot || !home) throw new Error('R21_APP_ROOT, R21_PTERM_RO
 
 const { WebSocket } = require(path.join(ptermRoot, 'node_modules/unws'));
 const ACTION_TIMEOUT_MS = 20 * 60 * 1000;
+const INITIAL_INSTALL_SUCCESS = "Astrid is installed. Choose Pinokio's Start button.";
 // The first historical Install provisions a fresh venue and exceeded the
 // 35-minute bound in run 41391568748. Allow 45 minutes for it while the
 // 70-minute overall watchdog still bounds setup, later actions, and cleanup;
@@ -51,82 +52,12 @@ function write(name, value) {
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 
-function sha256(value) {
-  return crypto.createHash('sha256').update(value).digest('hex');
-}
-
-async function digestTree(target) {
-  const hash = crypto.createHash('sha256');
-  async function visit(relative) {
-    const absolute = path.join(target, relative);
-    let entry;
-    try { entry = await fsp.lstat(absolute); }
-    catch (error) {
-      if (error.code === 'ENOENT') { hash.update(`missing\\0${relative}\\0`); return; }
-      throw error;
-    }
-    if (entry.isDirectory()) {
-      hash.update(`directory\\0${relative}\\0`);
-      const names = (await fsp.readdir(absolute)).sort();
-      for (const name of names) await visit(path.join(relative, name));
-    } else if (entry.isFile()) {
-      hash.update(`file\\0${relative}\\0${sha256(await fsp.readFile(absolute))}\\0`);
-    } else if (entry.isSymbolicLink()) {
-      hash.update(`symlink\\0${relative}\\0${await fsp.readlink(absolute)}\\0`);
-    } else {
-      hash.update(`other\\0${relative}\\0`);
-    }
-  }
-  await visit('');
-  return hash.digest('hex');
-}
-
-async function digestProtectedState() {
-  const root = path.join(appRoot, 'app', 'astrid');
-  const program = crypto.createHash('sha256');
-  for (const name of ['current', 'install.json', 'update-transaction.json']) {
-    const file = path.join(root, name);
-    try { program.update(`${name}\\0${sha256(await fsp.readFile(file))}\\0`); }
-    catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      program.update(`${name}\\0missing\\0`);
-    }
-  }
-  let selected = 'missing';
-  try { selected = sha256(await fsp.readFile(path.join(root, 'current'))); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
-  let dataRoot;
-  try {
-    const install = JSON.parse(await fsp.readFile(path.join(root, 'install.json'), 'utf8'));
-    dataRoot = path.resolve(install.data_root);
-  } catch {
-    throw new Error('installed data root cannot be read for protected-state observation');
-  }
-  if (path.relative(home, dataRoot).startsWith('..') || path.isAbsolute(path.relative(home, dataRoot)) === true) {
-    throw new Error('installed data root escaped the disposable Pinokio home');
-  }
-  return {
-    program: program.digest('hex'),
-    selected_version: selected,
-    // This full digest has no paths, names, contents, timestamps, or raw logs.
-    user_data: await digestTree(dataRoot),
-  };
-}
-
-async function installedTupleMatches() {
-  const root = path.join(appRoot, 'app', 'astrid');
-  const name = (await fsp.readFile(path.join(root, 'current'), 'utf8')).trim();
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name) || name === '.' || name === '..') return false;
-  const manifest = JSON.parse(await fsp.readFile(path.join(root, 'versions', name, 'manifest.json'), 'utf8'));
-  return manifest?.agent?.sha === TUPLE.agent && manifest?.runtime?.sha === TUPLE.runtime;
-}
-
 const trace = createTrace();
 const actionTracker = createActionTracker();
 let installDiagnostics = null;
-const io = createObserverIO({ WebSocket, fetch, spawn, appRoot, ptermRoot, home, endpoint: ENDPOINT,
+const io = createObserverIO({ WebSocket, fetch, spawn, appRoot, ptermRoot, home, endpoint: ENDPOINT, appRuntime: APP_RUNTIME,
   record: value => { trace.record(value); write('r21-observer-operation.json', trace.snapshot().at(-1)); } });
-const { openSocket, status, waitForReadiness, runtimeReady, applicationReady, startOldLauncher } = io;
+const { openSocket, status, waitForReadiness, runtimeReady, applicationReady, candidateAppRuntimeReady, startOldLauncher } = io;
 
 async function observeAction(label, script, timeoutMs = ACTION_TIMEOUT_MS) {
   const progressKey = actionPhase(label);
@@ -165,7 +96,8 @@ async function observeAction(label, script, timeoutMs = ACTION_TIMEOUT_MS) {
         const raw = packet.data.raw;
         const window = streamTail + raw;
         if (window.includes('ASTRID_PINOKIO_FAILURE')) observation.launcher_failure = true;
-        if (window.includes('Astrid is updated and running.')) observation.installer_success = true;
+        if (window.includes('Astrid is updated and running.')
+            || progressKey === 'install' && window.includes(INITIAL_INSTALL_SUCCESS)) observation.installer_success = true;
         streamTail = window.slice(-128);
         if (raw.includes('--managed-by') && raw.includes('pinokio')) observation.installer_dispatch = true;
         if (raw.includes(FIRST_REFUSAL)) observation.terminal.expected_refusal = true;
@@ -257,8 +189,8 @@ async function main() {
   substage('initial-start-readiness');
   await startOldLauncher();
   substage('state-before');
-  const installedBefore = await installedTupleMatches();
-  const before = await digestProtectedState();
+  const installedBefore = await installedTupleMatches(appRoot, TUPLE);
+  const before = await digestProtectedState(appRoot, home);
   substage('first-click');
   const first = await observeAction('first Update', 'pinokio/update.js');
   // The exact refusal originates in the R-17 installer after the old action's
@@ -267,7 +199,7 @@ async function main() {
   first.installer_dispatch = first.terminal.expected_refusal;
   progress.first_click = first; retainProgress();
   substage('state-after-first-click');
-  const afterFirst = await digestProtectedState();
+  const afterFirst = await digestProtectedState(appRoot, home);
   substage('stop');
   const stopped = await observeAction('historical Stop', 'pinokio/stop.js');
   stopped.start_running_after = await status(path.join(appRoot, 'pinokio/start.js'));
@@ -284,10 +216,12 @@ async function main() {
   await waitForReadiness();
   retry.runtime_ready = await runtimeReady();
   retry.application_ready = await applicationReady();
-  retry.start_to_ready = retry.start_running_after_retry === true && retry.runtime_ready && retry.application_ready;
+  retry.candidate_app_runtime_ready = await candidateAppRuntimeReady();
+  retry.start_to_ready = retry.start_running_after_retry === true && retry.runtime_ready
+    && retry.application_ready && retry.candidate_app_runtime_ready;
   substage('state-after-retry');
-  const installedAfterRetry = await installedTupleMatches();
-  const afterRetry = await digestProtectedState();
+  const installedAfterRetry = await installedTupleMatches(appRoot, TUPLE);
+  const afterRetry = await digestProtectedState(appRoot, home);
   substage('cleanup');
   const cleanup = await observeAction('bounded cleanup Stop', 'pinokio/stop.js');
   cleanup.start_running_after = await status(path.join(appRoot, 'pinokio/start.js'));
@@ -300,6 +234,7 @@ async function main() {
     request_id: request.request_id,
     endpoint: ENDPOINT,
     tuple: TUPLE,
+    install,
     first_click: first,
     installed_tuple: { before: installedBefore, after_retry: installedAfterRetry },
     protected_state: { before, after_first_click: afterFirst, after_retry: afterRetry },

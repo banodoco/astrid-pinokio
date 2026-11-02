@@ -2,7 +2,7 @@
 
 // All retained fields are fixed labels, bounded numbers, booleans, or timestamps.
 const TRACE_LIMIT = 20;
-const operations = ['start-client', 'start-status', 'engine-resource', 'runtime', 'application'];
+const operations = ['start-client', 'start-status', 'engine-resource', 'runtime', 'application', 'app-runtime'];
 const categories = ['pending', 'success', 'not-ready', 'timeout', 'error'];
 const errorClasses = ['TypeError', 'Error', 'AbortError', 'other'];
 const errorCodes = ['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'EPIPE', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'other'];

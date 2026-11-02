@@ -102,7 +102,7 @@ test('Install listener captures native packets while PTerm is pending', async ()
       const child = new EventEmitter();
       queueMicrotask(() => {
         packet({ type: 'start', data: { current: 2, total: 4, method: 'shell.run', params: 'sensitive' } });
-        packet({ type: 'stream', index: 2, total: 4, data: { raw: 'sensitive' }, rpc: { method: 'shell.run' } });
+        packet({ type: 'stream', index: 2, total: 4, data: { raw: "Astrid is installed. Choose Pinokio's Start button." }, rpc: { method: 'shell.run' } });
         packet({ type: 'error', data: 'ENOENT: No such file or directory /sensitive', rpc: { current: 2, total: 4, method: 'shell.run' } });
         packet({ type: 'result', index: 2, total: 4, data: 'sensitive' });
         packet({ type: 'event', data: 'stop' });
@@ -115,6 +115,7 @@ test('Install listener captures native packets while PTerm is pending', async ()
   vm.runInContext(`${constants}\n${action}`, context);
   const result = await vm.runInContext("observeAction('historical install', 'pinokio/install.js')", context);
   assert.equal(result.inner_exit.code, 0);
+  assert.equal(result.installer_success, true);
   assert.deepEqual(evidence.events.map(event => event.kind), ['start', 'stream', 'error', 'result', 'stop', 'disconnect']);
   assert.equal(evidence.first_error.code, 'ENOENT');
   assert.equal(evidence.first_error.reason, 'file_not_found');

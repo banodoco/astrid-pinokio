@@ -197,6 +197,7 @@ const expected = {
 for (const [name, sha] of Object.entries(expected)) {
   if (manifest?.[name]?.sha !== sha) process.exit(1);
 }
+if (manifest?.runtime?.schema_digest !== 'sha256:9628bb5fd6e1dbbec392dd39f2e01031622dcf52d7ccff7cd1f0ad10743dcb1c') process.exit(1);
 NODE
 rm -f "$manifest"
 

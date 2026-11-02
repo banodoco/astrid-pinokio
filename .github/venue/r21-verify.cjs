@@ -17,14 +17,30 @@ const TUPLE = Object.freeze({
 // This standalone observer does not execute the separate Agent journey harness.
 const AGENT_JOURNEY_HARNESS_REFERENCE = '6e46e3bb45ec3feddbd0b0617a50a157e3a4df67';
 const MANIFEST_SHA256 = 'a6eef2804e58e198d56899f1b36d97688d5cbc4a0847a82078ba144df4a207eb';
+// These values come from the pinned App source above: its served manifest and
+// browser Runtime client. The observer uses the real browser-door routes with
+// this exact contract instead of treating an unrelated public-page 200 as an
+// App-to-Runtime readiness result.
+const APP_RUNTIME = Object.freeze({
+  origin: 'https://astrid.haus',
+  protocol: 'workspace.v1',
+  schema_digest: 'sha256:9628bb5fd6e1dbbec392dd39f2e01031622dcf52d7ccff7cd1f0ad10743dcb1c',
+  client_name: 'astrid-browser',
+  client_version: 'astrid-r1-consumer-20260911',
+  requested_scopes: Object.freeze([
+    'handshake', 'installer:update', 'projects:read', 'projects:write',
+    'objects:read', 'objects:write', 'tasks:read', 'tasks:write',
+  ]),
+  capability: 'execution_binding.targeted.v1',
+});
 const REQUEST_ID = 'R-21-PUBLISHED-TUPLE-R1';
 const CONFIRMATION = 'REAL_ENGINE_UPDATE_STOP_RETRY';
 const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
 // This lane is the dedicated diagnostic workflow source.  The product tuple
 // above remains the candidate under observation; this execution lane is never
 // substituted for its Pinokio product pin.
-const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-ADMISSION-BINDING-R1';
-const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-ADMISSION-BINDING-R1';
+const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-REVIEW-FIX-R1';
+const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1';
 const WORKFLOW_PATH = '.github/workflows/r21-real-engine.yml';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const ACTIONS = Object.freeze({
@@ -107,25 +123,38 @@ function verifyReceipt(receipt) {
     fail('installed selected manifests do not match the candidate Agent and Runtime');
   }
 
+  const install = object(receipt.install, 'install');
+  equal(install.action_uri, ACTIONS.install, 'initial Install action URI');
+  exitZero(install, 'initial Install');
+  settled(install, 'initial Install');
+  if (install.installer_dispatch !== true || install.installer_success !== true
+      || install.engine_error !== false || install.launcher_failure !== false) {
+    fail('initial Install lacks accepted installer dispatch/completion or contains an engine/launcher failure');
+  }
+  idle(install.running_after, 'initial Install action status');
+
   const first = object(receipt.first_click, 'first_click');
   equal(first.action_uri, ACTIONS.update, 'first-click action URI');
   exitZero(first, 'first click');
   settled(first, 'first click');
+  if (first.action_id === install.action_id || !Number.isInteger(first.action_id)
+      || !Number.isInteger(install.action_id)) fail('first click is not distinct from the accepted initial Install action');
   if (first.terminal.expected_refusal !== true) fail('first click did not retain the exact R-17 refusal');
   if (first.installer_dispatch !== true) fail('first click did not reach the authentic old-launcher installer dispatch');
   idle(first.running_after, 'first-click action status');
 
   const protectedState = object(receipt.protected_state, 'protected_state');
   for (const key of ['before', 'after_first_click', 'after_retry']) {
-    for (const field of ['program', 'selected_version', 'user_data']) {
+    for (const field of ['program', 'selected_version', 'installed_bytes', 'user_data']) {
       if (!/^[a-f0-9]{64}$/.test(protectedState[key]?.[field] || '')) fail('protected state digest missing or invalid');
     }
   }
   if (!protectedState.before || !protectedState.after_first_click
       || protectedState.before.program !== protectedState.after_first_click.program
       || protectedState.before.selected_version !== protectedState.after_first_click.selected_version
+      || protectedState.before.installed_bytes !== protectedState.after_first_click.installed_bytes
       || protectedState.before.user_data !== protectedState.after_first_click.user_data) {
-    fail('first click changed protected program state, selected version, or user data');
+    fail('first click changed protected program state, selected version, installed bytes, or user data');
   }
 
   const stop = object(receipt.stop, 'stop');
@@ -147,8 +176,10 @@ function verifyReceipt(receipt) {
     fail('retry lacks successful installer completion or contains an engine/launcher failure');
   }
   idle(retry.running_after, 'retry action status');
-  if (retry.start_running_after_retry !== true || retry.runtime_ready !== true || retry.application_ready !== true || retry.start_to_ready !== true) {
-    fail('retry lacks independent Runtime, application, or Stop-to-Start readiness');
+  if (retry.start_running_after_retry !== true || retry.runtime_ready !== true
+      || retry.application_ready !== true || retry.candidate_app_runtime_ready !== true
+      || retry.start_to_ready !== true) {
+    fail('retry lacks independent Runtime, application, candidate App-to-Runtime, or Stop-to-Start readiness');
   }
   if (protectedState.before.user_data !== protectedState.after_retry?.user_data) {
     fail('retry changed the protected user-data digest');
@@ -165,6 +196,6 @@ function verifyReceipt(receipt) {
 }
 
 module.exports = {
-  ACTIONS, CONFIRMATION, ENDPOINT, FIRST_REFUSAL, REQUEST_ID, TUPLE,
+  ACTIONS, APP_RUNTIME, CONFIRMATION, ENDPOINT, FIRST_REFUSAL, REQUEST_ID, TUPLE,
   validateDispatch, verifyReceipt,
 };

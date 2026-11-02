@@ -10,6 +10,7 @@ import { test } from 'node:test';
 const require = createRequire(import.meta.url);
 const { createObserverIO } = require('../.github/venue/r21-observer-io.cjs');
 const { publish } = require('../.github/venue/r21-publish.cjs');
+const { APP_RUNTIME } = require('../.github/venue/r21-verify.cjs');
 const { TRACE_LIMIT, createTrace, actionPhase, createActionTracker, ptermExit } = require('../.github/venue/r21-observer-diagnostics.cjs');
 
 for (const [label, phase] of [['historical install', 'install'], ['first Update', 'first_click'],
@@ -75,18 +76,43 @@ function fixture({ socketMode = 'success', fetchMode = 'success', spawnMode = 'n
   }
   const requests = [];
   const fakeFetch = async (url, options) => {
-    requests.push({ url, signal: options.signal });
-    const kind = url.includes('/resource/') ? 'engine-resource' : url.includes('/health') ? 'runtime' : 'application';
+    const headers = new Headers(options.headers || {});
+    requests.push({ url, signal: options.signal, method: options.method || 'GET', headers, body: options.body });
+    const fromApp = headers.get('origin') === APP_RUNTIME.origin;
+    const kind = url.includes('/resource/') ? 'engine-resource'
+      : url.includes('astrid.haus') ? 'application'
+        : url.includes('r21-observer=1') ? 'runtime'
+        : fromApp ? 'app-runtime' : 'runtime';
+    const responseHeaders = new Headers({
+      'access-control-allow-origin': fetchMode === 'wrong-cors' ? 'https://other.invalid' : APP_RUNTIME.origin,
+      'access-control-allow-methods': 'POST',
+      'access-control-allow-headers': 'content-type',
+    });
     if (fetchMode === `${kind}-timeout`) return new Promise(() => {});
-    if (fetchMode === `${kind}-body-timeout`) return { ok: true, status: 200, json: () => new Promise(() => {}) };
+    if (fetchMode === `${kind}-body-timeout`) return { ok: true, status: 200, headers: responseHeaders, json: () => new Promise(() => {}) };
     if (fetchMode === `${kind}-error`) { const error = new TypeError('private'); error.cause = { code: 'ECONNREFUSED', message: 'private' }; throw error; }
-    if (fetchMode === `${kind}-not-ready`) return { ok: false, status: 503, json: async () => ({}) };
-    return { ok: true, status: 200, json: async () => kind === 'runtime' ? { protocol: fetchMode === 'wrong-protocol' ? 'other' : 'workspace.v1' } : { path: fetchMode === 'wrong-path' ? '/other' : '/app', running_scripts: fetchMode === 'missing-script' ? [] : ['pinokio/start.js'] } };
+    if (fetchMode === `${kind}-not-ready`) return { ok: false, status: 503, headers: responseHeaders, json: async () => ({}) };
+    let body = {};
+    if (kind === 'engine-resource') body = { path: fetchMode === 'wrong-path' ? '/other' : '/app', running_scripts: fetchMode === 'missing-script' ? [] : ['pinokio/start.js'] };
+    if (kind === 'runtime' || kind === 'app-runtime' && url.includes('/health')) body = {
+      status: 'ok', protocol: fetchMode === 'wrong-protocol' ? 'other' : APP_RUNTIME.protocol,
+      schema_digest: fetchMode === 'wrong-schema' ? 'sha256:' + '0'.repeat(64) : APP_RUNTIME.schema_digest,
+      runtime_instance_id: 'runtime-1',
+    };
+    if (kind === 'app-runtime' && url.includes('/handshake') && (options.method || 'GET') === 'POST') body = {
+      protocol: APP_RUNTIME.protocol, schema_digest: APP_RUNTIME.schema_digest, session_id: 'session-1',
+      actor_id: 'astrid-product', realm_id: fetchMode === 'wrong-app-realm' ? 'realm-other' : 'realm-1',
+      scopes: fetchMode === 'wrong-app-scope' ? ['handshake'] : [...APP_RUNTIME.requested_scopes],
+      capabilities: [APP_RUNTIME.capability],
+    };
+    if (kind === 'app-runtime' && url.includes('/realm')) body = { realm_id: 'realm-1' };
+    const status = options.method === 'OPTIONS' ? 204 : 200;
+    return { ok: true, status, headers: responseHeaders, json: async () => body };
   };
   const io = createObserverIO({ WebSocket: Socket, fetch: fakeFetch, spawn: () => {
     child = spawnMode === 'error' ? realSpawn('/path/does-not-exist') : realSpawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{}); process.stdout.write('ready'); setInterval(()=>{},1000)"], { stdio: ['ignore', 'pipe', 'ignore'] });
     return child;
-  }, record: note => notes.push(note), appRoot: '/app', ptermRoot: '/pterm', home: '/tmp', endpoint: 'pinokio://endpoint',
+  }, record: note => notes.push(note), appRoot: '/app', ptermRoot: '/pterm', home: '/tmp', endpoint: 'pinokio://endpoint', appRuntime: APP_RUNTIME,
   connectMs: 20, responseMs: 20, resourceMs: 20, runtimeMs: 20, applicationMs: 20, pollMs, cleanupMs: 100 });
   return { io, notes, sockets, requests, get child() { return child; } };
 }
@@ -113,7 +139,7 @@ test('Start status poll deadline reports timeout and cleans up', async () => {
   assert.notEqual(f.child.signalCode, null);
 });
 
-for (const operation of ['engine-resource', 'runtime', 'application']) {
+for (const operation of ['engine-resource', 'runtime', 'application', 'app-runtime']) {
   for (const mode of ['timeout', 'error', 'not-ready']) {
     test(`${operation} ${mode} remains bounded, classified, and cleans Start client`, async () => {
       const f = fixture({ fetchMode: `${operation}-${mode}` });
@@ -154,6 +180,29 @@ test('Runtime diagnostics distinguish transport, HTTP failure, protocol mismatch
   }
 });
 
+test('candidate App readiness exercises its exact browser-door health, CORS, handshake and realm contract', async () => {
+  const f = fixture();
+  assert.equal(await f.io.candidateAppRuntimeReady(), true);
+  assert.deepEqual(f.requests.map(({ url, method }) => [new URL(url).pathname, method]), [
+    ['/api/runtime/v1/health', 'GET'],
+    ['/api/runtime/v1/handshake', 'OPTIONS'],
+    ['/api/runtime/v1/handshake', 'POST'],
+    ['/api/runtime/v1/realm', 'GET'],
+  ]);
+  assert.ok(f.requests.every(request => request.headers.get('origin') === APP_RUNTIME.origin));
+  assert.deepEqual(JSON.parse(f.requests[2].body), {
+    protocol: APP_RUNTIME.protocol, client_name: APP_RUNTIME.client_name,
+    client_version: APP_RUNTIME.client_version, requested_scopes: APP_RUNTIME.requested_scopes,
+  });
+  await f.io.cleanup();
+  for (const mode of ['wrong-cors', 'wrong-schema', 'wrong-app-scope', 'wrong-app-realm']) {
+    const rejected = fixture({ fetchMode: mode });
+    assert.equal(await rejected.io.candidateAppRuntimeReady(), false, mode);
+    assert.equal(rejected.notes.at(-1).category, 'not-ready', mode);
+    await rejected.io.cleanup();
+  }
+});
+
 test('operation trace retains only the last bounded sanitized records in order', () => {
   const trace = createTrace();
   for (let i = 0; i < TRACE_LIMIT + 7; i++) trace.record({ operation: 'runtime', category: 'error', timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(), runtime: { kind: 'transport', error_class: 'Error', error_code: 'other', raw: 'private' }, raw: 'private' });
@@ -185,8 +234,8 @@ test('successful Start still requires explicit engine, runtime and application r
   const f = fixture();
   const child = await f.io.startOldLauncher();
   await new Promise(resolve => child.stdout.once('data', resolve));
-  assert.deepEqual(f.requests.map(r => r.url.includes('/resource/') ? 'engine-resource' : r.url.includes('/health') ? 'runtime' : 'application'), ['engine-resource', 'runtime', 'application']);
-  assert.deepEqual(f.notes.filter(n => n.category === 'success').map(n => n.operation), ['start-status', 'engine-resource', 'runtime', 'application']);
+  assert.deepEqual(f.notes.filter(n => n.category === 'success').map(n => n.operation),
+    ['start-status', 'engine-resource', 'runtime', 'application', 'app-runtime', 'app-runtime', 'app-runtime', 'app-runtime']);
   const started = Date.now();
   await f.io.cleanup();
   assert.equal(child.signalCode, 'SIGKILL');
@@ -196,7 +245,7 @@ test('successful Start still requires explicit engine, runtime and application r
 
 test('publisher allows only timestamped fixed operation and category fields', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r21-observer-publish-'));
-  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-ADMISSION-BINDING-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-ADMISSION-BINDING-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
   try {
     const evidenceDir = path.join(root, 'evidence'); const destination = path.join(root, 'result'); fs.mkdirSync(evidenceDir);
     const put = last_operation => fs.writeFileSync(path.join(evidenceDir, 'r21-failure.json'), JSON.stringify({ category: 'timeout', last_operation }));
@@ -300,7 +349,7 @@ exports.WebSocket = class extends EventTarget {
 test('publisher retains only a bound, reprojected first Install error', () => {
   const { createInstallDiagnostics } = require('../.github/venue/r21-observer-diagnostics.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r21-first-error-publish-'));
-  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-ADMISSION-BINDING-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-ADMISSION-BINDING-R1', GITHUB_RUN_ID: '101', GITHUB_RUN_ATTEMPT: '2', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1', GITHUB_RUN_ID: '101', GITHUB_RUN_ATTEMPT: '2', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
   try {
     const evidenceDir = path.join(root, 'evidence'); fs.mkdirSync(evidenceDir);
     const binding = { request_id: env.R21_REQUEST_ID, runner_ref: env.R21_RUNNER_REF, run_id: env.GITHUB_RUN_ID, run_attempt: env.GITHUB_RUN_ATTEMPT };
@@ -334,7 +383,7 @@ test('publisher retains only a bound, reprojected first Install error', () => {
 test('publisher retains bounded native Install event and PTerm facts on failure', () => {
   const { createInstallDiagnostics, INSTALL_TRACE_LIMIT } = require('../.github/venue/r21-observer-diagnostics.cjs');
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-install-publish-'));
-  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-ADMISSION-BINDING-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-ADMISSION-BINDING-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
+  const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1', GITHUB_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-REVIEW-FIX-R1', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1', R21_REQUEST_ID: 'R-21-PUBLISHED-TUPLE-R1', R21_CONFIRMATION: 'REAL_ENGINE_UPDATE_STOP_RETRY', R21_RUNNER_REF: 'a'.repeat(40) };
   try {
     const input = path.join(root, 'evidence'); const destination = path.join(root, 'result');
     fs.mkdirSync(input);
