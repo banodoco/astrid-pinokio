@@ -1,6 +1,9 @@
 name: R-25 bounded Windows setup diagnostic
 
 on:
+  push:
+    branches:
+      - lane/M-PIN/R-PIN-WINDOWS-SETUP-REPAIR
   workflow_dispatch:
 
 permissions:
