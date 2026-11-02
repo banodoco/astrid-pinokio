@@ -1,6 +1,6 @@
 'use strict';
 
-// Hosted Windows R-25 route.  This is a producer only: it binds the exact
+// Hosted macOS/Windows R-25 route.  This is a producer only: it binds the exact
 // request and records real engine outcomes, but it never grants qualification.
 const fs = require('node:fs');
 const fsp = fs.promises;
@@ -18,8 +18,15 @@ const APP_REF = 'lane/M-APP/PINOKIO-APP-BINDING';
 const APP_TUPLE_REF = '79f7e5397c044c4c97dc7e97b20ad96f787e5247';
 const APP_URL = 'https://raw.githubusercontent.com/banodoco/astrid-app/';
 const ACTIONS = binding.REQUIRED_ACTIONS;
-const SLOT = 'pinokio-fully-local-windows';
-const TARGETS = { os: 'windows', scheduled_task_paths: ['\\Astrid Runtime'], service_names: ['AstridRuntime'] };
+const TARGET_OS = process.env.R25_TARGET_OS || 'windows';
+const SLOT = process.env.R25_SLOT_ID || (TARGET_OS === 'macos' ? 'pinokio-fully-local-macos' : 'pinokio-fully-local-windows');
+const TARGETS = TARGET_OS === 'macos'
+  ? { os: 'macos', launchd_targets: [process.env.R25_LAUNCHD_TARGET || 'gui/501/haus.astrid.runtime'] }
+  : { os: 'windows', scheduled_task_paths: ['\\Astrid Runtime'], service_names: ['AstridRuntime'] };
+if (!((TARGET_OS === 'macos' && SLOT === 'pinokio-fully-local-macos') ||
+      (TARGET_OS === 'windows' && SLOT === 'pinokio-fully-local-windows'))) {
+  throw new Error('R25_TARGET_OS and R25_SLOT_ID are incompatible');
+}
 const tupleExpected = {
   app: APP_TUPLE_REF, agent: 'ab43bad818ef65ca1e929b973a2f61cd9fc4bf61',
   runtime: '2776ba973b6c8f3555b5629b0840d9691a98d3c2', pinokio: PINOKIO_TUPLE_REF,
