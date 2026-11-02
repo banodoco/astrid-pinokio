@@ -1,5 +1,7 @@
 'use strict';
 
+const { transportFailure } = require('./r21-observer-diagnostics.cjs');
+
 // Network and Start-client ownership for the venue observer. Only fixed labels
 // and outcomes are retained; neither errors nor response contents are recorded.
 function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot, home, endpoint,
@@ -15,7 +17,7 @@ function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot,
     cancelled.signal.addEventListener('abort', done, { once: true });
     if (cancelled.signal.aborted) done();
   });
-  const note = (operation, category) => { if (operation) record({ operation, category, timestamp: new Date().toISOString() }); };
+  const note = (operation, category, runtime) => { if (operation) record({ operation, category, timestamp: new Date().toISOString(), ...(runtime ? { runtime } : {}) }); };
   const disposeSocket = socket => {
     sockets.delete(socket);
     // unws exposes the ws implementation on Node; terminate also closes a
@@ -78,6 +80,7 @@ function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot,
     cancelled.signal.addEventListener('abort', cancel, { once: true });
     if (cancelled.signal.aborted) cancel();
     let timer;
+    let runtime;
     try {
       const timeout = new Promise((_, reject) => {
         timer = setTimeout(() => { controller.abort(); reject(new Error('request timeout')); }, timeoutMs);
@@ -86,11 +89,19 @@ function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot,
         controller.signal.addEventListener('abort', () => reject(new Error('request aborted')), { once: true });
         if (controller.signal.aborted) reject(new Error('request aborted'));
       });
-      const ready = await Promise.race([(async () => check(await fetch(url, { ...options, signal: controller.signal })))(), timeout, aborted]);
-      note(operation, ready ? 'success' : 'not-ready');
+      const ready = await Promise.race([(async () => {
+        let response;
+        try { response = await fetch(url, { ...options, signal: controller.signal }); }
+        catch (error) { if (operation === 'runtime') runtime = transportFailure(error); throw error; }
+        if (operation === 'runtime' && Number.isInteger(response.status) && response.status >= 100 && response.status <= 599) {
+          runtime = { kind: 'http', status: response.status, protocol_match: null };
+        }
+        return check(response, match => { if (runtime?.kind === 'http') runtime.protocol_match = match; });
+      })(), timeout, aborted]);
+      note(operation, ready ? 'success' : 'not-ready', runtime);
       return ready;
     } catch (error) {
-      note(operation, controller.signal.aborted ? 'timeout' : 'error');
+      note(operation, controller.signal.aborted ? 'timeout' : 'error', runtime);
       return false;
     } finally {
       clearTimeout(timer);
@@ -104,9 +115,11 @@ function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot,
     return Boolean(body && typeof body === 'object' && !Array.isArray(body) && typeof body.path === 'string' && body.path === appRoot
       && Array.isArray(body.running_scripts) && body.running_scripts.includes('pinokio/start.js'));
   });
-  const runtimeReady = () => request('runtime', 'http://127.0.0.1:17340/api/runtime/v1/health', runtimeMs, async response => {
+  const runtimeReady = () => request('runtime', 'http://127.0.0.1:17340/api/runtime/v1/health', runtimeMs, async (response, recordMatch) => {
     const body = await response.json().catch(() => null);
-    return response.status === 200 && body?.protocol === 'workspace.v1';
+    const match = body?.protocol === 'workspace.v1';
+    recordMatch(match);
+    return response.status === 200 && match;
   });
   const applicationReady = () => request('application', 'https://astrid.haus/?connect=1', applicationMs, response => response.ok, { redirect: 'follow' });
   async function waitForReadiness() {

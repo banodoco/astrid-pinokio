@@ -9,6 +9,7 @@ import { test } from 'node:test';
 const require = createRequire(import.meta.url);
 const { createObserverIO } = require('../.github/venue/r21-observer-io.cjs');
 const { publish } = require('../.github/venue/r21-publish.cjs');
+const { TRACE_LIMIT, createTrace } = require('../.github/venue/r21-observer-diagnostics.cjs');
 
 function fixture({ socketMode = 'success', fetchMode = 'success', spawnMode = 'normal', pollMs = 45 } = {}) {
   const notes = [];
@@ -36,7 +37,7 @@ function fixture({ socketMode = 'success', fetchMode = 'success', spawnMode = 'n
     const kind = url.includes('/resource/') ? 'engine-resource' : url.includes('/health') ? 'runtime' : 'application';
     if (fetchMode === `${kind}-timeout`) return new Promise(() => {});
     if (fetchMode === `${kind}-body-timeout`) return { ok: true, status: 200, json: () => new Promise(() => {}) };
-    if (fetchMode === `${kind}-error`) throw new Error('private');
+    if (fetchMode === `${kind}-error`) { const error = new TypeError('private'); error.cause = { code: 'ECONNREFUSED', message: 'private' }; throw error; }
     if (fetchMode === `${kind}-not-ready`) return { ok: false, status: 503, json: async () => ({}) };
     return { ok: true, status: 200, json: async () => kind === 'runtime' ? { protocol: fetchMode === 'wrong-protocol' ? 'other' : 'workspace.v1' } : { path: fetchMode === 'wrong-path' ? '/other' : '/app', running_scripts: fetchMode === 'missing-script' ? [] : ['pinokio/start.js'] } };
   };
@@ -95,6 +96,32 @@ for (const mode of ['wrong-path', 'missing-script', 'wrong-protocol']) {
   });
 }
 
+test('Runtime diagnostics distinguish transport, HTTP failure, protocol mismatch and success', async () => {
+  for (const [mode, expected, ready] of [
+    ['runtime-error', { kind: 'transport', error_class: 'TypeError', error_code: 'ECONNREFUSED' }, false],
+    ['runtime-not-ready', { kind: 'http', status: 503, protocol_match: false }, false],
+    ['wrong-protocol', { kind: 'http', status: 200, protocol_match: false }, false],
+    ['success', { kind: 'http', status: 200, protocol_match: true }, true],
+    ['runtime-body-timeout', { kind: 'http', status: 200, protocol_match: null }, false],
+  ]) {
+    const f = fixture({ fetchMode: mode });
+    assert.equal(await f.io.runtimeReady(), ready);
+    assert.deepEqual(f.notes.at(-1).runtime, expected);
+    assert.equal(JSON.stringify(f.notes).includes('private'), false);
+    await f.io.cleanup();
+  }
+});
+
+test('operation trace retains only the last bounded sanitized records in order', () => {
+  const trace = createTrace();
+  for (let i = 0; i < TRACE_LIMIT + 7; i++) trace.record({ operation: 'runtime', category: 'error', timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(), runtime: { kind: 'transport', error_class: 'Error', error_code: 'other', raw: 'private' }, raw: 'private' });
+  const entries = trace.snapshot();
+  assert.equal(entries.length, TRACE_LIMIT);
+  assert.equal(entries[0].timestamp, '2026-01-01T00:00:07.000Z');
+  assert.equal(entries.at(-1).timestamp, '2026-01-01T00:00:26.000Z');
+  assert.equal(JSON.stringify(entries).includes('private'), false);
+});
+
 test('engine resource body timeout also aborts', async () => {
   const f = fixture({ fetchMode: 'engine-resource-body-timeout' });
   assert.equal(await f.io.engineResourceReady(), false);
@@ -135,6 +162,15 @@ test('publisher allows only timestamped fixed operation and category fields', ()
     publish({ env, evidenceDir, destination, setupExit: 0, journeyExit: 1 });
     let failure = JSON.parse(fs.readFileSync(path.join(destination, 'observer-failure.json')));
     assert.deepEqual(failure.last_operation, { operation: 'runtime', category: 'timeout', timestamp: '2026-11-02T00:00:00.000Z' });
+    const good = { operation: 'runtime', category: 'error', timestamp: '2026-11-02T00:00:00.000Z', runtime: { kind: 'transport', error_class: 'TypeError', error_code: 'ECONNREFUSED', raw: 'private' } };
+    fs.writeFileSync(path.join(evidenceDir, 'r21-failure.json'), JSON.stringify({ category: 'timeout', last_operation: good, readiness_trace: [...Array(25).fill(good), { ...good, runtime: { kind: 'http', status: 200, protocol_match: true, body: 'private' } }, { ...good, runtime: { kind: 'transport', error_class: 'private', error_code: 'private' } }] }));
+    publish({ env, evidenceDir, destination, setupExit: 0, journeyExit: 1 });
+    failure = JSON.parse(fs.readFileSync(path.join(destination, 'observer-failure.json')));
+    assert.equal(failure.readiness_trace.length, TRACE_LIMIT);
+    assert.deepEqual(failure.last_operation.runtime, { kind: 'transport', error_class: 'TypeError', error_code: 'ECONNREFUSED' });
+    assert.deepEqual(failure.readiness_trace.at(-2).runtime, { kind: 'http', status: 200, protocol_match: true });
+    assert.equal(failure.readiness_trace.at(-1).runtime, undefined);
+    assert.equal(JSON.stringify(failure).includes('private'), false);
     put({ operation: 'private', category: 'timeout', timestamp: '2026-11-02T00:00:00.000Z' });
     publish({ env, evidenceDir, destination, setupExit: 0, journeyExit: 1 });
     failure = JSON.parse(fs.readFileSync(path.join(destination, 'observer-failure.json')));
@@ -171,6 +207,7 @@ exports.WebSocket = class extends EventTarget {
     assert.equal(failure.category, 'engine-or-observer');
     assert.equal(failure.last_operation.operation, 'start-status');
     assert.equal(failure.last_operation.category, 'error');
+    assert.deepEqual(failure.readiness_trace.at(-1), failure.last_operation);
     const pid = Number(fs.readFileSync(path.join(root, 'start.pid'), 'utf8'));
     assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

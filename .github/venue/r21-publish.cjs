@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { TRACE_LIMIT, projectOperation } = require('./r21-observer-diagnostics.cjs');
 const { validateDispatch, verifyReceipt, TUPLE, ENDPOINT, REQUEST_ID } = require('./r21-verify.cjs');
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const bool = value => value === true ? true : value === false ? false : null;
@@ -79,14 +80,9 @@ function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
   if (failure && stages.includes(failure.stage)) files['runner-failure.json'] = { schema: 1, status: 'blocked', stage: failure.stage };
   const obsFailure = read(path.join(evidenceDir, 'r21-failure.json'));
   if (obsFailure && ['timeout','engine-or-observer'].includes(obsFailure.category)) {
-    const operation = obsFailure.last_operation;
-    const allowedOperation = ['start-client', 'start-status', 'engine-resource', 'runtime', 'application'];
-    const allowedCategory = ['pending', 'success', 'not-ready', 'timeout', 'error'];
-    const timestamp = typeof operation?.timestamp === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(operation.timestamp)
-      && !Number.isNaN(Date.parse(operation.timestamp)) && new Date(operation.timestamp).toISOString() === operation.timestamp ? operation.timestamp : null;
+    const trace = Array.isArray(obsFailure.readiness_trace) ? obsFailure.readiness_trace.slice(-TRACE_LIMIT).map(projectOperation).filter(Boolean) : [];
     files['observer-failure.json'] = { schema: 1, status: 'blocked', category: obsFailure.category,
-      last_operation: allowedOperation.includes(operation?.operation) && allowedCategory.includes(operation?.category) && timestamp
-        ? { operation: operation.operation, category: operation.category, timestamp } : null };
+      last_operation: projectOperation(obsFailure.last_operation), readiness_trace: trace };
   }
   for (const [name, data] of Object.entries(files)) fs.writeFileSync(path.join(destination, name), `${JSON.stringify(data, null, 2)}\n`);
   const sums = Object.keys(files).sort().map(name => `${digest(fs.readFileSync(path.join(destination, name)))}  ${name}`).join('\n') + '\n';

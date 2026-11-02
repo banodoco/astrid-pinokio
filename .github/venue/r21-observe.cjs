@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { createTrace } = require('./r21-observer-diagnostics.cjs');
 const { createObserverIO } = require('./r21-observer-io.cjs');
 const {
   ACTIONS, ENDPOINT, FIRST_REFUSAL, TUPLE, verifyReceipt,
@@ -112,8 +113,9 @@ async function digestProtectedState() {
   };
 }
 
+const trace = createTrace();
 const io = createObserverIO({ WebSocket, fetch, spawn, appRoot, ptermRoot, home, endpoint: ENDPOINT,
-  record: value => write('r21-observer-operation.json', value) });
+  record: value => { trace.record(value); write('r21-observer-operation.json', trace.snapshot().at(-1)); } });
 const { openSocket, status, waitForReadiness, runtimeReady, applicationReady, startOldLauncher } = io;
 
 function ptermExit(child, label, timeoutMs) {
@@ -298,6 +300,6 @@ main().then(() => io.cleanup()).catch(async (error) => {
     fs.mkdirSync(output, { recursive: true });
     let lastOperation = null;
     try { lastOperation = JSON.parse(fs.readFileSync(path.join(output, 'r21-observer-operation.json'), 'utf8')); } catch {}
-    write('r21-failure.json', { schema: 1, status: 'blocked', category: /timeout/i.test(error.message) ? 'timeout' : 'engine-or-observer', last_operation: lastOperation });
+    write('r21-failure.json', { schema: 1, status: 'blocked', category: /timeout/i.test(error.message) ? 'timeout' : 'engine-or-observer', last_operation: lastOperation, readiness_trace: trace.snapshot() });
   } finally { await io.cleanup(); }
 });
