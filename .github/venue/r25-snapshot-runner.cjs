@@ -143,6 +143,49 @@ function captureProcessSnapshot(file, roots) {
   }
 }
 
+function childExitResult(child) {
+  if (!child || (child.exitCode === null && child.signalCode === null)) return null;
+  return { code: child.exitCode, signal: child.signalCode || null };
+}
+
+function waitForChildExit(child, timeoutMs) {
+  const existing = childExitResult(child);
+  if (existing) return Promise.resolve(existing);
+  return new Promise(resolve => {
+    let timer;
+    let settled = false;
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.removeListener('exit', onExit);
+      child.removeListener('error', onError);
+      resolve(result);
+    };
+    const onExit = (code, signal) => finish({ code, signal: signal || null });
+    const onError = () => finish(childExitResult(child) || { code: null, signal: null });
+    child.once('exit', onExit);
+    child.once('error', onError);
+    timer = setTimeout(() => finish(childExitResult(child)), timeoutMs);
+    const afterAttach = childExitResult(child);
+    if (afterAttach) finish(afterAttach);
+  });
+}
+
+async function cleanupOwnedDaemon(daemon, { termMs = 2000, killMs = 1000 } = {}) {
+  const alreadyExited = childExitResult(daemon);
+  if (alreadyExited) return { signal: null, exit: alreadyExited, bounded: true };
+  try { daemon.kill('SIGTERM'); } catch {}
+  let exit = await waitForChildExit(daemon, termMs);
+  if (exit) return { signal: 'SIGTERM', exit, bounded: true };
+  try { daemon.kill('SIGKILL'); } catch {}
+  exit = await waitForChildExit(daemon, killMs);
+  if (!exit) {
+    try { daemon.unref(); } catch {}
+  }
+  return { signal: 'SIGKILL', exit, bounded: Boolean(exit) };
+}
+
 async function githubJson(url) {
   const response = await fetch(url, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${process.env.GITHUB_TOKEN}` } });
   if (!response.ok) throw new Error(`GitHub API ${response.status} for ${url}`);
@@ -423,46 +466,48 @@ async function main() {
     setupDiagnostic.stage('daemon-spawn');
   }
   process.once('exit', () => { if (daemon.exitCode === null) daemon.kill(); });
-  let daemonReady = false;
-  for (let attempt = 0; attempt < 90; attempt += 1) {
-    if (daemon.exitCode !== null) break;
-    try { const response = await fetch('http://127.0.0.1:42000/pinokio/version'); if (response.ok) { daemonReady = true; break; } } catch {}
-    await new Promise(resolve => setTimeout(resolve, 1000));
-  }
-  if (!daemonReady) throw new Error('native pinokiod did not reach readiness');
-  setupDiagnostic?.stage('daemon-ready');
-  const { WebSocket } = require(path.join(ptermRoot, 'node_modules', 'unws'));
-  const trace = createObserverIO({ WebSocket, fetch, spawn, record: () => {}, appRoot, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', pollMs: 120000 });
-  // Installation is disposable preparation, outside the six measured
-  // boundaries. It is still driven through the real Pinokio engine and is
-  // allowed to fail closed before an evidence session can begin.
-  const preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: ROUTE.installScript, action: 'setup-install', logRoot, timeoutMs: 45 * 60 * 1000, diagnostic: setupDiagnosticView });
-  if (setupDiagnostic) {
-    copyBoundedTail(path.join(isolatedUserHome, 'Library', 'Logs', 'Astrid Runtime', 'install.log'), path.join(diagnostics, 'installer-output.log'));
-    setupDiagnostic.stage('installer-output-capture');
-    setupDiagnostic.stage('setup-complete');
-  }
-  if (preparation.first_error || preparation.inner_exit.code !== 0 || preparation.terminal.error) throw new Error('disposable Pinokio install preparation failed');
-  const mode = readJson(path.join(appRoot, 'app', 'install-mode.json'));
-  if (mode.schema_version !== 1 || mode.mode !== ROUTE.installMode) throw new Error(`preparation did not retain ${ROUTE.installMode} install mode`);
-  const install = readJson(path.join(appRoot, 'app', 'astrid', 'install.json'));
-  const dataRoot = path.resolve(install.data_root || '');
-  const isolatedRoot = path.resolve(path.dirname(output));
-  if (!path.isAbsolute(install.data_root || '') || (dataRoot !== isolatedRoot && !dataRoot.startsWith(`${isolatedRoot}${path.sep}`))) {
-    throw new Error('installed data root escaped the isolated run root');
-  }
-  fs.mkdirSync(dataRoot, { recursive: true });
-  const sentinel = path.join(dataRoot, 'r25-option-b-sentinel.json');
-  const sentinelBytes = Buffer.from(`${canonical({ schema: 'astrid.r25.option-b-sentinel.v1', slot_id: SLOT, tuple })}\n`, 'ascii');
-  fs.writeFileSync(sentinel, sentinelBytes, { flag: 'wx', mode: 0o600 });
-  const protectedData = { root: dataRoot, sentinel, sha256: digest(sentinelBytes) };
-  const initialCensus = TARGET_OS === 'macos'
-    ? captureMacCensus(path.resolve(cli['agent-root']), TARGETS.launchd_targets[0]) : null;
-  if (initialCensus) writeCanonical(path.join(diagnostics, 'census', 'initial.json'), initialCensus);
-  const worker = spawn(process.env.PYTHON || 'python', [path.join(process.cwd(), '.github', 'venue', 'r25-snapshot-worker.py'), requestPath, output], { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: path.resolve(cli['agent-root']) }, stdio: ['pipe', 'pipe', 'ignore'] });
-  const results = [];
+  let trace = null;
+  let worker = null;
   let finalCensus = null;
   try {
+    let daemonReady = false;
+    for (let attempt = 0; attempt < 90; attempt += 1) {
+      if (daemon.exitCode !== null) break;
+      try { const response = await fetch('http://127.0.0.1:42000/pinokio/version'); if (response.ok) { daemonReady = true; break; } } catch {}
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    if (!daemonReady) throw new Error('native pinokiod did not reach readiness');
+    setupDiagnostic?.stage('daemon-ready');
+    const { WebSocket } = require(path.join(ptermRoot, 'node_modules', 'unws'));
+    trace = createObserverIO({ WebSocket, fetch, spawn, record: () => {}, appRoot, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', pollMs: 120000 });
+    // Installation is disposable preparation, outside the six measured
+    // boundaries. It is still driven through the real Pinokio engine and is
+    // allowed to fail closed before an evidence session can begin.
+    const preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: ROUTE.installScript, action: 'setup-install', logRoot, timeoutMs: 45 * 60 * 1000, diagnostic: setupDiagnosticView });
+    if (setupDiagnostic) {
+      copyBoundedTail(path.join(isolatedUserHome, 'Library', 'Logs', 'Astrid Runtime', 'install.log'), path.join(diagnostics, 'installer-output.log'));
+      setupDiagnostic.stage('installer-output-capture');
+      setupDiagnostic.stage('setup-complete');
+    }
+    if (preparation.first_error || preparation.inner_exit.code !== 0 || preparation.terminal.error) throw new Error('disposable Pinokio install preparation failed');
+    const mode = readJson(path.join(appRoot, 'app', 'install-mode.json'));
+    if (mode.schema_version !== 1 || mode.mode !== ROUTE.installMode) throw new Error(`preparation did not retain ${ROUTE.installMode} install mode`);
+    const install = readJson(path.join(appRoot, 'app', 'astrid', 'install.json'));
+    const dataRoot = path.resolve(install.data_root || '');
+    const isolatedRoot = path.resolve(path.dirname(output));
+    if (!path.isAbsolute(install.data_root || '') || (dataRoot !== isolatedRoot && !dataRoot.startsWith(`${isolatedRoot}${path.sep}`))) {
+      throw new Error('installed data root escaped the isolated run root');
+    }
+    fs.mkdirSync(dataRoot, { recursive: true });
+    const sentinel = path.join(dataRoot, 'r25-option-b-sentinel.json');
+    const sentinelBytes = Buffer.from(`${canonical({ schema: 'astrid.r25.option-b-sentinel.v1', slot_id: SLOT, tuple })}\n`, 'ascii');
+    fs.writeFileSync(sentinel, sentinelBytes, { flag: 'wx', mode: 0o600 });
+    const protectedData = { root: dataRoot, sentinel, sha256: digest(sentinelBytes) };
+    const initialCensus = TARGET_OS === 'macos'
+      ? captureMacCensus(path.resolve(cli['agent-root']), TARGETS.launchd_targets[0]) : null;
+    if (initialCensus) writeCanonical(path.join(diagnostics, 'census', 'initial.json'), initialCensus);
+    worker = spawn(process.env.PYTHON || 'python', [path.join(process.cwd(), '.github', 'venue', 'r25-snapshot-worker.py'), requestPath, output], { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: path.resolve(cli['agent-root']) }, stdio: ['pipe', 'pipe', 'ignore'] });
+    const results = [];
     for (const item of plans) {
       const action = item.plan.action;
       await workerSend(worker, { op: 'open', action });
@@ -504,15 +549,16 @@ async function main() {
         writeCanonical(path.join(diagnostics, 'census', 'final.json'), finalCensus);
       } catch {}
     }
-    await trace.cleanup();
-    if (worker.exitCode === null) worker.kill();
-    if (daemon.exitCode === null) daemon.kill();
-    daemonOutput?.stdout.close();
-    daemonOutput?.stderr.close();
+    try { if (trace) await trace.cleanup(); } finally {
+      if (worker?.exitCode === null) worker.kill();
+      await cleanupOwnedDaemon(daemon);
+      daemonOutput?.stdout.close();
+      daemonOutput?.stderr.close();
+    }
   }
 }
 
-module.exports = { actionPlan, routeConfig, createBoundedCapture, copyBoundedTail, captureProcessSnapshot };
+module.exports = { actionPlan, routeConfig, createBoundedCapture, copyBoundedTail, captureProcessSnapshot, cleanupOwnedDaemon };
 if (require.main === module) {
   main().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });
 }
