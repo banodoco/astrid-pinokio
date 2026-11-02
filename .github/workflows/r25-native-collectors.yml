@@ -70,6 +70,9 @@ jobs:
             "$SOURCE_ROOT/.github/venue/adapters/macos-observer.c" \
             -framework EndpointSecurity -lbsm \
             -o "$SOURCE_ROOT/.github/venue/adapters/macos-observer"
+      - name: Retain bounded macOS helper identity
+        shell: bash
+        run: shasum -a 256 "$SOURCE_ROOT/.github/venue/adapters/macos-observer" > "$RUNNER_TEMP/r25-native-macos-helper.sha256"
       - name: Run focused native parser/route test
         shell: bash
         working-directory: ${{ runner.temp }}/r25-macos-source
@@ -81,6 +84,7 @@ jobs:
           name: r25-native-macos-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/r25-native-binding-macos.json
+            ${{ runner.temp }}/r25-native-macos-helper.sha256
           if-no-files-found: warn
           retention-days: 30
 
@@ -118,7 +122,19 @@ jobs:
       - name: Run focused Windows build and bounded ETW test
         shell: pwsh
         working-directory: ${{ runner.temp }}\r25-windows-source
-        run: node tests/windows-observer-adapter.test.mjs
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $PWD 'pinokio\windows-observer\etw-observer.exe'
+          $source = Join-Path $PWD 'pinokio\windows-observer\etw-observer.cpp'
+          $obj = Join-Path $env:RUNNER_TEMP 'r25-etw-observer.obj'
+          $build = "call `"$setup`" >nul && cl /nologo /EHsc /W4 /O2 /Fo`"$obj`" /Fe`"$exe`" `"$source`" /link advapi32.lib ole32.lib"
+          & cmd.exe /d /s /c $build
+          if ($LASTEXITCODE -ne 0) { throw "fixed ETW helper build failed with exit $LASTEXITCODE" }
+          @{ source_ref = $env:SOURCE_REF; executable = 'pinokio/windows-observer/etw-observer.exe'; sha256 = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant() } | ConvertTo-Json -Compress | Set-Content -Encoding utf8 "$env:RUNNER_TEMP\r25-native-windows-helper.json"
+          node tests/windows-observer-adapter.test.mjs
       - name: Retain bounded binding result
         if: always()
         uses: actions/upload-artifact@v4
@@ -126,5 +142,6 @@ jobs:
           name: r25-native-windows-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}\r25-native-binding-windows.json
+            ${{ runner.temp }}\r25-native-windows-helper.json
           if-no-files-found: warn
           retention-days: 30
