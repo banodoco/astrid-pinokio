@@ -14,14 +14,19 @@ probe() {
     printf '%s source=failed\n' "$name" >> "$out/host.txt"
     return 1
   fi
-  if npm ci --omit=dev --prefix "$RUNNER_TEMP/$name" --silent > "$RUNNER_TEMP/$name-install.log" 2>&1; then
+  local log="$RUNNER_TEMP/$name-install.log"
+  npm ci --omit=dev --prefix "$RUNNER_TEMP/$name" --loglevel=error > "$log" 2>&1
+  local npm_status=$?
+  if [ "$npm_status" -eq 0 ]; then
     printf '%s npm-ci=ok\n' "$name" >> "$out/host.txt"
   else
     printf '%s npm-ci=failed\n' "$name" >> "$out/host.txt"
-    # Keep only standardized npm error codes, not arbitrary installation logs.
-    (grep -Eo 'npm error code [A-Z0-9_]+' "$RUNNER_TEMP/$name-install.log" | sort -u >> "$out/host.txt") || true
+    printf '%s npm-ci-exit=%s\n' "$name" "$npm_status" >> "$out/host.txt"
+    node .github/venue/npm-diagnostic.cjs "$log" "$RUNNER_TEMP/$name/package-lock.json" >> "$out/host.txt" || printf '%s npm-diagnostic=unavailable\n' "$name" >> "$out/host.txt"
+    rm -f "$log"
     return 1
   fi
+  rm -f "$log"
 }
 failed=0
 probe pterm https://github.com/pinokiocomputer/pterm.git 5be43718701c448b43daf0ce51d8935f170065bb || failed=1

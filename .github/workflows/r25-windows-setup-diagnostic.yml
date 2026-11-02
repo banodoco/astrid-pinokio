@@ -18,6 +18,7 @@ jobs:
       PINOKIOD_REF: add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
       PTERM_REF: 5be43718701c448b43daf0ce51d8935f170065bb
       R25_SETUP_TIMEOUT_MS: 600000
+      R25_DIAGNOSTICS: ${{ runner.temp }}\r25-diagnostics
       R25_TUPLE_JSON: >-
         {"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","artifacts":{"public/install":"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d","public/install.sh":"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285","public/install.ps1":"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"},"published_at":"2026-11-02T17:55:27Z"}
     steps:
@@ -25,6 +26,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force $env:R25_DIAGNOSTICS | Out-Null
           git config --global core.autocrlf false
           git config --global core.eol lf
       - uses: actions/checkout@v4
@@ -62,7 +64,16 @@ jobs:
           git -C $env:PINOKIOD_ROOT config core.eol lf
           git -C $env:PINOKIOD_ROOT checkout --detach FETCH_HEAD
           if ((git -C $env:PINOKIOD_ROOT rev-parse HEAD) -ne $env:PINOKIOD_REF) { throw 'pinokiod HEAD differs' }
-          npm ci --omit=dev --prefix $env:PINOKIOD_ROOT --silent
+          $log = Join-Path $env:R25_DIAGNOSTICS 'pinokiod-npm-ci.log'
+          & npm ci --omit=dev --prefix $env:PINOKIOD_ROOT --loglevel=error *> $log
+          $npmExit = $LASTEXITCODE
+          if ($npmExit -ne 0) {
+            @('pinokiod npm-ci=failed', "pinokiod npm-ci-exit=$npmExit", (node .github/venue/npm-diagnostic.cjs $log (Join-Path $env:PINOKIOD_ROOT 'package-lock.json'))) | Set-Content (Join-Path $env:R25_DIAGNOSTICS 'pinokiod-npm-ci.txt')
+            Remove-Item -Force $log
+            throw "pinokiod npm ci failed with exit $npmExit"
+          }
+          'pinokiod npm-ci=ok' | Set-Content (Join-Path $env:R25_DIAGNOSTICS 'pinokiod-npm-ci.txt')
+          Remove-Item -Force $log
           git clone --filter=blob:none --no-checkout https://github.com/pinokiocomputer/pterm.git $env:PTERM_ROOT
           git -C $env:PTERM_ROOT fetch --no-tags --depth=1 origin $env:PTERM_REF
           git -C $env:PTERM_ROOT config core.autocrlf false
