@@ -82,6 +82,15 @@ async function observeAction(label, script, timeoutMs = ACTION_TIMEOUT_MS) {
       installer_success: false,
     };
     let streamTail = '';
+    let firstFailure = null;
+    let notifyFailure;
+    const failureSignal = new Promise(resolve => { notifyFailure = resolve; });
+    const recordFailure = (source, text) => {
+      if (firstFailure) return;
+      firstFailure = { source, text };
+      if (progressKey === 'install') installDiagnostics?.firstCause(firstFailure);
+      notifyFailure(firstFailure);
+    };
     let disconnected;
     const done = new Promise((resolve) => { disconnected = resolve; });
     socket.addEventListener('message', (event) => {
@@ -100,13 +109,19 @@ async function observeAction(label, script, timeoutMs = ACTION_TIMEOUT_MS) {
       if (packet.type === 'stream' && typeof packet.data?.raw === 'string') {
         const raw = packet.data.raw;
         const window = streamTail + raw;
-        if (window.includes('ASTRID_PINOKIO_FAILURE')) observation.launcher_failure = true;
+        if (window.includes('ASTRID_PINOKIO_FAILURE')) {
+          observation.launcher_failure = true;
+          // This is a known failed installer action, not a reason to spend the
+          // remaining 45-minute initial provisioning allowance.  The text is
+          // redacted and bounded by Install diagnostics before persistence.
+          if (progressKey === 'install') recordFailure('launcher_failure_marker', window);
+        }
         if (window.includes('Astrid is updated and running.')
             || progressKey === 'install' && window.includes(INITIAL_INSTALL_SUCCESS)) {
           observation.installer_success = true;
           if (progressKey === 'install') observation.installer_dispatch = true;
         }
-        streamTail = window.slice(-128);
+        streamTail = window.slice(-8192);
         if (raw.includes(FIRST_REFUSAL)) observation.terminal.expected_refusal = true;
       }
       if (packet.type === 'result' && isObject(packet.data)) {
@@ -127,7 +142,20 @@ async function observeAction(label, script, timeoutMs = ACTION_TIMEOUT_MS) {
     const child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', ENDPOINT], {
       cwd: home, env: process.env, stdio: ['ignore', 'ignore', 'ignore'],
     });
-    observation.inner_exit = await ptermExit(child, label, timeoutMs, progressKey === 'install' ? (event, value) => installDiagnostics?.pterm(event, value) : null);
+    observation.inner_exit = await ptermExit(child, label, timeoutMs,
+      progressKey === 'install' ? (event, value) => installDiagnostics?.pterm(event, value) : null,
+      progressKey === 'install' ? failureSignal : null);
+    const innerFailure = observation.inner_exit.code !== 0 || observation.inner_exit.signal !== null;
+    if (innerFailure) recordFailure('inner_nonzero_exit', streamTail);
+    if (firstFailure || innerFailure) {
+      // Do not wait for listener settlement or a status request after a known
+      // failed inner action. ptermExit bounds TERM/KILL settlement; this closes
+      // the observer side immediately before the main failure cleanup runs.
+      progress[progressKey] = observation;
+      retainProgress();
+      io.disposeSocket(socket);
+      throw new Error(`${label} PTerm failed`);
+    }
     setOperation(null);
     progress[progressKey] = observation;
     retainProgress();

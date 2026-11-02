@@ -11,6 +11,11 @@ const actionOperations = ['socket-connect', 'subscription', 'pterm', 'disconnect
 const actionLabels = Object.freeze({ 'historical install': 'install', 'first Update': 'first_click',
   'historical Stop': 'stop', 'fresh Update retry': 'retry', 'bounded cleanup Stop': 'cleanup' });
 const actionPhase = label => Object.hasOwn(actionLabels, label) ? actionLabels[label] : null;
+// A known failed Install must not consume the initial-install allowance.  These
+// two bounds cover only PTerm settlement after we have sent it TERM/KILL; the
+// outer runner still owns process-group cleanup as a last resort.
+const FAST_FAILURE_TERM_GRACE_MS = 5000;
+const FAST_FAILURE_SETTLE_MS = 2000;
 function projectActionFailure(value) {
   if (!actionPhases.includes(value?.phase) || !actionOperations.includes(value?.operation)
       || !['timeout', 'error'].includes(value?.status)) return null;
@@ -32,19 +37,63 @@ function createActionTracker() {
     failure() { return failure; },
   };
 }
-function ptermExit(child, label, timeoutMs, diagnostic = null) {
+function ptermExit(child, label, timeoutMs, diagnostic = null, failureSignal = null, options = {}) {
   const note = (event, value) => { try { diagnostic?.(event, value); } catch {} };
   const started = Date.now();
+  const termGraceMs = Number.isSafeInteger(options.termGraceMs) && options.termGraceMs >= 0
+    ? options.termGraceMs : FAST_FAILURE_TERM_GRACE_MS;
+  const settleMs = Number.isSafeInteger(options.settleMs) && options.settleMs >= 0
+    ? options.settleMs : FAST_FAILURE_SETTLE_MS;
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let failureTimer = null;
+    let settleTimer = null;
+    const clear = () => {
+      clearTimeout(timer);
+      clearTimeout(failureTimer);
+      clearTimeout(settleTimer);
+    };
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      clear();
+      resolve(value);
+    };
+    const knownFailure = failure => {
+      if (settled) return;
+      // The text itself never reaches this helper.  Keep only the fixed source
+      // label in diagnostics so an attacker cannot use a packet to inject data.
+      note('known-failure', { source: failure?.source === 'launcher_failure_marker'
+        ? 'launcher_failure_marker' : 'inner_nonzero_exit' });
+      try { child.kill('SIGTERM'); } catch {}
+      failureTimer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+        note('known-failure-kill');
+        settleTimer = setTimeout(() => finish({ code: null, signal: 'SIGKILL' }), settleMs);
+      }, termGraceMs);
+    };
     const timer = setTimeout(() => {
       const fired = Date.now();
       child.kill('SIGTERM');
+      settled = true;
+      clearTimeout(failureTimer);
+      clearTimeout(settleTimer);
       reject(new Error(`${label} PTerm timeout`));
       note('timer-fire', { at: fired });
     }, timeoutMs);
-    child.once('error', () => { clearTimeout(timer); reject(new Error(`${label} PTerm spawn failed`)); note('spawn-error'); });
-    child.once('exit', (code, signal) => { clearTimeout(timer); resolve({ code, signal: signal || null }); note('child-exit', { code, signal }); });
+    child.once('error', () => {
+      if (settled) return;
+      settled = true;
+      clear();
+      reject(new Error(`${label} PTerm spawn failed`));
+      note('spawn-error');
+    });
+    child.once('exit', (code, signal) => {
+      note('child-exit', { code, signal });
+      finish({ code, signal: signal || null });
+    });
     note('timer-start', { started, deadline: started + timeoutMs });
+    if (failureSignal && typeof failureSignal.then === 'function') failureSignal.then(knownFailure, () => {});
   });
 }
 
@@ -65,6 +114,41 @@ const firstErrorReasons = ['unknown', 'installer_failure_marker', 'command_not_f
 const shellResultClasses = ['empty', 'object', 'other'];
 const FIRST_ERROR_SCAN_LIMIT = 8192;
 const failureMarker = 'ASTRID_PINOKIO_FAILURE';
+const FIRST_CAUSE_TEXT_LIMIT = 512;
+const firstCauseSources = ['launcher_failure_marker', 'inner_nonzero_exit'];
+const firstCauseSignals = ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', 'SIGABRT', 'SIGSEGV'];
+function redactFirstCauseText(value) {
+  if (typeof value !== 'string') return null;
+  // Action stream text is hostile input.  Keep a small human-readable window
+  // but remove common credential, URL, filesystem, and opaque-token forms
+  // before it is ever persisted.  The publisher repeats this projection.
+  let text = value.slice(-FIRST_ERROR_SCAN_LIMIT)
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ' ')
+    .replace(/\b(?:https?|file):\/\/[^\s'"<>]+/gi, '[redacted-url]')
+    .replace(/\b(?:authorization|cookie|token|secret|password|passphrase|api[_-]?key|access[_-]?key|private[_-]?key)\b\s*([:=])\s*[^\s,;]+/gi, '[redacted]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [redacted]')
+    .replace(/\b(?:ghp|github_pat|glpat|sk)-?[A-Za-z0-9_-]{12,}\b/g, '[redacted]')
+    .replace(/(?:^|[\s'"=])\/(?:[^\s/'"]+\/)*[^\s'",;:]*/g, '$1[redacted-path]')
+    .replace(/\b[A-Za-z0-9+/_=-]{33,}\b/g, '[redacted]')
+    .replace(/\b(?:secret|credential|password|token)[A-Za-z0-9._-]*\b/gi, '[redacted]')
+    .replace(/[\t\r\n ]+/g, ' ')
+    .trim();
+  if (!text) return null;
+  if (text.length > FIRST_CAUSE_TEXT_LIMIT) text = text.slice(-FIRST_CAUSE_TEXT_LIMIT);
+  return text;
+}
+function projectFirstCause(value, child = {}) {
+  if (!firstCauseSources.includes(value?.source)) return null;
+  return {
+    source: value.source,
+    text: redactFirstCauseText(value.text),
+    inner_exit: {
+      code: Number.isInteger(child.code) && child.code >= 0 && child.code <= 255 ? child.code : null,
+      signal: firstCauseSignals.includes(child.signal) ? child.signal : null,
+    },
+  };
+}
 function classifyError(data) {
   const object = data && typeof data === 'object' && !Array.isArray(data) ? data : null;
   const directCode = typeof object?.code === 'string' && firstErrorCodes.includes(object.code) ? object.code : null;
@@ -100,6 +184,7 @@ function projectInstallEvidence(raw, binding) {
     last_result: selectEvent(raw?.last_result, ['result']),
     last_error: selectEvent(raw?.last_error, ['error', 'installer-failure-marker']),
     first_error: projectFirstError(raw?.first_error),
+    first_cause: projectFirstCause(raw?.first_cause, child),
     last_terminal: selectEvent(raw?.last_terminal, ['stop', 'disconnect']),
     shell_result: { observed: shellResult.observed === true,
       class: shellResultClasses.includes(shellResult.class) ? shellResult.class : null },
@@ -173,6 +258,10 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
       if (kind === 'stream') lastStreamWrite = ms;
       persist();
     },
+      firstCause(value) {
+        if (!state.first_cause) state.first_cause = projectFirstCause(value, state.child);
+        persist();
+      },
     pterm(event, value) {
       const at = iso(now());
       if (event === 'timer-start') { state.timer.started_at = iso(value.started); state.timer.deadline_at = iso(value.deadline); }
