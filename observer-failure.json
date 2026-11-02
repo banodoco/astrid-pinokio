@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "status": "blocked",
+  "category": "timeout",
+  "action_failure": {
+    "phase": "install",
+    "operation": "pterm",
+    "status": "timeout"
+  },
+  "last_operation": null,
+  "readiness_trace": []
+}
