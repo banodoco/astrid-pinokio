@@ -25,6 +25,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 90
     env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       AGENT_REF: ${{ inputs.agent_ref }}
       PINOKIOD_REF: add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
       PTERM_REF: 5be43718701c448b43daf0ce51d8935f170065bb
