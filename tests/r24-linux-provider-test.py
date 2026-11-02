@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Local synthetic repositories and protocol fixtures; no live evidence."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import patch
+
+SOURCE = Path(__file__).resolve().parents[1] / 'pinokio/providers/r24-linux.py'
+spec = importlib.util.spec_from_file_location('r24', SOURCE)
+r24 = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(r24)
+
+
+def cmd(root, *argv):
+    return subprocess.check_output(['git', '-C', str(root), *argv], stderr=subprocess.DEVNULL).decode().strip()
+
+
+def repo(path, files):
+    path.mkdir()
+    subprocess.run(['git', 'init', '-q', str(path)], check=True)
+    cmd(path, 'config', 'user.email', 'fixture@example.invalid')
+    cmd(path, 'config', 'user.name', 'Fixture')
+    for name, contents in files.items():
+        target = path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(contents)
+    cmd(path, 'add', '.')
+    cmd(path, 'commit', '-qm', 'synthetic fixture')
+    return cmd(path, 'rev-parse', 'HEAD')
+
+
+class ProviderTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        paths = {name: root / name for name in ('app', 'agent', 'runtime', 'pinokio')}
+        refs = {}
+        for name in ('agent', 'runtime'):
+            refs[name] = repo(paths[name], {'file': b'fixture'})
+        stop = b'synthetic stop fixture'
+        refs['pinokio'] = repo(paths['pinokio'], {'pinokio/stop.js': stop})
+        manifest = json.dumps({'release': 1, 'agent': {'sha': refs['agent']}, 'runtime': {'sha': refs['runtime']}}).encode()
+        refs['app'] = repo(paths['app'], {'public/install-manifest.json': manifest})
+        self.candidate = {**refs, 'manifest_sha256': r24.sha(manifest)}
+        provider = root / 'provider'
+        files = {name: ('fixture ' + name).encode() for name in r24.FILES}
+        provider_ref = repo(provider, files)
+        pterm = root / 'pterm'
+        pterm_ref = repo(pterm, {'index.js': b'fixture pterm'})
+        module = pterm / 'node_modules/unws/src/node.cjs'
+        module.parent.mkdir(parents=True)
+        module.write_bytes(b'fixture module')
+        node = root / 'node'
+        node.write_bytes(b'fixture node')
+        self.binding = {'candidate': self.candidate, 'stop_sha256': r24.sha(stop), 'pterm_ref': pterm_ref}
+        self.config = {'checkouts': {k: str(v) for k, v in paths.items()}, 'pterm': str(pterm),
+                       'node': str(node), 'node_sha256': r24.sha(node.read_bytes()),
+                       'pterm_entry_sha256': r24.sha((pterm / 'index.js').read_bytes()), 'unws_sha256': r24.sha(module.read_bytes())}
+        self.request = {'schema': 'astrid.r24.provider-request.v1', 'candidate': self.candidate.copy(),
+                        'provider': {'ref': provider_ref, 'sources': {k: r24.sha(v) for k, v in files.items()}},
+                        'stop': {'ref': refs['pinokio'], 'path': 'pinokio/stop.js', 'sha256': r24.sha(stop)},
+                        'config_sha256': r24.sha(r24.canonical(self.config)), 'run_id': 'a' * 32}
+        self.patches = [patch.object(r24, 'BINDING', self.binding), patch.object(r24, 'BASE', provider)]
+        for p in self.patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_tuple_and_executable_binding(self):
+        r24.validate(self.request, self.config)
+        self.request['candidate']['agent'] = '0' * 40
+        with self.assertRaises(ValueError): r24.validate(self.request, self.config)
+        self.request['candidate']['agent'] = self.candidate['agent']
+        Path(self.config['node']).write_bytes(b'changed')
+        with self.assertRaises(ValueError): r24.validate(self.request, self.config)
+
+    def test_request_fields_sources_and_dirty_checkout(self):
+        self.request['extra'] = True
+        with self.assertRaises(ValueError): r24.validate(self.request, self.config)
+        del self.request['extra']
+        self.request['provider']['sources'][r24.FILES[0]] = '0' * 64
+        with self.assertRaises(ValueError): r24.validate(self.request, self.config)
+        self.request['provider']['sources'][r24.FILES[0]] = r24.sha(('fixture ' + r24.FILES[0]).encode())
+        (Path(self.config['checkouts']['agent']) / 'file').write_text('changed')
+        with self.assertRaises(ValueError): r24.validate(self.request, self.config)
+
+    def test_no_injection_or_restoration_claim_and_redaction(self):
+        fake = {'dispatched': True, 'client_exit': 0, 'client_signal': None, 'messages': 1, 'disconnects': 1,
+                'errors': 0, 'post_terminal': False, 'end': 'timeout', 'settlement': 'unknown'}
+        with patch.object(r24, 'invoke_action', return_value=subprocess.CompletedProcess([], 0, json.dumps(fake).encode())):
+            result = r24.run(self.request, self.config)
+        self.assertEqual((result['busy'], result['unknown'], result['restoration']), ('not-run', 'not-run', 'unknown'))
+        self.assertEqual(result['action']['settlement'], 'unknown')
+        fake['token'] = 'bearer secret'
+        with patch.object(r24, 'invoke_action', return_value=subprocess.CompletedProcess([], 0, json.dumps(fake).encode())):
+            result = r24.run(self.request, self.config)
+        self.assertNotIn('secret', json.dumps(result))
+        self.assertEqual(result['action']['end'], 'observer-error')
+
+    def test_duplicate_json_and_config_digest_rejected(self):
+        with self.assertRaises(ValueError): r24.decode('{"x":1,"x":2}')
+        self.config['node_sha256'] = '0' * 64
+        with self.assertRaises(ValueError): r24.validate(self.request, self.config)
+
+    def test_provisional_parser_request_and_incompatible_diagnostic(self):
+        parser_path = os.environ.get('R24_CONSUMER_PARSER')
+        if not parser_path:
+            self.skipTest('set R24_CONSUMER_PARSER to the independently obtained pinned parser')
+        spec = importlib.util.spec_from_file_location('r24_consumer', parser_path)
+        import sys
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        request = module.ProviderRequest.parse(r24.canonical(self.request))
+        self.assertEqual(request.sha256, r24.sha(r24.canonical(self.request)))
+        diagnostic = {'schema': 'astrid.r24.producer-diagnostic.v1', 'request_sha256': request.sha256,
+                      'action': {}, 'busy': 'not-run', 'unknown': 'not-run', 'restoration': 'unknown',
+                      'runtime_identity': 'unknown', 'custody': 'unknown', 'protected_state': 'unknown'}
+        with self.assertRaises(module.ProviderContractError): module.ProviderResult.parse(r24.canonical(diagnostic), request)
+        # Even an otherwise result-shaped record cannot convey unknown: safe must be true.
+        rows = [{'kind': kind, 'source': r24.FILES[0], 'evidence_sha256': '0' * 64, 'safe': False} for kind in ('busy', 'unknown', 'restoration')]
+        with self.assertRaisesRegex(module.ProviderContractError, 'unsafe observation'):
+            module.ProviderResult.parse(r24.canonical({'schema': module.RESULT_SCHEMA, 'request_sha256': request.sha256, 'observations': rows}), request)
+
+if __name__ == '__main__': unittest.main()

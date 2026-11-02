@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "astrid.r24.producer-diagnostic.v1",
+  "description": "Diagnostic result only; no claim of evidence authentication or safety.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "request_sha256", "action", "busy", "unknown", "restoration", "runtime_identity", "custody", "protected_state"],
+  "properties": {
+    "schema": {"const": "astrid.r24.producer-diagnostic.v1"},
+    "request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "action": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["end", "settlement"], "properties": {"end": {"const": "observer-error"}, "settlement": {"const": "unknown"}}},
+      {"type": "object", "additionalProperties": false,
+       "required": ["dispatched", "client_exit", "client_signal", "messages", "disconnects", "errors", "post_terminal", "end", "settlement"],
+       "properties": {
+         "dispatched": {"type": "boolean"}, "client_exit": {"type": ["integer", "null"], "minimum": -255, "maximum": 255},
+         "client_signal": {"enum": [null, "SIGTERM", "SIGKILL", "SIGINT", "SIGHUP"]},
+         "messages": {"type": "integer", "minimum": 0, "maximum": 1000000},
+         "disconnects": {"type": "integer", "minimum": 0, "maximum": 1000000},
+         "errors": {"type": "integer", "minimum": 0, "maximum": 1000000},
+         "post_terminal": {"type": "boolean"},
+         "end": {"enum": ["timeout", "subscription-error", "client-error", "malformed-event", "socket-error", "socket-closed", "premature-disconnect", "duplicate-open", "daemon-error"]},
+         "settlement": {"const": "unknown"}
+       }}
+    ]},
+    "busy": {"const": "not-run"}, "unknown": {"const": "not-run"},
+    "restoration": {"const": "unknown"}, "runtime_identity": {"const": "unknown"},
+    "custody": {"const": "unknown"}, "protected_state": {"const": "unknown"}
+  }
+}
