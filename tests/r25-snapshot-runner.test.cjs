@@ -39,6 +39,21 @@ test('rejects cross-mode, malformed, and extra-field installed records', () => {
   }
 });
 
+test('retains the observed installed receipt across the uninstall boundary only', () => {
+  withModeFile({ schema_version: 1, mode: 'backend' }, root => {
+    const before = runner.readInstallModeReceipt(root, 'backend');
+    fs.rmSync(path.join(root, 'app'), { recursive: true, force: true });
+    assert.deepEqual(
+      runner.modeReceiptForRecord('uninstall', before, root, 'backend'),
+      { schema_version: 1, mode: 'backend' },
+    );
+    assert.throws(
+      () => runner.modeReceiptForRecord('update', before, root, 'backend'),
+      /ENOENT/,
+    );
+  });
+});
+
 test('maps each Windows slot to its matching Pinokio installer mode', () => {
   assert.deepEqual(
     runner.routeConfig('windows', 'pinokio-backend-windows'),

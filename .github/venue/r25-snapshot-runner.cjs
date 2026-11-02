@@ -83,6 +83,13 @@ function readInstallModeReceipt(appRoot, expectedMode) {
   // check and must never be used to manufacture this receipt.
   return value;
 }
+function modeReceiptForRecord(action, beforeAction, appRoot, expectedMode) {
+  // A successful uninstall removes app/install-mode.json with the rest of the
+  // Pinokio-owned program tree. Preserve the parsed installed record observed
+  // immediately before that action; every other action must leave a matching
+  // installed record that can be read again at its closing boundary.
+  return action === 'uninstall' ? beforeAction : readInstallModeReceipt(appRoot, expectedMode);
+}
 function envInt(name) { const value = Number.parseInt(process.env[name] || '', 10); if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} is not a positive integer`); return value; }
 function fail(message, extra = {}) {
   const diagnostics = { schema: 'astrid.r25.pinokio-action-diagnostics.v1', first_error: String(message).slice(0, 240), ...extra };
@@ -378,6 +385,7 @@ async function main() {
     worker = spawn(process.env.PYTHON || 'python', [path.join(process.cwd(), '.github', 'venue', 'r25-snapshot-worker.py'), requestPath, output], { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: path.resolve(cli['agent-root']) }, stdio: ['pipe', 'pipe', 'ignore'] });
     for (const item of plans) {
       const action = item.plan.action;
+      const modeReceiptBeforeAction = readInstallModeReceipt(appRoot, ROUTE.installMode);
       await workerSend(worker, { op: 'open', action });
       const before = await filesystemState(home, appRoot, protectedData);
       let engine;
@@ -387,14 +395,13 @@ async function main() {
       } else if (action === 'rollback') {
         const reset = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: 'pinokio/reset.js', action: 'rollback-reset', logRoot });
         const reinstall = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: ROUTE.installScript, action: 'rollback-reinstall', logRoot });
-        readInstallModeReceipt(appRoot, ROUTE.installMode);
         engine = { execution_kind: 'real-engine-reset-and-reinstall', steps: [reset, reinstall], inner_exit: reinstall.inner_exit, terminal: reinstall.terminal, first_error: reset.first_error || reinstall.first_error, status_after: reinstall.status_after };
       } else {
         engine = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: item.plan.script, action, logRoot });
       }
       const after = await filesystemState(home, appRoot, protectedData);
       const failed = Boolean(engine.first_error || engine.inner_exit?.code !== 0 || engine.terminal?.error || !after.data?.sentinel_preserved || engine.steps?.some(step => step.inner_exit?.code !== 0 || step.first_error));
-      const record = { schema: 'astrid.r25.pinokio-filesystem-record.v1', action, action_id: item.plan.action_id, action_sha256: item.action_sha256, slot_id: SLOT, tuple, origin: { run_id: origin.run_id, run_attempt: origin.run_attempt, producer_job_id: origin.producer_job_id }, pinokio_install_mode_receipt: readInstallModeReceipt(appRoot, ROUTE.installMode), before, after, engine, status: failed ? 'failed' : 'completed' };
+      const record = { schema: 'astrid.r25.pinokio-filesystem-record.v1', action, action_id: item.plan.action_id, action_sha256: item.action_sha256, slot_id: SLOT, tuple, origin: { run_id: origin.run_id, run_attempt: origin.run_attempt, producer_job_id: origin.producer_job_id }, pinokio_install_mode_receipt: modeReceiptForRecord(action, modeReceiptBeforeAction, appRoot, ROUTE.installMode), before, after, engine, status: failed ? 'failed' : 'completed' };
       results.push(record);
       writeCanonical(path.join(diagnostics, 'action-records', `${String(item.plan.action_index).padStart(2, '0')}-${action}.json`), record);
       await workerSend(worker, { op: 'close', failed });
@@ -421,7 +428,7 @@ async function main() {
   }
 }
 
-module.exports = { actionPlan, readInstallModeReceipt, routeConfig };
+module.exports = { actionPlan, modeReceiptForRecord, readInstallModeReceipt, routeConfig };
 if (require.main === module) {
   main().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });
 }
