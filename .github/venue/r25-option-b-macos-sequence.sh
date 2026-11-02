@@ -20,7 +20,7 @@ run_uid="$(id -u)"
 test "$(stat -f '%u' "$run_parent")" = "$run_uid"
 run_root="$(mktemp -d "$run_parent/run.XXXXXXXX")"
 test "$(stat -f '%u' "$run_root")" = "$run_uid"
-test "$(stat -f '%p' "$run_root")" = 700
+test "$(stat -f '%Lp' "$run_root")" = 700
 
 install_root="$run_root/installed"
 sources="$install_root/sources"
@@ -94,8 +94,8 @@ test -x "$python_actual_executable"
 # interpreter. No alternate executable is installed.
 
 venue_ref=327d0fc29f0b63d58e6c6c3449c81af5912ac85c
-wrapper_ref=37e2337271cffe275374fe9a2eda73e8948ef17a
-wrapper_sha256=c9abcd60a839de2001195f207e63133632d457bc2c4fa921f3ba4c09efdd0570
+wrapper_ref=5ad7ef974f5f11643ba19da95c20fbaeb9fca442
+wrapper_sha256=2f208fdf12154769f4ff524144cc83bf177ac341f7f2c4771f6bdd4b7b891ea1
 wrapper_url="https://raw.githubusercontent.com/banodoco/astrid-pinokio/$wrapper_ref/.github/venue/r25-local-macos-option-b.sh"
 agent_ref=a6b68d5b5478326a4db1971966d33a2cfe61d091
 pinokiod_ref=add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
