@@ -25,9 +25,6 @@ jobs:
     timeout-minutes: 15
     env:
       AGENT_REF: ${{ inputs.agent_ref }}
-      AGENT_ROOT: ${{ runner.temp }}/astrid-agent
-      SNAPSHOT: ${{ runner.temp }}/r25-macos-component-snapshot.json
-      ROUTE: ${{ runner.temp }}/r25-macos-component-route.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,6 +34,8 @@ jobs:
           node-version: 20.19.4
       - name: Materialize exact Agent source
         shell: bash
+        env:
+          AGENT_ROOT: ${{ runner.temp }}/astrid-agent
         run: |
           set -euo pipefail
           test "$AGENT_REF" = a6b68d5b5478326a4db1971966d33a2cfe61d091
@@ -46,6 +45,9 @@ jobs:
           test "$(git -C "$AGENT_ROOT" rev-parse HEAD)" = "$AGENT_REF"
       - name: Validate source binding and focused parsers
         shell: bash
+        env:
+          AGENT_ROOT: ${{ runner.temp }}/astrid-agent
+          ROUTE: ${{ runner.temp }}/r25-macos-component-route.json
         run: |
           set -euo pipefail
           node pinokio/providers/r25-native-collector-binding.cjs \
@@ -59,6 +61,9 @@ jobs:
             "$AGENT_ROOT/scripts/pinokio_snapshot_macos.py"
       - name: Execute one direct macOS component snapshot
         shell: bash
+        env:
+          AGENT_ROOT: ${{ runner.temp }}/astrid-agent
+          SNAPSHOT: ${{ runner.temp }}/r25-macos-component-snapshot.json
         run: |
           set -euo pipefail
           PYTHONPATH="$AGENT_ROOT" python3 -m scripts.pinokio_snapshot_macos \
@@ -81,9 +86,6 @@ jobs:
     timeout-minutes: 15
     env:
       AGENT_REF: ${{ inputs.agent_ref }}
-      AGENT_ROOT: ${{ runner.temp }}\astrid-agent
-      SNAPSHOT: ${{ runner.temp }}\r25-windows-component-snapshot.json
-      ROUTE: ${{ runner.temp }}\r25-windows-component-route.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -93,6 +95,8 @@ jobs:
           node-version: 20.19.4
       - name: Materialize exact Agent source
         shell: pwsh
+        env:
+          AGENT_ROOT: ${{ runner.temp }}\astrid-agent
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:AGENT_REF -ne 'a6b68d5b5478326a4db1971966d33a2cfe61d091') { throw 'agent_ref differs' }
@@ -102,6 +106,9 @@ jobs:
           if ((git -C $env:AGENT_ROOT rev-parse HEAD) -ne $env:AGENT_REF) { throw 'Agent HEAD differs' }
       - name: Validate source binding and focused parsers
         shell: pwsh
+        env:
+          AGENT_ROOT: ${{ runner.temp }}\astrid-agent
+          ROUTE: ${{ runner.temp }}\r25-windows-component-route.json
         run: |
           $ErrorActionPreference = 'Stop'
           node pinokio/providers/r25-native-collector-binding.cjs `
@@ -113,6 +120,9 @@ jobs:
             "$env:AGENT_ROOT\scripts\pinokio_snapshot_windows.py"
       - name: Execute one direct Windows component snapshot
         shell: pwsh
+        env:
+          AGENT_ROOT: ${{ runner.temp }}\astrid-agent
+          SNAPSHOT: ${{ runner.temp }}\r25-windows-component-snapshot.json
         run: |
           $ErrorActionPreference = 'Stop'
           $env:PYTHONPATH = $env:AGENT_ROOT
