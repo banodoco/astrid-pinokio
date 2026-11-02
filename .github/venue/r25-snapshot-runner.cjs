@@ -10,7 +10,7 @@ const net = require('node:net');
 const { execFileSync, spawn } = require('node:child_process');
 const binding = require('../../pinokio/providers/r25-native-collector-binding.cjs');
 const { createObserverIO } = require('./r21-observer-io.cjs');
-const { ptermExit } = require('./r21-observer-diagnostics.cjs');
+const { ptermExit, createInstallDiagnostics, terminateChild } = require('./r21-observer-diagnostics.cjs');
 
 const AGENT_REF = binding.AGENT_SOURCE_REF;
 const PINOKIO_SOURCE_REF = '95aafb5a029c3f53cb2268d8596909eab0deb3c4';
@@ -214,13 +214,16 @@ async function waitForRouteReadiness(trace, timeoutMs = 120000) {
   throw new Error('independent fully-local editor/Runtime readiness timeout');
 }
 
-async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, action, logRoot, timeoutMs = 30 * 60 * 1000 }) {
+async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, action, logRoot,
+  timeoutMs = 30 * 60 * 1000, diagnostic = null }) {
   const socket = await io.openSocket();
+  let child;
   let terminal = { stop: false, disconnect: false, error: false };
   let firstError = null;
   const onMessage = event => {
     try {
       const packet = JSON.parse(String(event.data));
+      try { diagnostic?.packet(packet); } catch {}
       if (packet?.type === 'event' && packet.data === 'stop') terminal.stop = true;
       if (packet?.type === 'event' && packet.data === 'disconnect') terminal.disconnect = true;
       if (packet?.type === 'error' || packet?.type === 'installer-failure-marker') {
@@ -237,17 +240,18 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
     const stderrPath = path.join(logRoot, `${action}.stderr.log`);
     const stdout = fs.openSync(stdoutPath, 'wx', 0o600);
     const stderr = fs.openSync(stderrPath, 'wx', 0o600);
-    const child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', endpoint], {
+    child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', endpoint], {
       cwd: home, env: process.env, stdio: ['ignore', stdout, stderr],
     });
     let innerExit;
-    try { innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs); }
+    try { innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs, diagnostic?.pterm); }
     finally { fs.closeSync(stdout); fs.closeSync(stderr); }
     await new Promise(resolve => setTimeout(resolve, 500));
     return { script, inner_exit: innerExit, terminal, first_error: firstError,
       logs: { stdout: stdoutPath, stderr: stderrPath },
       status_after: await io.status(path.join(appRoot, script), `${action}-status`) };
   } finally {
+    await terminateChild(child);
     io.disposeSocket(socket);
   }
 }
@@ -318,32 +322,46 @@ async function main() {
   if (!daemonReady) throw new Error('native pinokiod did not reach readiness');
   const { WebSocket } = require(path.join(ptermRoot, 'node_modules', 'unws'));
   const trace = createObserverIO({ WebSocket, fetch, spawn, record: () => {}, appRoot, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', pollMs: 120000 });
-  // Installation is disposable preparation, outside the six measured
-  // boundaries. It is still driven through the real Pinokio engine and is
-  // allowed to fail closed before an evidence session can begin.
   const logRoot = path.join(diagnostics, 'engine-logs');
-  const preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: ROUTE.installScript, action: 'setup-install', logRoot, timeoutMs: 45 * 60 * 1000 });
-  if (preparation.first_error || preparation.inner_exit.code !== 0 || preparation.terminal.error) throw new Error('disposable Pinokio install preparation failed');
-  const mode = readJson(path.join(appRoot, 'app', 'install-mode.json'));
-  if (mode.schema_version !== 1 || mode.mode !== ROUTE.installMode) throw new Error(`preparation did not retain ${ROUTE.installMode} install mode`);
-  const install = readJson(path.join(appRoot, 'app', 'astrid', 'install.json'));
-  const dataRoot = path.resolve(install.data_root || '');
-  const isolatedRoot = path.resolve(path.dirname(output));
-  if (!path.isAbsolute(install.data_root || '') || (dataRoot !== isolatedRoot && !dataRoot.startsWith(`${isolatedRoot}${path.sep}`))) {
-    throw new Error('installed data root escaped the isolated run root');
-  }
-  fs.mkdirSync(dataRoot, { recursive: true });
-  const sentinel = path.join(dataRoot, 'r25-option-b-sentinel.json');
-  const sentinelBytes = Buffer.from(`${canonical({ schema: 'astrid.r25.option-b-sentinel.v1', slot_id: SLOT, tuple })}\n`, 'ascii');
-  fs.writeFileSync(sentinel, sentinelBytes, { flag: 'wx', mode: 0o600 });
-  const protectedData = { root: dataRoot, sentinel, sha256: digest(sentinelBytes) };
-  const initialCensus = TARGET_OS === 'macos'
-    ? captureMacCensus(path.resolve(cli['agent-root']), TARGETS.launchd_targets[0]) : null;
-  if (initialCensus) writeCanonical(path.join(diagnostics, 'census', 'initial.json'), initialCensus);
-  const worker = spawn(process.env.PYTHON || 'python', [path.join(process.cwd(), '.github', 'venue', 'r25-snapshot-worker.py'), requestPath, output], { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: path.resolve(cli['agent-root']) }, stdio: ['pipe', 'pipe', 'ignore'] });
+  const setupDiagnostics = createInstallDiagnostics({
+    schema: 'astrid.r25.pinokio-setup-diagnostics.v1',
+    run_id: process.env.GITHUB_RUN_ID || null,
+    run_attempt: process.env.GITHUB_RUN_ATTEMPT || null,
+    phase: 'setup-install',
+  }, value => {
+    const file = path.join(diagnostics, 'r25-install-diagnostics.json');
+    fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(`${file}.tmp`, file);
+  });
+  let worker;
   const results = [];
+  let initialCensus = null;
   let finalCensus = null;
+  let protectedData;
   try {
+    // Installation is disposable preparation, outside the six measured
+    // boundaries. It is still driven through the real Pinokio engine and is
+    // allowed to fail closed before an evidence session can begin. Keep its
+    // bounded native trace even when PTerm times out before returning an exit.
+    const preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: ROUTE.installScript, action: 'setup-install', logRoot, timeoutMs: 45 * 60 * 1000, diagnostic: setupDiagnostics });
+    if (preparation.first_error || preparation.inner_exit.code !== 0 || preparation.terminal.error) throw new Error('disposable Pinokio install preparation failed');
+    const mode = readJson(path.join(appRoot, 'app', 'install-mode.json'));
+    if (mode.schema_version !== 1 || mode.mode !== ROUTE.installMode) throw new Error(`preparation did not retain ${ROUTE.installMode} install mode`);
+    const install = readJson(path.join(appRoot, 'app', 'astrid', 'install.json'));
+    const dataRoot = path.resolve(install.data_root || '');
+    const isolatedRoot = path.resolve(path.dirname(output));
+    if (!path.isAbsolute(install.data_root || '') || (dataRoot !== isolatedRoot && !dataRoot.startsWith(`${isolatedRoot}${path.sep}`))) {
+      throw new Error('installed data root escaped the isolated run root');
+    }
+    fs.mkdirSync(dataRoot, { recursive: true });
+    const sentinel = path.join(dataRoot, 'r25-option-b-sentinel.json');
+    const sentinelBytes = Buffer.from(`${canonical({ schema: 'astrid.r25.option-b-sentinel.v1', slot_id: SLOT, tuple })}\n`, 'ascii');
+    fs.writeFileSync(sentinel, sentinelBytes, { flag: 'wx', mode: 0o600 });
+    protectedData = { root: dataRoot, sentinel, sha256: digest(sentinelBytes) };
+    initialCensus = TARGET_OS === 'macos'
+      ? captureMacCensus(path.resolve(cli['agent-root']), TARGETS.launchd_targets[0]) : null;
+    if (initialCensus) writeCanonical(path.join(diagnostics, 'census', 'initial.json'), initialCensus);
+    worker = spawn(process.env.PYTHON || 'python', [path.join(process.cwd(), '.github', 'venue', 'r25-snapshot-worker.py'), requestPath, output], { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: path.resolve(cli['agent-root']) }, stdio: ['pipe', 'pipe', 'ignore'] });
     for (const item of plans) {
       const action = item.plan.action;
       await workerSend(worker, { op: 'open', action });
@@ -385,8 +403,8 @@ async function main() {
       } catch {}
     }
     await trace.cleanup();
-    if (worker.exitCode === null) worker.kill();
-    if (daemon.exitCode === null) daemon.kill();
+    if (worker && worker.exitCode === null) worker.kill();
+    await terminateChild(daemon);
   }
 }
 

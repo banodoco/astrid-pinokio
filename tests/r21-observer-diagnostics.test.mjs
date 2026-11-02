@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 
-const { createInstallDiagnostics, projectInstallEvidence, ptermExit, INSTALL_TRACE_LIMIT } =
+const { createInstallDiagnostics, projectInstallEvidence, ptermExit, terminateChild, INSTALL_TRACE_LIMIT } =
   createRequire(import.meta.url)('../.github/venue/r21-observer-diagnostics.cjs');
 const binding = { request_id: 'R-21-PUBLISHED-TUPLE-R1', runner_ref: 'a'.repeat(40), run_id: '100', run_attempt: '1' };
 
@@ -29,6 +29,7 @@ test('native Install step activity and terminal errors are timestamped, bounded 
   assert.equal(evidence.events.length, INSTALL_TRACE_LIMIT);
   assert.equal(evidence.events.at(-1).index, 99);
   assert.equal(evidence.last_error.kind, 'error');
+  assert.equal(evidence.first_error.kind, 'error');
   assert.equal(evidence.last_terminal.kind, 'disconnect');
   assert.equal(evidence.last_activity.index, 99);
   recorder.packet({ type: 'stream', index: 2, data: { raw: 'ASTRID_PINOKIO_FAILURE secret-details' } });
@@ -76,6 +77,25 @@ test('normal exit and spawn error stay distinct and projection rejects arbitrary
   assert.equal(safe.events[0].method, null);
   assert.equal(safe.events[0].index, null);
   assert.equal(safe.child.signal, null);
+});
+
+test('setup timeout cleanup escalates in bounded time and retains the child signal', async () => {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.unref = () => { child.unrefCalled = true; };
+  child.kill = signal => {
+    child.signals = [...(child.signals || []), signal];
+    if (signal === 'SIGKILL') {
+      child.signalCode = 'SIGKILL';
+      queueMicrotask(() => child.emit('exit', null, 'SIGKILL'));
+    }
+    return true;
+  };
+  const result = await terminateChild(child, 5, 5);
+  assert.deepEqual(child.signals, ['SIGTERM', 'SIGKILL']);
+  assert.deepEqual(result, { code: null, signal: 'SIGKILL' });
+  assert.equal(child.unrefCalled ?? false, false);
 });
 
 test('Install listener captures native packets while PTerm is pending', async () => {
