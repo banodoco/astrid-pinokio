@@ -23,4 +23,7 @@ test('a venue push fixes the current tuple/source and schedules both native plat
   assert.match(workflow, /macos:\n    if: github\.event_name == 'push' \|\| inputs\.target_os == 'macos'/);
   assert.match(workflow, /windows:\n    if: github\.event_name == 'push' \|\| inputs\.target_os == 'windows'/);
   assert.equal((workflow.match(/MODE: \$\{\{ github\.event_name == 'push' && 'both' \|\| inputs\.mode \}\}/g) || []).length, 2);
+  assert.doesNotMatch(workflow, /SOURCE_ROOT: \$\{\{ runner\.temp/);
+  assert.match(workflow, /echo "SOURCE_ROOT=\$source_root" >> "\$GITHUB_ENV"/);
+  assert.match(workflow, /"SOURCE_ROOT=\$sourceRoot" \| Out-File -FilePath \$env:GITHUB_ENV/);
 });

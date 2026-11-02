@@ -45,7 +45,6 @@ jobs:
       TUPLE_JSON: ${{ github.event_name == 'push' && '{"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f"}' || inputs.tuple_json }}
       SOURCE_REF: ${{ github.event_name == 'push' && '47059b072889b489b2db20d3a3e86acf02e5a3d4' || inputs.source_ref }}
       MODE: ${{ github.event_name == 'push' && 'both' || inputs.mode }}
-      SOURCE_ROOT: ${{ runner.temp }}/r25-macos-source
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,17 +56,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$SOURCE_ROOT"
+          source_root="$RUNNER_TEMP/r25-macos-source"
+          echo "SOURCE_ROOT=$source_root" >> "$GITHUB_ENV"
+          mkdir -p "$source_root"
           git fetch --no-tags --depth=1 origin "$SOURCE_REF"
           git archive FETCH_HEAD -- \
             .github/venue/adapters/macos-observer.c \
             .github/venue/adapters/macos-observer.cjs \
             tests/macos-observer.test.mjs \
-            .github/workflows/r25-os-adapters.yml | tar -x -C "$SOURCE_ROOT"
+            .github/workflows/r25-os-adapters.yml | tar -x -C "$source_root"
           node pinokio/providers/r25-native-collector-binding.cjs \
             --tuple-json "$TUPLE_JSON" --candidate-ref "$GITHUB_SHA" \
             --source-ref "$SOURCE_REF" --target-os macos --mode "$MODE" \
-            --source-root "$SOURCE_ROOT" --output "$RUNNER_TEMP/r25-native-binding-macos.json"
+            --source-root "$source_root" --output "$RUNNER_TEMP/r25-native-binding-macos.json"
       - name: Build fixed Endpoint Security helper
         shell: bash
         run: |
@@ -105,7 +106,6 @@ jobs:
       TUPLE_JSON: ${{ github.event_name == 'push' && '{"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f"}' || inputs.tuple_json }}
       SOURCE_REF: ${{ github.event_name == 'push' && '47059b072889b489b2db20d3a3e86acf02e5a3d4' || inputs.source_ref }}
       MODE: ${{ github.event_name == 'push' && 'both' || inputs.mode }}
-      SOURCE_ROOT: ${{ runner.temp }}\r25-windows-source
     steps:
       - uses: actions/checkout@v4
         with:
@@ -117,17 +117,19 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force -Path $env:SOURCE_ROOT | Out-Null
+          $sourceRoot = Join-Path $env:RUNNER_TEMP 'r25-windows-source'
+          "SOURCE_ROOT=$sourceRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          New-Item -ItemType Directory -Force -Path $sourceRoot | Out-Null
           git fetch --no-tags --depth=1 origin $env:SOURCE_REF
           git archive FETCH_HEAD -- `
             pinokio/windows-observer/adapter.mjs `
             pinokio/windows-observer/etw-observer.cpp `
             tests/windows-observer-adapter.test.mjs `
-            .github/workflows/r25-os-adapters.yml | tar -x -C $env:SOURCE_ROOT
+            .github/workflows/r25-os-adapters.yml | tar -x -C $sourceRoot
           node pinokio/providers/r25-native-collector-binding.cjs `
             --tuple-json $env:TUPLE_JSON --candidate-ref $env:GITHUB_SHA `
             --source-ref $env:SOURCE_REF --target-os windows --mode $env:MODE `
-            --source-root $env:SOURCE_ROOT --output "$env:RUNNER_TEMP\r25-native-binding-windows.json"
+            --source-root $sourceRoot --output "$env:RUNNER_TEMP\r25-native-binding-windows.json"
       - name: Run focused Windows build and bounded ETW test
         shell: pwsh
         working-directory: ${{ runner.temp }}\r25-windows-source
