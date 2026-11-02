@@ -7,8 +7,9 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { test } from 'node:test';
 import { boundedFileDiagnostic, runTool } from './smoke/process.mjs';
+import { launchShell } from './smoke/run-pinokio.mjs';
 
-test('installer diagnostics report absence and retain a bounded, hashed log prefix', () => {
+test('installer diagnostics report absence and retain a bounded, hashed log tail', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-install-diagnostic-'));
   const filename = path.join(directory, 'install.log');
   try {
@@ -32,6 +33,32 @@ test('installer diagnostics report absence and retain a bounded, hashed log pref
     assert.equal(bounded.truncated, true);
     assert.equal(bounded.sha256, createHash('sha256').update('r pid=42').digest('hex'));
     assert.throws(() => boundedFileDiagnostic(filename, 0), RangeError);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('failed Pinokio shell step includes the state installer log before cleanup', { skip: process.platform !== 'linux' }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-failed-update-'));
+  const home = path.join(directory, 'home');
+  const appDirectory = path.join(directory, 'app');
+  const logPath = path.join(home, '.local', 'state', 'astrid-runtime', 'logs', 'install.log');
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.mkdirSync(appDirectory, { recursive: true });
+  fs.writeFileSync(logPath, 'another installer owns the installation lifetime lock\nowner pid=4242');
+  try {
+    await assert.rejects(launchShell({
+      method: 'shell.run',
+      params: { shell: 'bash', path: appDirectory, message: 'exit 19' },
+    }, { HOME: home, ASTRID_PINOKIO_APP_DIR: appDirectory }), (error) => {
+      assert.match(error.message, /bash step failed \(19\)/);
+      assert.match(error.message, /another installer owns the installation lifetime lock/);
+      assert.match(error.message, /owner pid=4242/);
+      assert.match(error.message, /sha256 of retained bytes [a-f0-9]{64}/);
+      return true;
+    });
+    assert.equal(fs.readFileSync(logPath, 'utf8').includes('owner pid=4242'), true,
+      'the failure diagnostic is available while the smoke home still exists');
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

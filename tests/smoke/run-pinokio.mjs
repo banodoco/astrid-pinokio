@@ -152,7 +152,7 @@ async function processTreeKill(child) {
   }
 }
 
-function launchShell(step, environment, { background = false, onSpawn } = {}) {
+export function launchShell(step, environment, { background = false, onSpawn } = {}) {
   assert.equal(step.method, 'shell.run');
   assert.equal(step.params.shell, shell);
   assert.equal(path.resolve(step.params.path), path.resolve(environment.ASTRID_PINOKIO_APP_DIR),
@@ -565,6 +565,8 @@ async function runFullyLocal() {
 }
 
 const flow = process.argv[2] || 'hosted';
-if (flow === 'hosted') await runHosted();
-else if (flow === 'fully-local') await runFullyLocal();
-else throw new Error(`Unknown smoke flow: ${flow}`);
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  if (flow === 'hosted') await runHosted();
+  else if (flow === 'fully-local') await runFullyLocal();
+  else throw new Error(`Unknown smoke flow: ${flow}`);
+}
