@@ -121,7 +121,7 @@ class ProviderTests(unittest.TestCase):
     def test_success_serialization_and_bindings(self):
         session, records = self.observations()
         result = r24.serialize_success(self.request, session, records)
-        self.assertEqual([r['kind'] for r in result['observations']], ['busy', 'unknown', 'restoration'])
+        self.assertEqual([r['kind'] for r in result['observations']], ['busy', 'restoration', 'unknown'])
         self.assertNotIn('secret payload', json.dumps(result))
         parser_path = os.environ.get('R24_CONSUMER_PARSER')
         self.assertTrue(parser_path, 'pinned parser required for this focused test')

@@ -17,6 +17,9 @@ FILES = ('pinokio/providers/r24-linux.py', 'pinokio/providers/r24-action.cjs',
 HEX40 = re.compile(r'[0-9a-f]{40}\Z')
 HEX64 = re.compile(r'[0-9a-f]{64}\Z')
 HEX32 = re.compile(r'[0-9a-f]{32}\Z')
+MAX_EVIDENCE_BYTES = 65536
+MAX_REQUEST_BYTES = 65536
+JUNIT = b'<testsuite name="r24-producer-export" tests="1" skipped="1"><testcase name="qualification"><skipped message="not a qualification result"/></testcase></testsuite>\n'
 
 
 def canonical(obj):
@@ -177,10 +180,78 @@ def serialize_success(request, session, observations):
             raise ValueError('observation source mismatch')
         match(obs['source_sha256'], HEX64)
         match(obs['evidence_sha256'], HEX64)
-        if not isinstance(obs['evidence'], bytes) or not obs['evidence'] or sha(obs['evidence']) != obs['evidence_sha256']:
+        if not isinstance(obs['evidence'], bytes) or not 0 < len(obs['evidence']) <= MAX_EVIDENCE_BYTES or sha(obs['evidence']) != obs['evidence_sha256']:
             raise ValueError('evidence mismatch')
         rows.append({'kind': kind, 'source': source, 'evidence_sha256': obs['evidence_sha256'], 'safe': True})
-    return {'schema': 'astrid.r24.provider-result.v1', 'request_sha256': request_sha, 'observations': rows}
+    return {'schema': 'astrid.r24.provider-result.v1', 'request_sha256': request_sha,
+            'observations': sorted(rows, key=lambda row: row['kind'])}
+
+
+def seal_observations(request, session, observations, destination):
+    """Export internal collector records, without asserting identity or custody.
+
+    The caller must have validated the request and authenticated the source. This
+    function is not a file/JSON input API and does not authenticate observations.
+    """
+    if len(canonical(request)) > MAX_REQUEST_BYTES:
+        raise ValueError('request too large')
+    exact(request, ('schema', 'candidate', 'provider', 'stop', 'config_sha256', 'run_id'))
+    if request['schema'] != 'astrid.r24.provider-request.v1' or request['candidate'] != BINDING['candidate']:
+        raise ValueError('invalid export binding')
+    exact(request['provider'], ('ref', 'sources'))
+    exact(request['provider']['sources'], FILES)
+    match(request['provider']['ref'], HEX40)
+    match(request['config_sha256'], HEX64)
+    for digest in request['provider']['sources'].values():
+        match(digest, HEX64)
+    if request['stop'] != {'ref': BINDING['candidate']['pinokio'], 'path': 'pinokio/stop.js', 'sha256': BINDING['stop_sha256']}:
+        raise ValueError('invalid stop binding')
+    result = canonical(serialize_success(request, session, observations)) + b'\n'
+    payloads = {'junit.xml': JUNIT, 'observation-result.json': result}
+    entries = [{'path': name, 'bytes': len(data), 'sha256': sha(data)}
+               for name, data in sorted(payloads.items())]
+    payloads['manifest.json'] = canonical({'schema': 'astrid.r24.producer-export.v1',
+        'qualification': 'not-evaluated', 'files': entries}) + b'\n'
+    inventory = [{'path': name, 'bytes': len(data), 'sha256': sha(data)}
+                 for name, data in sorted(payloads.items())]
+
+    # Resolve each existing directory without following symlinks; create only a
+    # new final directory. All exported member names are fixed, not caller paths.
+    if not isinstance(destination, (str, Path)):
+        raise ValueError('invalid destination')
+    raw = os.fspath(destination)
+    if not isinstance(raw, str) or not raw.startswith('/') or any(p in ('', '.', '..') for p in raw.split('/')[1:]):
+        raise ValueError('invalid destination')
+    parts = raw.split('/')[1:]
+    parent = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    target = None
+    created = False
+    written = []
+    try:
+        for part in parts[:-1]:
+            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = next_fd
+        os.mkdir(parts[-1], 0o700, dir_fd=parent)
+        created = True
+        target = os.open(parts[-1], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        for name, data in sorted(payloads.items()):
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=target)
+            written.append(name)
+            with os.fdopen(fd, 'wb') as output:
+                output.write(data)
+        return inventory
+    except BaseException:
+        if target is not None:
+            for name in written:
+                os.unlink(name, dir_fd=target)
+        if created:
+            os.rmdir(parts[-1], dir_fd=parent)
+        raise
+    finally:
+        if target is not None:
+            os.close(target)
+        os.close(parent)
 
 
 def collect_authenticated(request, session, action):
@@ -190,7 +261,7 @@ def collect_authenticated(request, session, action):
     return None
 
 
-def run(request, config):
+def run(request, config, export_destination=None):
     roots, pterm, node = validate(request, config)
     uri = str(roots['pinokio'] / 'pinokio/stop.js')
     session = secrets.token_hex(16)
@@ -201,7 +272,10 @@ def run(request, config):
         action = sanitize_action(decode(proc.stdout))
         observations = collect_authenticated(request, session, action)
         if observations is not None:
-            return serialize_success(request, session, observations), None
+            result = serialize_success(request, session, observations)
+            if export_destination is not None:
+                seal_observations(request, session, observations, export_destination)
+            return result, None
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
         action = {'end': 'observer-error', 'settlement': 'unknown'}
     # No busy/unknown injection or restoration source is bound. Never translate
@@ -212,13 +286,13 @@ def run(request, config):
 
 
 def main():
-    if len(sys.argv) != 3:
+    if len(sys.argv) not in (3, 4):
         print(json.dumps({'schema': 'astrid.r24.producer-error.v1', 'status': 'unknown'}), file=sys.stderr)
         return 2
     try:
         request = decode(Path(sys.argv[1]).read_bytes())
         config = decode(Path(sys.argv[2]).read_bytes())
-        result, diagnostic = run(request, config)
+        result, diagnostic = run(request, config, sys.argv[3] if len(sys.argv) == 4 else None)
     except (OSError, ValueError, KeyError, TypeError, RecursionError, subprocess.SubprocessError):
         print(json.dumps({'schema': 'astrid.r24.producer-error.v1', 'status': 'unknown'}), file=sys.stderr)
         return 1

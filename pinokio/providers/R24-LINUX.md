@@ -1,6 +1,6 @@
 # R-24 Linux Stop observation producer
 
-Run `python3 -B pinokio/providers/r24-linux.py REQUEST CONFIG` on Linux. REQUEST
+Run `python3 -B pinokio/providers/r24-linux.py REQUEST CONFIG [EXPORT_DIRECTORY]` on Linux. REQUEST
 uses the provisional `astrid.r24.provider-request.v1` shape: exact current tuple,
 provider commit and SHA-256 of each of `r24-linux.py`, `r24-action.cjs`,
 `r24-linux-binding.json`, and `r24-schema.json` under `pinokio/providers/`, the
@@ -47,6 +47,26 @@ collector is deliberately closed. A future collector must independently bind the
 real invocation and session, authenticate immutable sources and observations,
 and establish safe controls and restoration before returning anything. The
 serializer and synthetic tests do not provide those guarantees or custody.
+
+The optional export directory is an absolute, previously nonexistent path under
+existing, non-symlink directories. The producer creates it only after its internal
+collector returns complete successful observations and their bindings validate.
+There is no observations file, JSON, environment, or source override input. The
+currently closed collector therefore creates no export, including when a client
+exits successfully or a socket closes. Export errors yield no success result.
+
+The fixed allowlist is `junit.xml`, `manifest.json`, and
+`observation-result.json`. JSON is compact sorted ASCII; observation kinds are
+sorted. The manifest records the byte count and SHA-256 of the other two files;
+the internal seal function returns the same `{path, bytes, sha256}` inventory for
+all three. Raw evidence bytes are never exported, and each evidence input is
+limited to 64 KiB. The JUnit case is explicitly skipped and the manifest says
+qualification is not evaluated. The export does not create `run.json` or claim
+Actions identity, custody, source completeness, or qualification. The C-06g-R5
+collector authenticates the separately bound hosted artifact and returns its
+own run metadata and inventory; its caller is responsible for persisting any
+`run.json`. These files meet that collector's archive member requirements, not
+an approved R-23/R-30 observation profile.
 
 An R-23/R-30 export requires the separately owned binding, collector/session and
 authentic observation profiles; this is not that export. M-VENUE must provide
