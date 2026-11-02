@@ -197,6 +197,7 @@ async function main() {
   const productRoot = path.join(path.dirname(output), 'pinokio-product');
   const home = path.join(path.dirname(output), 'pinokio-home');
   const appRoot = path.join(home, 'api', 'astrid');
+  const setupOnly = cli['setup-only'] === 'true';
   const ptermRoot = cli.pterm || process.env.PTERM_ROOT;
   const pinokiodRoot = cli.pinokiod || process.env.PINOKIOD_ROOT;
   if (!ptermRoot || !pinokiodRoot || !cli['agent-root']) throw new Error('runner roots are incomplete');
@@ -210,7 +211,11 @@ async function main() {
   fs.mkdirSync(path.join(home, 'data'), { recursive: true });
   const daemon = spawn(process.execPath, [path.join(pinokiodRoot, 'script', 'index.js')], {
     cwd: pinokiodRoot,
-    env: { ...process.env, HOME: path.join(home, 'user-home'), XDG_DATA_HOME: path.join(home, 'data'), PINOKIO_HOME: home, PINOKIO_HTTPS_ACTIVE: '0', PINOKIO_NETWORK_ACTIVE: '0' },
+    // The daemon owns shell.run and snapshots its environment at spawn. Seed
+    // the bounded setup-only capture here so the overlaid shell can emit its
+    // child/stage trace; setting process.env after readiness cannot reach it.
+    env: { ...process.env, HOME: path.join(home, 'user-home'), XDG_DATA_HOME: path.join(home, 'data'), PINOKIO_HOME: home, PINOKIO_HTTPS_ACTIVE: '0', PINOKIO_NETWORK_ACTIVE: '0',
+      ...(setupOnly ? { ASTRID_R25_SETUP_DIAGNOSTICS: '1' } : {}) },
     stdio: ['ignore', 'ignore', 'ignore'],
   });
   process.once('exit', () => { if (daemon.exitCode === null) daemon.kill(); });
@@ -244,7 +249,6 @@ async function main() {
     // boundaries. It is still driven through the real Pinokio engine and is
     // allowed to fail closed before an evidence session can begin. Keep its
     // bounded native trace even when PTerm times out before returning an exit.
-    const setupOnly = cli['setup-only'] === 'true';
     const requestedTimeout = Number.parseInt(cli['setup-timeout-ms'] || '', 10);
     const setupTimeoutMs = setupOnly && Number.isSafeInteger(requestedTimeout) && requestedTimeout >= 1000 && requestedTimeout <= 15 * 60 * 1000
       ? requestedTimeout : setupOnly ? 10 * 60 * 1000 : 45 * 60 * 1000;

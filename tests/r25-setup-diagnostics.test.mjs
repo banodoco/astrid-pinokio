@@ -8,6 +8,7 @@ import { instrumentWindowsBootstrap } from '../pinokio/shell.mjs';
 
 const require = createRequire(import.meta.url);
 const { createInstallDiagnostics } = require('../.github/venue/r21-observer-diagnostics.cjs');
+const runner = fs.readFileSync(new URL('../.github/venue/r25-snapshot-runner.cjs', import.meta.url), 'utf8');
 
 const bootstrap = [
   "Invoke-WebRequest -UseBasicParsing 'https://example.invalid/install.ps1' -OutFile (Join-Path $tmp 'install.ps1')",
@@ -29,6 +30,17 @@ test('instruments only bounded Windows bootstrap stages', () => {
 test('leaves an unknown native message unchanged', () => {
   const value = 'Write-Output \'native\'';
   assert.equal(instrumentWindowsBootstrap(value), value);
+});
+
+test('seeds setup-only diagnostics in the daemon environment before shell.run', () => {
+  const setupOnly = runner.indexOf("const setupOnly = cli['setup-only'] === 'true';");
+  const daemon = runner.indexOf('const daemon = spawn', setupOnly);
+  const daemonFlag = runner.indexOf("...(setupOnly ? { ASTRID_R25_SETUP_DIAGNOSTICS: '1' } : {})", daemon);
+  const setupAction = runner.indexOf('preparation = await observeAction', daemonFlag);
+  assert.ok(setupOnly >= 0);
+  assert.ok(daemon > setupOnly);
+  assert.ok(daemonFlag > daemon);
+  assert.ok(setupAction > daemonFlag);
 });
 
 test('retains bounded shell child lifecycle and bootstrap stage evidence', () => {
