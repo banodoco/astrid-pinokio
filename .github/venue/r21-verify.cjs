@@ -5,20 +5,20 @@
 // interpret fixture results or the R-20 Reset receipt.
 
 const TUPLE = Object.freeze({
-  runtime: '47e5949465cb6f3afdfd1cb8a0e90009fd9d4020',
-  agent: '020877f12ea490308a9e5f9564c8f4a4bf77ede1',
-  app: '9d3ccda1e81383082258943207745086da2aabe4',
+  runtime: '1e6d899efa77a2d6ec247c38250f9748330bb587',
+  agent: '751547766957f0a907871617d9261318a1c8cdb8',
+  app: 'cd2788e0830a96f1abb771a515b5b6abad50ecc9',
   pinokio: '89ed7aacae72bb48eb97ff9ff95c222bdd7e71e4',
   old_launcher: 'bbba620e3d89eeff8021417f365e6ea584203105',
   pinokiod: 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf',
   pterm: '5be43718701c448b43daf0ce51d8935f170065bb',
 });
 
-const REQUEST_ID = 'R-21-R11';
+const REQUEST_ID = 'R-21-R12';
 const CONFIRMATION = 'REAL_ENGINE_UPDATE_STOP_RETRY';
 const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
-const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-R11';
-const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-R11';
+const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-R12';
+const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-R12';
 const WORKFLOW_PATH = '.github/workflows/r21-real-engine.yml';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";
 const ACTIONS = Object.freeze({
