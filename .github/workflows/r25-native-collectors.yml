@@ -1,0 +1,130 @@
+name: R-25 native collector route
+
+on:
+  workflow_dispatch:
+    inputs:
+      tuple_json:
+        description: Canonical CURRENT-TUPLE.json object, supplied by M-INT/M-VENUE
+        required: true
+        type: string
+      source_ref:
+        description: Immutable adapter source commit
+        required: true
+        default: 47059b072889b489b2db20d3a3e86acf02e5a3d4
+        type: string
+      target_os:
+        description: Native collector platform(s)
+        required: true
+        default: both
+        type: choice
+        options: [macos, windows, both]
+      mode:
+        description: Pinokio slot mode(s) to bind
+        required: true
+        default: both
+        type: choice
+        options: [backend, fully-local, both]
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    if: inputs.target_os == 'macos' || inputs.target_os == 'both'
+    runs-on: macos-14
+    timeout-minutes: 15
+    env:
+      TUPLE_JSON: ${{ inputs.tuple_json }}
+      SOURCE_REF: ${{ inputs.source_ref }}
+      MODE: ${{ inputs.mode }}
+      SOURCE_ROOT: ${{ runner.temp }}/r25-macos-source
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Materialize immutable adapter source and validate binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$SOURCE_ROOT"
+          git fetch --no-tags --depth=1 origin "$SOURCE_REF"
+          git archive FETCH_HEAD -- \
+            .github/venue/adapters/macos-observer.c \
+            .github/venue/adapters/macos-observer.cjs \
+            tests/macos-observer.test.mjs \
+            .github/workflows/r25-os-adapters.yml | tar -x -C "$SOURCE_ROOT"
+          node pinokio/providers/r25-native-collector-binding.cjs \
+            --tuple-json "$TUPLE_JSON" --candidate-ref "$GITHUB_SHA" \
+            --source-ref "$SOURCE_REF" --target-os macos --mode "$MODE" \
+            --source-root "$SOURCE_ROOT" --output "$RUNNER_TEMP/r25-native-binding-macos.json"
+      - name: Build fixed Endpoint Security helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk="$(xcrun --sdk macosx --show-sdk-path)"
+          test -d "$sdk/System/Library/Frameworks/EndpointSecurity.framework"
+          /usr/bin/clang -isysroot "$sdk" -O2 -Wall -Wextra -fblocks \
+            "$SOURCE_ROOT/.github/venue/adapters/macos-observer.c" \
+            -framework EndpointSecurity -lbsm \
+            -o "$SOURCE_ROOT/.github/venue/adapters/macos-observer"
+      - name: Run focused native parser/route test
+        shell: bash
+        working-directory: ${{ runner.temp }}/r25-macos-source
+        run: node --test tests/macos-observer.test.mjs
+      - name: Retain bounded binding result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r25-native-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/r25-native-binding-macos.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows:
+    if: inputs.target_os == 'windows' || inputs.target_os == 'both'
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      TUPLE_JSON: ${{ inputs.tuple_json }}
+      SOURCE_REF: ${{ inputs.source_ref }}
+      MODE: ${{ inputs.mode }}
+      SOURCE_ROOT: ${{ runner.temp }}\r25-windows-source
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Materialize immutable adapter source and validate binding
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path $env:SOURCE_ROOT | Out-Null
+          git fetch --no-tags --depth=1 origin $env:SOURCE_REF
+          git archive FETCH_HEAD -- `
+            pinokio/windows-observer/adapter.mjs `
+            pinokio/windows-observer/etw-observer.cpp `
+            tests/windows-observer-adapter.test.mjs `
+            .github/workflows/r25-os-adapters.yml | tar -x -C $env:SOURCE_ROOT
+          node pinokio/providers/r25-native-collector-binding.cjs `
+            --tuple-json $env:TUPLE_JSON --candidate-ref $env:GITHUB_SHA `
+            --source-ref $env:SOURCE_REF --target-os windows --mode $env:MODE `
+            --source-root $env:SOURCE_ROOT --output "$env:RUNNER_TEMP\r25-native-binding-windows.json"
+      - name: Run focused Windows build and bounded ETW test
+        shell: pwsh
+        working-directory: ${{ runner.temp }}\r25-windows-source
+        run: node tests/windows-observer-adapter.test.mjs
+      - name: Retain bounded binding result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r25-native-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}\r25-native-binding-windows.json
+          if-no-files-found: warn
+          retention-days: 30
