@@ -11,6 +11,7 @@ if [[ "${1:-}" == --execute || "${1:-}" == --watchdog ]]; then
   mode=$1; shift
   deadline=4200
   if [[ "$mode" == --watchdog ]]; then deadline=${1:?deadline required}; shift; fi
+  if [[ "$mode" == --execute && -n "${R21_LOCAL_DEADLINE_SECONDS:-}" ]]; then deadline=$R21_LOCAL_DEADLINE_SECONDS; fi
   single_action=''
   if [[ "$mode" == --execute && "${1:-}" == --single-action ]]; then
     single_action=${2:?single action required}; shift 2

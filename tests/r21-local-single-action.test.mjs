@@ -11,6 +11,10 @@ test('R-21 local execution exposes only the pinned Install single-action route',
   const rejected = spawnSync('bash', [runner, '--execute', '--single-action', 'update', 'ignored.json'], { encoding: 'utf8' });
   assert.equal(rejected.status, 2);
   assert.match(rejected.stderr, /only --single-action install is supported/);
+  const badDeadline = spawnSync('bash', [runner, '--execute', 'ignored.json'], {
+    encoding: 'utf8', env: { ...process.env, R21_LOCAL_DEADLINE_SECONDS: 'not-a-number' },
+  });
+  assert.equal(badDeadline.status, 2);
   assert.match(runnerSource, /R21_LOCAL_CACHE_ROOT/);
   assert.match(runnerSource, /R21_LOCAL_EXECUTION=1/);
   assert.match(runnerSource, /GITHUB_EVENT_NAME=workflow_dispatch/);
