@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "binding": {
+    "request_id": "R-21-PUBLISHED-TUPLE-R1",
+    "runner_ref": "0bd78278ee78b72de2db07a9488b01745c0df397",
+    "run_id": "41425133763",
+    "run_attempt": "1"
+  },
+  "events": [
+    {
+      "timestamp": "2026-11-02T10:00:49.823Z",
+      "kind": "start",
+      "index": 0,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T10:00:49.824Z",
+      "kind": "result",
+      "index": 0,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T10:00:49.830Z",
+      "kind": "start",
+      "index": 1,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T10:00:49.830Z",
+      "kind": "result",
+      "index": 1,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T10:00:49.835Z",
+      "kind": "start",
+      "index": 2,
+      "total": 4,
+      "method": "shell.run"
+    },
+    {
+      "timestamp": "2026-11-02T10:00:49.912Z",
+      "kind": "stream",
+      "index": 2,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T10:00:50.454Z",
+      "kind": "installer-failure-marker",
+      "index": 2,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T10:00:50.455Z",
+      "kind": "installer-failure-marker",
+      "index": 2,
+      "total": 4,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T10:00:50.455Z",
+      "kind": "error",
+      "index": null,
+      "total": null,
+      "method": null
+    },
+    {
+      "timestamp": "2026-11-02T10:00:50.972Z",
+      "kind": "stream",
+      "index": 2,
+      "total": 4,
+      "method": null
+    }
+  ],
+  "last_activity": {
+    "timestamp": "2026-11-02T10:00:50.972Z",
+    "kind": "stream",
+    "index": 2,
+    "total": 4,
+    "method": null
+  },
+  "last_error": {
+    "timestamp": "2026-11-02T10:00:50.455Z",
+    "kind": "error",
+    "index": null,
+    "total": null,
+    "method": null
+  },
+  "last_terminal": null,
+  "timer": {
+    "started_at": "2026-11-02T10:00:49.657Z",
+    "deadline_at": "2026-11-02T10:45:49.657Z",
+    "fired_at": "2026-11-02T10:45:49.752Z"
+  },
+  "child": {
+    "spawn_error_at": null,
+    "exited_at": "2026-11-02T10:45:49.792Z",
+    "code": 0,
+    "signal": null,
+    "signal_observed": false
+  }
+}
