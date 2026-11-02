@@ -12,6 +12,12 @@ test('existing executable Windows venue selects one bounded setup-only run on th
   assert.match(workflow, /\$env:SETUP_ONLY -eq 'true'/);
 });
 
+test('bounded follow-up branch changes the capture and remains setup-only', () => {
+  assert.match(workflow, /lane\/M-PIN\/R-PIN-WINDOWS-BOUNDED/);
+  assert.match(workflow, /github\.ref_name == 'lane\/M-PIN\/R-PIN-WINDOWS-BOUNDED'/);
+  assert.match(workflow, /SETUP_ONLY:.*R-PIN-WINDOWS-EXISTING-VENUE.*R-PIN-WINDOWS-BOUNDED/);
+});
+
 test('existing six-action path remains available only on its original push ref or manual slot', () => {
   assert.match(workflow, /github\.ref_name == 'lane\/M-PIN\/R-25-WINDOWS-LF-ROUTE-R1'/);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch' && inputs\.slot_id == 'pinokio-fully-local-windows'/);
