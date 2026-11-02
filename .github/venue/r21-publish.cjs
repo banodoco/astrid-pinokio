@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { TRACE_LIMIT, projectOperation } = require('./r21-observer-diagnostics.cjs');
+const { TRACE_LIMIT, projectOperation, projectActionFailure } = require('./r21-observer-diagnostics.cjs');
 const { validateDispatch, verifyReceipt, TUPLE, ENDPOINT, REQUEST_ID } = require('./r21-verify.cjs');
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const bool = value => value === true ? true : value === false ? false : null;
@@ -82,7 +82,7 @@ function publish({ env, evidenceDir, destination, setupExit, journeyExit }) {
   if (obsFailure && ['timeout','engine-or-observer'].includes(obsFailure.category)) {
     const trace = Array.isArray(obsFailure.readiness_trace) ? obsFailure.readiness_trace.slice(-TRACE_LIMIT).map(projectOperation).filter(Boolean) : [];
     files['observer-failure.json'] = { schema: 1, status: 'blocked', category: obsFailure.category,
-      last_operation: projectOperation(obsFailure.last_operation), readiness_trace: trace };
+      action_failure: projectActionFailure(obsFailure.action_failure), last_operation: projectOperation(obsFailure.last_operation), readiness_trace: trace };
   }
   for (const [name, data] of Object.entries(files)) fs.writeFileSync(path.join(destination, name), `${JSON.stringify(data, null, 2)}\n`);
   const sums = Object.keys(files).sort().map(name => `${digest(fs.readFileSync(path.join(destination, name)))}  ${name}`).join('\n') + '\n';

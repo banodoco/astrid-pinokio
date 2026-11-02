@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { createTrace } = require('./r21-observer-diagnostics.cjs');
+const { createTrace, actionPhase, createActionTracker, ptermExit } = require('./r21-observer-diagnostics.cjs');
 const { createObserverIO } = require('./r21-observer-io.cjs');
 const {
   ACTIONS, ENDPOINT, FIRST_REFUSAL, TUPLE, verifyReceipt,
@@ -114,78 +114,74 @@ async function digestProtectedState() {
 }
 
 const trace = createTrace();
+const actionTracker = createActionTracker();
 const io = createObserverIO({ WebSocket, fetch, spawn, appRoot, ptermRoot, home, endpoint: ENDPOINT,
   record: value => { trace.record(value); write('r21-observer-operation.json', trace.snapshot().at(-1)); } });
 const { openSocket, status, waitForReadiness, runtimeReady, applicationReady, startOldLauncher } = io;
 
-function ptermExit(child, label, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error(`${label} PTerm timeout`));
-    }, timeoutMs);
-    child.once('error', () => { clearTimeout(timer); reject(new Error(`${label} PTerm spawn failed`)); });
-    child.once('exit', (code, signal) => { clearTimeout(timer); resolve({ code, signal: signal || null }); });
-  });
-}
-
 async function observeAction(label, script, timeoutMs = ACTION_TIMEOUT_MS) {
-  const localPath = path.join(appRoot, script);
-  const socket = await openSocket();
-  const observation = {
-    action_id: ++actionNumber,
-    action_uri: `${ENDPOINT}/${script}`,
-    terminal: { stop: false, disconnect: false, expected_refusal: false },
-    installer_dispatch: false,
-    stopped: false,
-    lock_free: false,
-  };
-  let disconnected;
-  const done = new Promise((resolve) => { disconnected = resolve; });
-  socket.addEventListener('message', (event) => {
-    let packet;
-    try { packet = JSON.parse(String(event.data)); }
-    catch { return; }
-    // Do not retain raw engine output.  These booleans are the entire
-    // sanitised packet projection used by the verifier.
-    if (packet.type === 'event' && packet.data === 'stop') observation.terminal.stop = true;
-    if (packet.type === 'disconnect') { observation.terminal.disconnect = true; disconnected(); }
-    if (packet.type === 'error' && String(packet.data || '').includes(FIRST_REFUSAL)) {
-      observation.terminal.expected_refusal = true;
-    }
-    if (packet.type === 'stream' && typeof packet.data?.raw === 'string') {
-      const raw = packet.data.raw;
-      if (raw.includes('--managed-by') && raw.includes('pinokio')) observation.installer_dispatch = true;
-      if (raw.includes(FIRST_REFUSAL)) observation.terminal.expected_refusal = true;
-    }
-    if (packet.type === 'result' && isObject(packet.data)) {
-      if (packet.data.stopped === true) observation.stopped = true;
-      if (packet.data.lockFree === true) observation.lock_free = true;
-    }
-    // Historical backend Update has exactly two engine steps: its retained
-    // launcher pull and the bootstrap shell.  A terminal result for step two
-    // is a packet-level proof that the fresh retry dispatched that bootstrap,
-    // without retaining shell text or installer output.
-    if (packet.type === 'result' && packet.index === 1 && packet.total === 2) {
-      observation.installer_dispatch = true;
-    }
+  const progressKey = actionPhase(label);
+  return actionTracker.run(progressKey, async setOperation => {
+    const localPath = path.join(appRoot, script);
+    const socket = await openSocket();
+    setOperation('subscription');
+    const observation = {
+      action_id: ++actionNumber,
+      action_uri: `${ENDPOINT}/${script}`,
+      terminal: { stop: false, disconnect: false, expected_refusal: false },
+      installer_dispatch: false,
+      stopped: false,
+      lock_free: false,
+    };
+    let disconnected;
+    const done = new Promise((resolve) => { disconnected = resolve; });
+    socket.addEventListener('message', (event) => {
+      let packet;
+      try { packet = JSON.parse(String(event.data)); }
+      catch { return; }
+      // Do not retain raw engine output.  These booleans are the entire
+      // sanitised packet projection used by the verifier.
+      if (packet.type === 'event' && packet.data === 'stop') observation.terminal.stop = true;
+      if (packet.type === 'disconnect') { observation.terminal.disconnect = true; disconnected(); }
+      if (packet.type === 'error' && String(packet.data || '').includes(FIRST_REFUSAL)) {
+        observation.terminal.expected_refusal = true;
+      }
+      if (packet.type === 'stream' && typeof packet.data?.raw === 'string') {
+        const raw = packet.data.raw;
+        if (raw.includes('--managed-by') && raw.includes('pinokio')) observation.installer_dispatch = true;
+        if (raw.includes(FIRST_REFUSAL)) observation.terminal.expected_refusal = true;
+      }
+      if (packet.type === 'result' && isObject(packet.data)) {
+        if (packet.data.stopped === true) observation.stopped = true;
+        if (packet.data.lockFree === true) observation.lock_free = true;
+      }
+      // Historical backend Update has exactly two engine steps: its retained
+      // launcher pull and the bootstrap shell.  A terminal result for step two
+      // is a packet-level proof that the fresh retry dispatched that bootstrap,
+      // without retaining shell text or installer output.
+      if (packet.type === 'result' && packet.index === 1 && packet.total === 2) {
+        observation.installer_dispatch = true;
+      }
+    });
+    socket.send(JSON.stringify({ uri: localPath, mode: 'listen' }));
+    await delay(1000); // a missing subscription is an evidence failure, not a pass
+    setOperation('pterm');
+    const child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', ENDPOINT], {
+      cwd: home, env: process.env, stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    observation.inner_exit = await ptermExit(child, label, timeoutMs);
+    setOperation(null);
+    progress[progressKey] = observation;
+    retainProgress();
+    setOperation('disconnect');
+    let disconnectTimer;
+    await Promise.race([done, new Promise(resolve => { disconnectTimer = setTimeout(resolve, 5000); })]);
+    clearTimeout(disconnectTimer);
+    io.disposeSocket(socket);
+    setOperation('engine-status');
+    observation.running_after = await status(localPath);
+    return observation;
   });
-  socket.send(JSON.stringify({ uri: localPath, mode: 'listen' }));
-  await delay(1000); // a missing subscription is an evidence failure, not a pass
-  const child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', ENDPOINT], {
-    cwd: home, env: process.env, stdio: ['ignore', 'ignore', 'ignore'],
-  });
-  observation.inner_exit = await ptermExit(child, label, timeoutMs);
-  const progressKey = { 'historical install': 'install', 'first Update': 'first_click',
-    'historical Stop': 'stop', 'fresh Update retry': 'retry', 'bounded cleanup Stop': 'cleanup' }[label];
-  progress[progressKey] = observation;
-  retainProgress();
-  let disconnectTimer;
-  await Promise.race([done, new Promise(resolve => { disconnectTimer = setTimeout(resolve, 5000); })]);
-  clearTimeout(disconnectTimer);
-  io.disposeSocket(socket);
-  observation.running_after = await status(localPath);
-  return observation;
 }
 
 async function lockFree() {
@@ -300,6 +296,6 @@ main().then(() => io.cleanup()).catch(async (error) => {
     fs.mkdirSync(output, { recursive: true });
     let lastOperation = null;
     try { lastOperation = JSON.parse(fs.readFileSync(path.join(output, 'r21-observer-operation.json'), 'utf8')); } catch {}
-    write('r21-failure.json', { schema: 1, status: 'blocked', category: /timeout/i.test(error.message) ? 'timeout' : 'engine-or-observer', last_operation: lastOperation, readiness_trace: trace.snapshot() });
+    write('r21-failure.json', { schema: 1, status: 'blocked', category: /timeout/i.test(error.message) ? 'timeout' : 'engine-or-observer', action_failure: actionTracker.failure(), last_operation: lastOperation, readiness_trace: trace.snapshot() });
   } finally { await io.cleanup(); }
 });

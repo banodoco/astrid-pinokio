@@ -6,6 +6,42 @@ const operations = ['start-client', 'start-status', 'engine-resource', 'runtime'
 const categories = ['pending', 'success', 'not-ready', 'timeout', 'error'];
 const errorClasses = ['TypeError', 'Error', 'AbortError', 'other'];
 const errorCodes = ['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'EPIPE', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'other'];
+const actionPhases = ['install', 'first_click', 'stop', 'retry', 'cleanup'];
+const actionOperations = ['socket-connect', 'subscription', 'pterm', 'disconnect', 'engine-status'];
+const actionLabels = Object.freeze({ 'historical install': 'install', 'first Update': 'first_click',
+  'historical Stop': 'stop', 'fresh Update retry': 'retry', 'bounded cleanup Stop': 'cleanup' });
+const actionPhase = label => Object.hasOwn(actionLabels, label) ? actionLabels[label] : null;
+function projectActionFailure(value) {
+  if (!actionPhases.includes(value?.phase) || !actionOperations.includes(value?.operation)
+      || !['timeout', 'error'].includes(value?.status)) return null;
+  return { phase: value.phase, operation: value.operation, status: value.status };
+}
+function createActionTracker() {
+  let failure = null;
+  return {
+    async run(phase, fn) {
+      let operation = 'socket-connect';
+      failure = null;
+      try { return await fn(value => { operation = value; }); }
+      catch (error) {
+        failure = projectActionFailure({ phase, operation,
+          status: /timeout/i.test(typeof error?.message === 'string' ? error.message : '') ? 'timeout' : 'error' });
+        throw error;
+      }
+    },
+    failure() { return failure; },
+  };
+}
+function ptermExit(child, label, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`${label} PTerm timeout`));
+    }, timeoutMs);
+    child.once('error', () => { clearTimeout(timer); reject(new Error(`${label} PTerm spawn failed`)); });
+    child.once('exit', (code, signal) => { clearTimeout(timer); resolve({ code, signal: signal || null }); });
+  });
+}
 function transportFailure(error) {
   const name = error?.name;
   const code = error?.cause?.code ?? error?.code;
@@ -36,4 +72,4 @@ function createTrace() {
     snapshot() { return entries.slice(); },
   };
 }
-module.exports = { TRACE_LIMIT, transportFailure, projectOperation, createTrace };
+module.exports = { TRACE_LIMIT, transportFailure, projectOperation, createTrace, actionPhase, projectActionFailure, createActionTracker, ptermExit };

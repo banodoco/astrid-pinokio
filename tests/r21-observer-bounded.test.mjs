@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn as realSpawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,7 +10,48 @@ import { test } from 'node:test';
 const require = createRequire(import.meta.url);
 const { createObserverIO } = require('../.github/venue/r21-observer-io.cjs');
 const { publish } = require('../.github/venue/r21-publish.cjs');
-const { TRACE_LIMIT, createTrace } = require('../.github/venue/r21-observer-diagnostics.cjs');
+const { TRACE_LIMIT, createTrace, actionPhase, createActionTracker, ptermExit } = require('../.github/venue/r21-observer-diagnostics.cjs');
+
+for (const [label, phase] of [['historical install', 'install'], ['first Update', 'first_click'],
+  ['historical Stop', 'stop'], ['fresh Update retry', 'retry'], ['bounded cleanup Stop', 'cleanup']]) {
+  test(`${label} PTerm timeout retains only its fixed action phase and class`, async () => {
+    const tracker = createActionTracker();
+    const child = new EventEmitter();
+    child.kill = signal => { child.killedWith = signal; };
+    await assert.rejects(tracker.run(actionPhase(label), async setOperation => {
+      setOperation('pterm');
+      await ptermExit(child, label, 5);
+    }), /PTerm timeout/);
+    assert.equal(child.killedWith, 'SIGTERM');
+    assert.deepEqual(tracker.failure(), { phase, operation: 'pterm', status: 'timeout' });
+  });
+}
+
+test('action transport and PTerm errors are classified without retaining exception data', async () => {
+  for (const [operation, error, status] of [
+    ['socket-connect', new Error('private timeout /secret'), 'timeout'],
+    ['engine-status', new Error('private timeout /secret'), 'timeout'],
+    ['subscription', new Error('private /secret'), 'error'],
+    ['pterm', new Error('private /secret'), 'error'],
+  ]) {
+    const tracker = createActionTracker();
+    await assert.rejects(tracker.run('install', async setOperation => { setOperation(operation); throw error; }));
+    assert.deepEqual(tracker.failure(), { phase: 'install', operation, status });
+    assert.equal(JSON.stringify(tracker.failure()).includes('private'), false);
+    await tracker.run('retry', async () => {});
+    assert.equal(tracker.failure(), null);
+  }
+  const tracker = createActionTracker();
+  const child = new EventEmitter();
+  const result = tracker.run('install', async setOperation => {
+    setOperation('pterm');
+    await ptermExit(child, 'historical install', 1000);
+  });
+  child.emit('error', new Error('private /secret'));
+  await assert.rejects(result, /PTerm spawn failed/);
+  assert.deepEqual(tracker.failure(), { phase: 'install', operation: 'pterm', status: 'error' });
+  assert.equal(actionPhase('private'), null);
+});
 
 function fixture({ socketMode = 'success', fetchMode = 'success', spawnMode = 'normal', pollMs = 45 } = {}) {
   const notes = [];
@@ -175,10 +217,52 @@ test('publisher allows only timestamped fixed operation and category fields', ()
     publish({ env, evidenceDir, destination, setupExit: 0, journeyExit: 1 });
     failure = JSON.parse(fs.readFileSync(path.join(destination, 'observer-failure.json')));
     assert.equal(failure.last_operation, null);
+    fs.writeFileSync(path.join(evidenceDir, 'r21-failure.json'), JSON.stringify({ category: 'timeout',
+      action_failure: { phase: 'install', operation: 'pterm', status: 'timeout', raw: 'private /secret' } }));
+    const verdict = publish({ env, evidenceDir, destination, setupExit: 0, journeyExit: 1 });
+    failure = JSON.parse(fs.readFileSync(path.join(destination, 'observer-failure.json')));
+    assert.deepEqual(failure.action_failure, { phase: 'install', operation: 'pterm', status: 'timeout' });
+    assert.equal(verdict.status, 'FAILED');
+    assert.equal(verdict.reason, 'journey_receipt_missing');
+    for (const action_failure of [
+      { phase: 'private', operation: 'pterm', status: 'timeout' },
+      { phase: 'install', operation: 'private', status: 'timeout' },
+      { phase: 'install', operation: 'pterm', status: 'private' },
+    ]) {
+      fs.writeFileSync(path.join(evidenceDir, 'r21-failure.json'), JSON.stringify({ category: 'timeout', action_failure }));
+      publish({ env, evidenceDir, destination, setupExit: 0, journeyExit: 1 });
+      failure = JSON.parse(fs.readFileSync(path.join(destination, 'observer-failure.json')));
+      assert.equal(failure.action_failure, null);
+      assert.equal(JSON.stringify(failure).includes('private'), false);
+    }
     put({ operation: 'runtime', category: 'timeout', timestamp: '2026-02-31T00:00:00.000Z' });
     publish({ env, evidenceDir, destination, setupExit: 0, journeyExit: 1 });
     failure = JSON.parse(fs.readFileSync(path.join(destination, 'observer-failure.json')));
     assert.equal(failure.last_operation, null);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('observer records the install socket failure through its real failure handler', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r21-action-main-'));
+  try {
+    const pterm = path.join(root, 'pterm'); const output = path.join(root, 'evidence');
+    const moduleDir = path.join(pterm, 'node_modules', 'unws');
+    fs.mkdirSync(moduleDir, { recursive: true });
+    fs.writeFileSync(path.join(moduleDir, 'index.js'), `exports.WebSocket = class extends EventTarget {
+      constructor() { super(); setImmediate(() => this.dispatchEvent(new Event('error'))); }
+      terminate() {}
+    };`);
+    const { ENDPOINT, TUPLE } = require('../.github/venue/r21-verify.cjs');
+    const request = path.join(root, 'request.json');
+    fs.writeFileSync(request, JSON.stringify({ endpoint: ENDPOINT, tuple: TUPLE }));
+    const observer = realSpawn(process.execPath, ['.github/venue/r21-observe.cjs', request, output], {
+      cwd: process.cwd(), stdio: 'ignore', env: { ...process.env, R21_APP_ROOT: root, R21_PTERM_ROOT: pterm, R21_VENUE_HOME: root },
+    });
+    const result = await new Promise(resolve => observer.once('close', (code, signal) => resolve({ code, signal })));
+    assert.deepEqual(result, { code: 1, signal: null });
+    const failure = JSON.parse(fs.readFileSync(path.join(output, 'r21-failure.json')));
+    assert.deepEqual(failure.action_failure, { phase: 'install', operation: 'socket-connect', status: 'error' });
+    assert.equal(failure.category, 'engine-or-observer');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
