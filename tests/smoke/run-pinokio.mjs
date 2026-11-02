@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import library from '../../pinokio/lib.js';
 import { signalGroup } from '../../pinokio/session.mjs';
-import { boundedFileDiagnostic, runTool as executeTool, timedStep } from './process.mjs';
+import { completeFileDiagnostic, linuxLockDiagnostic, runTool as executeTool, timedStep } from './process.mjs';
 
 const require = createRequire(import.meta.url);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -97,20 +97,28 @@ function installLogCandidates(environment) {
 }
 
 function failedStepDiagnostic(environment) {
+  // Pinokio's sanitized child environment removes XDG_DATA_HOME. The installer
+  // derives its Linux lock from HOME, not the contaminated fixture's XDG value.
+  const home = environment.HOME;
+  const lockPath = home ? path.join(home, '.local', 'share', 'astrid-install.lock') : null;
+  const roots = [home, environment.ASTRID_PINOKIO_APP_DIR].filter(Boolean);
+  const snapshot = linuxLockDiagnostic(lockPath, roots);
+  const lines = [`Installer lock diagnostic: ${JSON.stringify(snapshot)}`];
   const candidates = installLogCandidates(environment);
-  const unreadable = [];
+  const unavailable = [];
   for (const filename of candidates) {
-    const diagnostic = boundedFileDiagnostic(filename);
+    const diagnostic = completeFileDiagnostic(filename);
     if (diagnostic.status === 'present') {
-      const header = `Installer diagnostic: ${filename} (${diagnostic.retainedBytes}/${diagnostic.sourceBytes} trailing bytes retained from offset ${diagnostic.retainedOffset}; sha256 of retained bytes ${diagnostic.sha256}${diagnostic.truncated ? '; truncated' : ''})`;
-      return `${header}\n--- installer log begin ---\n${diagnostic.bytes}\n--- installer log end ---`;
+      const { base64, ...metadata } = diagnostic;
+      lines.push(`Installer diagnostic: ${JSON.stringify({ path: filename, ...metadata, encoding: 'base64', chunkBytes: 12000 })}`);
+      for (let offset = 0; offset < base64.length; offset += 12000) lines.push(`INSTALL_LOG_BASE64 ${base64.slice(offset, offset + 12000)}`);
+      lines.push('INSTALL_LOG_END');
+      return lines.join('\n');
     }
-    if (diagnostic.status === 'unreadable') {
-      unreadable.push(`${filename}: ${diagnostic.error}`);
-    }
+    if (diagnostic.status !== 'missing') unavailable.push({ path: filename, ...diagnostic });
   }
-  if (unreadable.length) return `Installer diagnostic: unreadable (${unreadable.join('; ')}; checked ${candidates.join(', ')})`;
-  return `Installer diagnostic: absent (checked ${candidates.join(', ') || 'no configured locations'})`;
+  lines.push(`Installer diagnostic: ${unavailable.length ? JSON.stringify(unavailable) : `absent (checked ${candidates.join(', ') || 'no configured locations'})`}`);
+  return lines.join('\n');
 }
 
 function makeNodeLauncher(binDirectory) {
@@ -199,7 +207,7 @@ export function launchShell(step, environment, { background = false, onSpawn } =
   if (!background) return child.exit.then(({ code, signal }) => {
     const installLog = code === 0 ? '' : `\n${failedStepDiagnostic(withStepEnvironment(environment, step.params.env))}`;
     if (installLog) process.stdout.write(`${installLog}\n`);
-    assert.equal(code, 0, `${step.params.shell} step failed (${signal || code}):\n${child.output}${installLog}`);
+    assert.equal(code, 0, `${step.params.shell} step failed (${signal || code}):\n${child.output}`);
     return child;
   });
 

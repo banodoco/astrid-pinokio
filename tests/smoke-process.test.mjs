@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { test } from 'node:test';
-import { boundedFileDiagnostic, runTool } from './smoke/process.mjs';
+import { boundedFileDiagnostic, completeFileDiagnostic, linuxLockDiagnostic, redactArguments, runTool } from './smoke/process.mjs';
 import { invokeAction, launchShell } from './smoke/run-pinokio.mjs';
 
 test('installer diagnostics report absence and retain a bounded, hashed log tail', () => {
@@ -52,9 +52,6 @@ test('failed Pinokio shell step includes the state installer log before cleanup'
       params: { shell: 'bash', path: appDirectory, message: 'exit 19' },
     }, { HOME: home, ASTRID_PINOKIO_APP_DIR: appDirectory }), (error) => {
       assert.match(error.message, /bash step failed \(19\)/);
-      assert.match(error.message, /another installer owns the installation lifetime lock/);
-      assert.match(error.message, /owner pid=4242/);
-      assert.match(error.message, /sha256 of retained bytes [a-f0-9]{64}/);
       return true;
     });
     assert.equal(fs.readFileSync(logPath, 'utf8').includes('owner pid=4242'), true,
@@ -64,7 +61,7 @@ test('failed Pinokio shell step includes the state installer log before cleanup'
   }
 });
 
-test('fully-local Update callback retains its bounded installer diagnostic before home cleanup', async () => {
+test('fully-local Update callback retains its complete installer diagnostic before home cleanup', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-callback-update-'));
   const astridHome = path.join(directory, 'selected');
   const home = path.join(directory, 'home');
@@ -73,7 +70,6 @@ test('fully-local Update callback retains its bounded installer diagnostic befor
     ? path.join(astridHome, 'Astrid Runtime', 'logs', 'install.log')
     : path.join(astridHome, '.local', 'state', 'astrid-runtime', 'logs', 'install.log');
   const bytes = Buffer.from(`${'x'.repeat(70 * 1024)}\nowner pid=4242\n`);
-  const tail = bytes.subarray(-64 * 1024);
   const expectedError = new Error('another installer owns the installation lifetime lock');
   fs.mkdirSync(path.join(appDirectory, 'pinokio'), { recursive: true });
   fs.copyFileSync(new URL('../pinokio/update.js', import.meta.url), path.join(appDirectory, 'pinokio', 'update.js'));
@@ -107,9 +103,11 @@ test('fully-local Update callback retains its bounded installer diagnostic befor
   }
   assert.equal(fs.existsSync(logPath), false);
   assert.ok(output.includes(logPath));
-  assert.ok(output.includes(`65536/${bytes.length} trailing bytes retained from offset ${bytes.length - tail.length}`));
-  assert.ok(output.includes(`sha256 of retained bytes ${createHash('sha256').update(tail).digest('hex')}; truncated`));
-  assert.ok(output.includes(`--- installer log begin ---\n${tail.toString()}\n--- installer log end ---`));
+  assert.ok(output.includes(`"sourceBytes":${bytes.length}`));
+  assert.ok(output.includes(`"sha256":"${createHash('sha256').update(bytes).digest('hex')}"`));
+  const chunks = [...output.matchAll(/^INSTALL_LOG_BASE64 (.*)$/gm)].map((match) => match[1]);
+  assert.deepEqual(Buffer.from(chunks.join(''), 'base64'), bytes);
+  assert.ok(output.includes('INSTALL_LOG_END'));
   assert.ok(output.includes('Installer diagnostic: absent (checked no configured locations)'));
 });
 
@@ -136,11 +134,65 @@ test('failed Update callback reports absent and unreadable installer logs', { sk
     output = '';
     fs.mkdirSync(logPath, { recursive: true });
     await assert.rejects(run(), /callback failed/);
-    assert.match(output, /Installer diagnostic: unreadable/);
+    assert.match(output, /"status":"unreadable"/);
     assert.match(output, /EISDIR/);
     assert.doesNotMatch(output, /Installer diagnostic: absent/);
   } finally {
     process.stdout.write = write;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('complete log capture preserves bytes and withholds credential-like content', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-full-log-'));
+  const filename = path.join(directory, 'install.log');
+  try {
+    assert.equal(completeFileDiagnostic(filename).status, 'missing');
+    const bytes = Buffer.concat([Buffer.alloc(150000, 120), Buffer.from([0, 255, 10])]);
+    fs.writeFileSync(filename, bytes);
+    const result = completeFileDiagnostic(filename);
+    assert.deepEqual(Buffer.from(result.base64, 'base64'), bytes);
+    assert.equal(result.sha256, createHash('sha256').update(bytes).digest('hex'));
+    fs.writeFileSync(filename, 'token=private-value');
+    assert.deepEqual(completeFileDiagnostic(filename), { status: 'withheld', reason: 'credential-like content or environment dump detected' });
+    assert.deepEqual(redactArguments(['python', '--token', 'private', '--password=private', 'API_KEY=private', 'https://u:p@example/x', '-c', 'secret code', 'run']),
+      ['python', '--token', '[REDACTED]', '[REDACTED]', '[REDACTED]', '[REDACTED]', '-c', '[REDACTED]', 'run']);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('Linux lock snapshot identifies the kernel owner, process and open lock fd', { skip: process.platform !== 'linux' }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-lock-snapshot-'));
+  const filename = path.join(directory, 'astrid-install.lock');
+  let holder;
+  try {
+    assert.equal(linuxLockDiagnostic(filename, [directory]).lock.state, 'absent');
+    fs.writeFileSync(filename, '');
+    const idle = linuxLockDiagnostic(filename, [directory]);
+    assert.equal(idle.lock.fileType, 'regular file');
+    assert.equal(idle.lock.state, 'no matching kernel lock observed');
+    assert.equal(idle.lock.owner.status, 'unknown');
+    holder = spawn('python3', ['-u', '-c', 'import fcntl,sys,time; f=open(sys.argv[1],"r+"); fcntl.flock(f,fcntl.LOCK_EX); print("ready",flush=True); time.sleep(60)', filename, '--token', 'dont-publish'], { cwd: directory, stdio: ['ignore', 'pipe', 'pipe'] });
+    await once(holder.stdout, 'data');
+    const snapshot = linuxLockDiagnostic(filename, [directory]);
+    assert.equal(snapshot.lock.state, 'locked');
+    assert.equal(snapshot.lock.entries[0].type, 'FLOCK');
+    assert.equal(snapshot.lock.entries[0].mode, 'WRITE');
+    assert.equal(snapshot.owners[0].kernelPid, holder.pid);
+    const owner = snapshot.owners[0].ancestry[0];
+    assert.equal(owner.pid, holder.pid);
+    assert.equal(owner.ppid, process.pid);
+    assert.ok(owner.startTicks);
+    assert.match(owner.startTime, /^\d{4}-/);
+    assert.match(owner.executable, /python/);
+    assert.ok(owner.commandLine.includes('[REDACTED]'));
+    assert.ok(owner.openFds.some((fd) => fd.target === filename && fd.matchesLock === true));
+    assert.equal(snapshot.owners[0].ancestry[1].pid, process.pid);
+    assert.doesNotMatch(JSON.stringify(snapshot), /dont-publish/);
+    assert.equal(linuxLockDiagnostic(filename, ['/not-the-smoke-root']).lock.status, 'unknown');
+    assert.equal(linuxLockDiagnostic(filename, [directory], { platform: 'win32' }).lock.status, 'unknown');
+    assert.match(linuxLockDiagnostic(filename, [directory], { proc: path.join(directory, 'missing-proc') }).lock.reason, /proc\/locks/);
+  } finally {
+    if (holder) { holder.kill(); await once(holder, 'close'); }
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
