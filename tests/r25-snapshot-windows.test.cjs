@@ -73,4 +73,14 @@ test('rejects malformed creation time, capacity, and digest', () => {
   const digest = signed();
   digest.structural_sha256 = '0'.repeat(64);
   assert.throws(() => provider.validateObservation(digest), /structural_sha256/);
+
+  const reversed = signed();
+  reversed.capture.completed_monotonic_ns = 0;
+  reversed.structural_sha256 = provider.structuralDigest(reversed);
+  assert.throws(() => provider.validateObservation(reversed), /completion precedes/);
+
+  const unbounded = signed();
+  unbounded.limits.max_targets = 65;
+  unbounded.structural_sha256 = provider.structuralDigest(unbounded);
+  assert.throws(() => provider.validateObservation(unbounded), /max_targets/);
 });

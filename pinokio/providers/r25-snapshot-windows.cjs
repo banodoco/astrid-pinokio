@@ -9,6 +9,13 @@ const POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.e
 const MAX_PID = 0xffffffff;
 const HEX64 = /^[0-9a-f]{64}$/;
 const MAX_TEXT = 32768;
+const LIMIT_MAXIMUMS = Object.freeze({
+  max_processes: 4096,
+  max_targets: 64,
+  max_task_actions: 32,
+  max_output_bytes: 8 * 1024 * 1024,
+  timeout_seconds: 30,
+});
 const TASK_PATH = /^\\(?:[^\\\u0000-\u001f]+\\)*[^\\\u0000-\u001f]+$/u;
 const SERVICE_NAME = /^[A-Za-z0-9][A-Za-z0-9 _.$-]{0,255}$/;
 const PROFILE = Object.freeze({
@@ -159,8 +166,9 @@ function validateObservation(value) {
   const capture = exact(observation.capture, ['started_at_utc', 'completed_at_utc', 'started_monotonic_ns', 'completed_monotonic_ns', 'collector_pid'], 'capture');
   utc(capture.started_at_utc, 'capture.started_at_utc'); utc(capture.completed_at_utc, 'capture.completed_at_utc');
   integer(capture.started_monotonic_ns, 'capture.started_monotonic_ns'); integer(capture.completed_monotonic_ns, 'capture.completed_monotonic_ns'); integer(capture.collector_pid, 'capture.collector_pid', 1, MAX_PID);
+  if (capture.completed_monotonic_ns < capture.started_monotonic_ns || Date.parse(capture.completed_at_utc) < Date.parse(capture.started_at_utc)) refuse('capture completion precedes capture start');
   const limits = exact(observation.limits, ['max_processes', 'max_targets', 'max_task_actions', 'max_output_bytes', 'timeout_seconds'], 'limits');
-  for (const key of Object.keys(limits)) integer(limits[key], `limits.${key}`, 1);
+  for (const key of Object.keys(limits)) integer(limits[key], `limits.${key}`, 1, LIMIT_MAXIMUMS[key]);
   const targets = exact(observation.targets, ['scheduled_task_paths', 'service_names'], 'targets');
   const tasks = targetList(targets.scheduled_task_paths, 'targets.scheduled_task_paths', taskTarget, limits.max_targets);
   const services = targetList(targets.service_names, 'targets.service_names', serviceTarget, limits.max_targets);
