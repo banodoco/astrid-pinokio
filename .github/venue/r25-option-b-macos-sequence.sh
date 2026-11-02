@@ -22,8 +22,7 @@ test "$(stat -f '%p' "$run_root")" = 700
 
 install_root="$run_root/installed"
 sources="$install_root/sources"
-tool_bin="$install_root/bin"
-mkdir -m 700 "$install_root" "$tool_bin"
+mkdir -m 700 "$install_root"
 route_exit_written=0
 
 safe_remove() {
@@ -76,26 +75,21 @@ trap cleanup EXIT HUP INT TERM
 exec > >(tee -a "$run_root/setup.stdout.log") 2> >(tee -a "$run_root/setup.stderr.log" >&2)
 printf 'R25_RUN_ROOT=%s\n' "$run_root"
 
-python311="${PYTHON311:-}"
-if [ -z "$python311" ]; then
-  python311="$(command -v python3.11 2>/dev/null || true)"
+python_bin="${PYTHON_BIN:-${PYTHON311:-}}"
+if [ -z "$python_bin" ]; then
+  python_bin="$(command -v python3.11 2>/dev/null || true)"
 fi
-if [ -z "$python311" ] && command -v brew >/dev/null 2>&1; then
-  python311="$(brew --prefix python@3.11 2>/dev/null || true)/bin/python3.11"
+if [ -z "$python_bin" ] && command -v brew >/dev/null 2>&1; then
+  python_bin="$(brew --prefix python@3.11 2>/dev/null || true)/bin/python3.11"
 fi
-test -x "$python311"
-test "$("$python311" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')" = 3.11
+test -x "$python_bin"
+python_actual_version="$("$python_bin" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
+test "$python_actual_version" = 3.11
+python_actual_executable="$("$python_bin" -c 'import os, sys; print(os.path.realpath(sys.executable))')"
+test -x "$python_actual_executable"
 
-# The checked-in route has a fixed python3.12 executable-name/version guard,
-# while BUNDLE A provides Homebrew Python 3.11. Keep the route source exact and
-# satisfy that legacy guard with a run-owned shim; every real Python invocation
-# below executes the verified 3.11 binary.
-printf '%s\n' '#!/bin/bash' \
-  'if [ "${1:-}" = "-c" ] && [[ "${2:-}" == *sys.version_info* ]]; then printf "%s\\n" 3.12; exit 0; fi' \
-  "exec \"$python311\" \"\$@\"" >"$tool_bin/python3.12"
-chmod 700 "$tool_bin/python3.12"
-PATH="$tool_bin:$PATH"
-export PATH
+# The local wrapper accepts this real, explicitly supported Python 3.11
+# interpreter. No alternate executable is installed.
 
 venue_ref=327d0fc29f0b63d58e6c6c3449c81af5912ac85c
 agent_ref=a6b68d5b5478326a4db1971966d33a2cfe61d091
@@ -108,9 +102,10 @@ printf '%s\n' \
   "runner_user=$(id -un)" \
   "runner_uid=$run_uid" \
   "node=$(node --version)" \
-  "python_actual=$python311" \
-  "python_actual_version=$("$python311" --version 2>&1)" \
-  "python_route_command=python3.12 (run-owned compatibility shim -> Python 3.11)" \
+  "python_command=$python_bin" \
+  "python_actual_executable=$python_actual_executable" \
+  "python_actual_version=$python_actual_version" \
+  "python_version_guard=explicitly-supported-3.11" \
   "pinokio_source_ref=$venue_ref" \
   "pinokio_product_ref=$pinokio_product_ref" \
   "agent_ref=$agent_ref" \
@@ -144,7 +139,7 @@ npm ci --omit=dev --prefix "$sources/pterm" --silent
     --validate-source-only true --agent-ref "$agent_ref" \
     --agent-root "$sources/astrid-agent" --pinokio-root "$sources/astrid-pinokio"
   node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-macos.test.cjs
-  "$python311" -m py_compile \
+  "$python_bin" -m py_compile \
     "$sources/astrid-agent/scripts/pinokio_snapshot_collector.py" \
     "$sources/astrid-agent/scripts/pinokio_snapshot_macos.py" \
     .github/venue/r25-snapshot-worker.py

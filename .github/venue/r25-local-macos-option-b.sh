@@ -23,9 +23,15 @@ case "$run_root" in /*) ;; *) printf 'RUN_ROOT must be absolute\n' >&2; exit 64;
 mkdir -m 700 "$run_root/results" || exit 1
 
 node_version="$(node --version 2>/dev/null || true)"
-python_version="$(python3.12 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null || true)"
+python_bin="${PYTHON:-python3.11}"
+if [ "${python_bin#/}" = "$python_bin" ]; then
+  python_bin="$(command -v "$python_bin" 2>/dev/null || true)"
+fi
+python_version="$("$python_bin" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null || true)"
+python_executable="$("$python_bin" -c 'import os, sys; print(os.path.realpath(sys.executable))' 2>/dev/null || true)"
 [ "$node_version" = v20.19.4 ] || { printf 'Node v20.19.4 is required (found %s)\n' "$node_version" >&2; exit 69; }
-[ "$python_version" = 3.12 ] || { printf 'Python 3.12 is required\n' >&2; exit 69; }
+[ "$python_version" = 3.11 ] || { printf 'Python 3.11 is required (found %s)\n' "$python_version" >&2; exit 69; }
+[ -x "$python_executable" ] || { printf 'Python executable is not usable: %s\n' "$python_bin" >&2; exit 69; }
 
 agent_ref=a6b68d5b5478326a4db1971966d33a2cfe61d091
 pinokiod_ref=add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
@@ -91,7 +97,7 @@ NODE
     cd "$venue_root" || exit 1
     env R25_TARGET_OS=macos R25_SLOT_ID="$slot" R25_LAUNCHD_TARGET="$launchd_target" \
       R25_TUPLE_JSON="$tuple" R25_OUTPUT="$output" R25_DIAGNOSTICS="$diagnostics" \
-      PYTHON=python3.12 \
+      PYTHON="$python_bin" \
       node .github/venue/r25-snapshot-runner.cjs \
         --local-origin "$origin" --agent-root "$agent_root" --pinokiod "$pinokiod_root" \
         --pterm "$pterm_root" --output "$output"
@@ -125,7 +131,7 @@ const value = {
 fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
 NODE
 
-python3.12 - "$run_root/results" <<'PY'
+"$python_bin" - "$run_root/results" <<'PY'
 import hashlib
 import os
 import pathlib
