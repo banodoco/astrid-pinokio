@@ -68,24 +68,44 @@ test('installed tuple observation binds the selected manifest and rejects escape
   } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
 });
 
-test('protected state rejects a missing selected version, required selected file, or user-data root', async () => {
-  const f = fixture();
-  try {
-    fs.rmSync(f.version, { recursive: true });
-    await assert.rejects(digestProtectedState(f.appRoot, f.home), /selected installed version root is missing/);
-  } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
+test('protected state rejects every required selected control resource when it is missing', async () => {
+  const cases = [
+    [f => path.join(f.root, 'current'), /protected installed version selection is missing/],
+    [f => path.join(f.root, 'install.json'), /protected installed record is missing/],
+    [f => f.version, /selected installed version root is missing/],
+    [f => path.join(f.version, 'manifest.json'), /selected installed manifest is missing/],
+    [f => path.join(f.version, 'version.json'), /selected installed version record is missing/],
+    [f => path.join(f.version, 'bin', 'python'), /selected installed Python is missing/],
+    [f => path.join(f.version, 'profile.json'), /selected installed profile is missing/],
+    [f => f.data, /protected user data root is missing/],
+  ];
+  for (const [resource, message] of cases) {
+    const f = fixture();
+    try {
+      fs.rmSync(resource(f), { recursive: true, force: true });
+      await assert.rejects(digestProtectedState(f.appRoot, f.home), message);
+    } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
+  }
+});
 
-  const missing = fixture();
-  try {
-    fs.rmSync(path.join(missing.version, 'bin', 'python'));
-    await assert.rejects(digestProtectedState(missing.appRoot, missing.home), /selected installed Python is missing/);
-  } finally { fs.rmSync(missing.home, { recursive: true, force: true }); }
-
-  const missingData = fixture();
-  try {
-    fs.rmSync(missingData.data, { recursive: true });
-    await assert.rejects(digestProtectedState(missingData.appRoot, missingData.home), /protected user data root is missing/);
-  } finally { fs.rmSync(missingData.home, { recursive: true, force: true }); }
+test('protected state rejects linked control resources', { skip: process.platform === 'win32' }, async () => {
+  const cases = [
+    [f => path.join(f.root, 'current'), /protected installed version selection is not a regular file/],
+    [f => path.join(f.root, 'install.json'), /protected installed record is not a regular file/],
+    [f => path.join(f.root, 'update-transaction.json'), /protected installed update transaction is not a regular file/],
+    [f => path.join(f.version, 'manifest.json'), /selected installed manifest is not a regular file/],
+  ];
+  for (const [resource, message] of cases) {
+    const f = fixture();
+    try {
+      const pathname = resource(f);
+      const target = `${pathname}.target`;
+      fs.writeFileSync(target, fs.existsSync(pathname) ? fs.readFileSync(pathname) : 'transaction');
+      fs.rmSync(pathname, { force: true });
+      fs.symlinkSync(path.basename(target), pathname);
+      await assert.rejects(digestProtectedState(f.appRoot, f.home), message);
+    } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
+  }
 });
 
 test('deleting a selected installed file changes the protected digest and is rejected by comparison', async () => {
