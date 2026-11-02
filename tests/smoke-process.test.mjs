@@ -1,8 +1,41 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { test } from 'node:test';
-import { runTool } from './smoke/process.mjs';
+import { boundedFileDiagnostic, runTool } from './smoke/process.mjs';
+
+test('installer diagnostics report absence and retain a bounded, hashed log prefix', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-install-diagnostic-'));
+  const filename = path.join(directory, 'install.log');
+  try {
+    assert.deepEqual(boundedFileDiagnostic(filename, 8), { status: 'missing' });
+
+    fs.writeFileSync(filename, 'lock owner pid=42');
+    const full = boundedFileDiagnostic(filename, 64);
+    assert.equal(full.status, 'present');
+    assert.equal(full.bytes, 'lock owner pid=42');
+    assert.equal(full.sourceBytes, 17);
+    assert.equal(full.retainedOffset, 0);
+    assert.equal(full.retainedBytes, 17);
+    assert.equal(full.truncated, false);
+    assert.equal(full.sha256, createHash('sha256').update('lock owner pid=42').digest('hex'));
+
+    const bounded = boundedFileDiagnostic(filename, 8);
+    assert.equal(bounded.bytes, 'r pid=42');
+    assert.equal(bounded.sourceBytes, 17);
+    assert.equal(bounded.retainedOffset, 9);
+    assert.equal(bounded.retainedBytes, 8);
+    assert.equal(bounded.truncated, true);
+    assert.equal(bounded.sha256, createHash('sha256').update('r pid=42').digest('hex'));
+    assert.throws(() => boundedFileDiagnostic(filename, 0), RangeError);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('smoke commands keep draining a noisy server while waiting for its response', async () => {
   const server = spawn(process.execPath, ['-e', `

@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import library from '../../pinokio/lib.js';
 import { signalGroup } from '../../pinokio/session.mjs';
-import { runTool as executeTool, timedStep } from './process.mjs';
+import { boundedFileDiagnostic, runTool as executeTool, timedStep } from './process.mjs';
 
 const require = createRequire(import.meta.url);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -82,6 +82,30 @@ function makeFfmpegGuard(binDirectory) {
 
 function quoteBash(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+function installLogCandidates(environment) {
+  if (windows) return [path.join(environment.LOCALAPPDATA || environment.USERPROFILE, 'Astrid Runtime', 'logs', 'install.log')];
+  const roots = [environment.ASTRID_HOME, environment.HOME].filter(Boolean);
+  return [...new Set([
+    ...roots.map((root) => path.join(root, '.local', 'state', 'astrid-runtime', 'logs', 'install.log')),
+    ...roots.map((root) => path.join(root, '.local', 'share', 'astrid-runtime', 'logs', 'install.log')),
+  ])];
+}
+
+function failedStepDiagnostic(environment) {
+  const candidates = installLogCandidates(environment);
+  for (const filename of candidates) {
+    const diagnostic = boundedFileDiagnostic(filename);
+    if (diagnostic.status === 'present') {
+      const header = `Installer diagnostic: ${filename} (${diagnostic.retainedBytes}/${diagnostic.sourceBytes} trailing bytes retained from offset ${diagnostic.retainedOffset}; sha256 of retained bytes ${diagnostic.sha256}${diagnostic.truncated ? '; truncated' : ''})`;
+      return `${header}\n--- installer log begin ---\n${diagnostic.bytes}\n--- installer log end ---`;
+    }
+    if (diagnostic.status === 'unreadable') {
+      log(`Installer diagnostic unreadable: ${filename}: ${diagnostic.error}`);
+    }
+  }
+  return `Installer diagnostic: absent (checked ${candidates.join(', ') || 'no configured locations'})`;
 }
 
 function makeNodeLauncher(binDirectory) {
@@ -168,12 +192,8 @@ function launchShell(step, environment, { background = false, onSpawn } = {}) {
   onSpawn?.(child);
 
   if (!background) return child.exit.then(({ code, signal }) => {
-    const installLogPath = windows
-      ? path.join(environment.LOCALAPPDATA || environment.USERPROFILE, 'Astrid Runtime', 'logs', 'install.log')
-      : path.join(environment.HOME, '.local', 'share', 'astrid-runtime', 'logs', 'install.log');
-    const installLog = fs.existsSync(installLogPath)
-      ? `\nAstrid install log (${installLogPath}):\n${fs.readFileSync(installLogPath, 'utf8')}`
-      : '';
+    const installLog = code === 0 ? '' : `\n${failedStepDiagnostic(withStepEnvironment(environment, step.params.env))}`;
+    if (installLog) process.stdout.write(`${installLog}\n`);
     assert.equal(code, 0, `${step.params.shell} step failed (${signal || code}):\n${child.output}${installLog}`);
     return child;
   });
