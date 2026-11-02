@@ -222,7 +222,9 @@ test('R-21 requires accepted initial Install evidence', () => {
     value => { value.install.installer_dispatch = false; },
     value => { value.install.installer_success = false; },
     value => { value.install.engine_error = true; },
+    value => { value.install.engine_error = null; },
     value => { value.install.running_after = true; },
+    value => { delete value.install.running_after; },
   ]) {
     const value = receipt(); mutate(value);
     assert.throws(() => verifyReceipt(value), /install/i);
