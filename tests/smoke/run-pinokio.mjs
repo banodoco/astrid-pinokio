@@ -95,6 +95,7 @@ function installLogCandidates(environment) {
 
 function failedStepDiagnostic(environment) {
   const candidates = installLogCandidates(environment);
+  const unreadable = [];
   for (const filename of candidates) {
     const diagnostic = boundedFileDiagnostic(filename);
     if (diagnostic.status === 'present') {
@@ -102,9 +103,10 @@ function failedStepDiagnostic(environment) {
       return `${header}\n--- installer log begin ---\n${diagnostic.bytes}\n--- installer log end ---`;
     }
     if (diagnostic.status === 'unreadable') {
-      log(`Installer diagnostic unreadable: ${filename}: ${diagnostic.error}`);
+      unreadable.push(`${filename}: ${diagnostic.error}`);
     }
   }
+  if (unreadable.length) return `Installer diagnostic: unreadable (${unreadable.join('; ')}; checked ${candidates.join(', ')})`;
   return `Installer diagnostic: absent (checked ${candidates.join(', ') || 'no configured locations'})`;
 }
 
@@ -362,7 +364,7 @@ function kernelFor(app, getDaemon, onStop) {
   } };
 }
 
-async function invokeAction(name, app, appDirectory, environment, home, getDaemon, stopDaemon) {
+export async function invokeAction(name, app, appDirectory, environment, home, getDaemon, stopDaemon) {
   const loaded = load(`pinokio/${name}.js`, app, appDirectory);
   const script = typeof loaded === 'function' ? await loaded({}, {}) : loaded;
   const kernel = kernelFor(app, getDaemon, stopDaemon);
@@ -381,7 +383,13 @@ async function invokeAction(name, app, appDirectory, environment, home, getDaemo
       } else if (step.method === 'local.set') {
         log(`Pinokio published ${JSON.stringify(step.params)}`);
       } else if (typeof step.method === 'function') {
-        const result = await step.method({}, (value) => { if (value?.raw) process.stdout.write(value.raw); }, kernel);
+        let result;
+        try {
+          result = await step.method({}, (value) => { if (value?.raw) process.stdout.write(value.raw); }, kernel);
+        } catch (error) {
+          process.stdout.write(`${failedStepDiagnostic(environment)}\n`);
+          throw error;
+        }
         log(`${name}: ${JSON.stringify(result ?? {})}`);
       } else throw new Error(`Unhandled Pinokio step in ${name}: ${String(step.method)}`);
     }, log);

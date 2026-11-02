@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { test } from 'node:test';
 import { boundedFileDiagnostic, runTool } from './smoke/process.mjs';
-import { launchShell } from './smoke/run-pinokio.mjs';
+import { invokeAction, launchShell } from './smoke/run-pinokio.mjs';
 
 test('installer diagnostics report absence and retain a bounded, hashed log tail', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-install-diagnostic-'));
@@ -60,6 +60,82 @@ test('failed Pinokio shell step includes the state installer log before cleanup'
     assert.equal(fs.readFileSync(logPath, 'utf8').includes('owner pid=4242'), true,
       'the failure diagnostic is available while the smoke home still exists');
   } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('fully-local Update callback retains its bounded installer diagnostic before home cleanup', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-callback-update-'));
+  const astridHome = path.join(directory, 'selected');
+  const home = path.join(directory, 'home');
+  const appDirectory = path.join(directory, 'app');
+  const logPath = path.join(astridHome, '.local', 'state', 'astrid-runtime', 'logs', 'install.log');
+  const bytes = Buffer.from(`${'x'.repeat(70 * 1024)}\nowner pid=4242\n`);
+  const tail = bytes.subarray(-64 * 1024);
+  const expectedError = new Error('another installer owns the installation lifetime lock');
+  fs.mkdirSync(path.join(appDirectory, 'pinokio'), { recursive: true });
+  fs.copyFileSync(new URL('../pinokio/update.js', import.meta.url), path.join(appDirectory, 'pinokio', 'update.js'));
+  const app = {
+    APP_DIR: appDirectory,
+    hasPendingUpdate: () => false,
+    readInstallMode: () => 'local',
+    validateExistingEditorCheckout: () => true,
+    customStep: (method) => ({ method }),
+    updateLocal: async () => {
+      fs.mkdirSync(path.dirname(logPath), { recursive: true });
+      fs.writeFileSync(logPath, bytes);
+      throw expectedError;
+    },
+  };
+  let output = '';
+  const write = process.stdout.write;
+  try {
+    process.stdout.write = function (chunk, ...args) { output += chunk.toString(); return true; };
+    try {
+      await assert.rejects(invokeAction('update', app, appDirectory, { ASTRID_HOME: astridHome, HOME: home }, directory,
+        () => null, async () => {}), (error) => error === expectedError);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  } finally {
+    process.stdout.write = write;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+  assert.equal(fs.existsSync(logPath), false);
+  assert.ok(output.includes(logPath));
+  assert.ok(output.includes(`65536/${bytes.length} trailing bytes retained from offset ${bytes.length - tail.length}`));
+  assert.ok(output.includes(`sha256 of retained bytes ${createHash('sha256').update(tail).digest('hex')}; truncated`));
+  assert.ok(output.includes(`--- installer log begin ---\n${tail.toString()}\n--- installer log end ---`));
+});
+
+test('failed Update callback reports absent and unreadable installer logs', { skip: process.platform !== 'linux' }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-callback-absent-'));
+  const appDirectory = path.join(directory, 'app');
+  const home = path.join(directory, 'home');
+  const logPath = path.join(home, '.local', 'state', 'astrid-runtime', 'logs', 'install.log');
+  fs.mkdirSync(path.join(appDirectory, 'pinokio'), { recursive: true });
+  fs.copyFileSync(new URL('../pinokio/update.js', import.meta.url), path.join(appDirectory, 'pinokio', 'update.js'));
+  const app = {
+    APP_DIR: appDirectory, hasPendingUpdate: () => false, readInstallMode: () => 'local',
+    validateExistingEditorCheckout: () => true, customStep: (method) => ({ method }),
+    updateLocal: async () => { throw new Error('callback failed'); },
+  };
+  let output = '';
+  const write = process.stdout.write;
+  try {
+    process.stdout.write = function (chunk) { output += chunk.toString(); return true; };
+    const run = () => invokeAction('update', app, appDirectory, { HOME: home }, directory, () => null, async () => {});
+    await assert.rejects(run(), /callback failed/);
+    assert.match(output, /Installer diagnostic: absent/);
+    assert.ok(output.includes(logPath));
+    output = '';
+    fs.mkdirSync(logPath, { recursive: true });
+    await assert.rejects(run(), /callback failed/);
+    assert.match(output, /Installer diagnostic: unreadable/);
+    assert.match(output, /EISDIR/);
+    assert.doesNotMatch(output, /Installer diagnostic: absent/);
+  } finally {
+    process.stdout.write = write;
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
