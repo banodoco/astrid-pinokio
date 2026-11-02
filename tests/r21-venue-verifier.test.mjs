@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { test } from 'node:test';
 import verifier from '../.github/venue/r21-verify.cjs';
 
@@ -54,6 +55,19 @@ test('R-21 venue verifier accepts only a complete native old-launcher receipt', 
   assert.equal(APP_RUNTIME.schema_digest, 'sha256:9628bb5fd6e1dbbec392dd39f2e01031622dcf52d7ccff7cd1f0ad10743dcb1c');
   assert.equal(APP_RUNTIME.origin, 'https://astrid.haus');
   assert.deepEqual(verifyReceipt(receipt()), { accepted: true, request_id: REQUEST_ID });
+});
+
+test('R-21 real-engine route and receipt bind the same current manifest tuple', () => {
+  const runner = fs.readFileSync('.github/venue/r21-real-engine.sh', 'utf8');
+  for (const value of [TUPLE.pinokio, TUPLE.agent, TUPLE.app, '920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87']) {
+    assert.match(runner, new RegExp(value));
+  }
+  for (const stale of [
+    '2f085c5fc0cde192ac4a022065883c85dcccd0de',
+    'e425903f7a9fa5b82973281d15054c0716b46e2d',
+    '5c95abb00525e1a77d00c32042b6453d9f14f4e7',
+    'a6eef2804e58e198d56899f1b36d97688d5cbc4a0847a82078ba144df4a207eb',
+  ]) assert.doesNotMatch(runner, new RegExp(stale));
 });
 
 test('R-21 venue verifier fails closed for missing engine terminal event', () => {
