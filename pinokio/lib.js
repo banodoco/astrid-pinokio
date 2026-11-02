@@ -352,11 +352,12 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
       const commit = q(ref.toLowerCase());
       return [
         'set -eu',
-        `trap 'rm -rf -- ${editor}' EXIT`,
-        `git clone --no-checkout --single-branch -- ${q(EDITOR_REPOSITORY)} ${editor}`,
-        `git -C ${editor} fetch --depth=1 origin ${commit}`,
-        `git -C ${editor} checkout --detach --force ${commit}`,
-        `test "$(git -C ${editor} rev-parse --verify HEAD^{commit})" = ${commit}`,
+        `editor=${editor}`,
+        `trap 'rm -rf -- "$editor"' EXIT`,
+        `git clone --no-checkout --single-branch -- ${q(EDITOR_REPOSITORY)} "$editor"`,
+        `git -C "$editor" fetch --depth=1 origin ${commit}`,
+        `git -C "$editor" checkout --detach --force ${commit}`,
+        `test "$(git -C "$editor" rev-parse --verify HEAD^{commit})" = ${commit}`,
         'trap - EXIT',
       ].join('\n');
     }
