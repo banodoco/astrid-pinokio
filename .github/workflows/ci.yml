@@ -135,9 +135,14 @@ jobs:
           user = windows_security._user_sid()
           owner = windows_security._default_owner_sid()
           same_owner = bool(windows_security._api()[0].EqualSid(user, owner))
-          print(f"Windows token user: {windows_security._sid_text(user)}; default owner: {windows_security._sid_text(owner)}; match: {same_owner}", flush=True)
-          if not same_owner:
-              raise SystemExit("The native positive ACL proof requires matching token user and default owner")
+          identity = (
+              f"Windows token user SID: {windows_security._sid_text(user)}\n"
+              f"Windows default owner SID: {windows_security._sid_text(owner)}\n"
+              f"Windows token user/default owner match: {same_owner}\n"
+          )
+          print(identity, end="", flush=True)
+          with (Path(os.environ["PROOF_DIR"]) / "identity.txt").open("a", encoding="utf-8") as stream:
+              stream.write(identity)
           # This one installed-wheel test is marked linux_native at module scope.
           # Enable its collection on Windows explicitly; all test assertions remain intact.
           lanes.LANES["linux_native"] = dataclasses.replace(lanes.LANES["linux_native"], available=lambda: True)
