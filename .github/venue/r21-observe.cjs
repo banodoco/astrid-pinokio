@@ -25,6 +25,11 @@ if (!appRoot || !ptermRoot || !home) throw new Error('R21_APP_ROOT, R21_PTERM_RO
 
 const { WebSocket } = require(path.join(ptermRoot, 'node_modules/unws'));
 const ACTION_TIMEOUT_MS = 20 * 60 * 1000;
+// The first historical Install provisions a fresh venue and exceeded the
+// ordinary action bound in run 41376447995. Allow 35 minutes for it while the
+// 70-minute overall watchdog still bounds setup, later actions, and cleanup;
+// the 90-minute job limit retains separate result-publication headroom.
+const INITIAL_INSTALL_TIMEOUT_MS = 35 * 60 * 1000;
 let actionNumber = 0;
 const progress = {};
 function substage(value) {
@@ -111,18 +116,18 @@ const io = createObserverIO({ WebSocket, fetch, spawn, appRoot, ptermRoot, home,
   record: value => write('r21-observer-operation.json', value) });
 const { openSocket, status, waitForReadiness, runtimeReady, applicationReady, startOldLauncher } = io;
 
-function ptermExit(child, label) {
+function ptermExit(child, label, timeoutMs) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       reject(new Error(`${label} PTerm timeout`));
-    }, ACTION_TIMEOUT_MS);
+    }, timeoutMs);
     child.once('error', () => { clearTimeout(timer); reject(new Error(`${label} PTerm spawn failed`)); });
     child.once('exit', (code, signal) => { clearTimeout(timer); resolve({ code, signal: signal || null }); });
   });
 }
 
-async function observeAction(label, script) {
+async function observeAction(label, script, timeoutMs = ACTION_TIMEOUT_MS) {
   const localPath = path.join(appRoot, script);
   const socket = await openSocket();
   const observation = {
@@ -168,7 +173,7 @@ async function observeAction(label, script) {
   const child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', ENDPOINT], {
     cwd: home, env: process.env, stdio: ['ignore', 'ignore', 'ignore'],
   });
-  observation.inner_exit = await ptermExit(child, label);
+  observation.inner_exit = await ptermExit(child, label, timeoutMs);
   const progressKey = { 'historical install': 'install', 'first Update': 'first_click',
     'historical Stop': 'stop', 'fresh Update retry': 'retry', 'bounded cleanup Stop': 'cleanup' }[label];
   progress[progressKey] = observation;
@@ -225,7 +230,7 @@ async function main() {
     throw new Error('request did not retain the immutable R-21 tuple');
   }
   substage('install');
-  const install = await observeAction('historical install', 'pinokio/install.js');
+  const install = await observeAction('historical install', 'pinokio/install.js', INITIAL_INSTALL_TIMEOUT_MS);
   progress.install = install; retainProgress();
   if (install.inner_exit.code !== 0 || install.terminal.disconnect !== true || install.terminal.stop !== true) {
     throw new Error('historical installation did not settle');
