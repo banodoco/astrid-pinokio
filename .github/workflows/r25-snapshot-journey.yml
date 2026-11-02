@@ -1,0 +1,113 @@
+name: R-25 authenticated six-action snapshot journey
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent_ref:
+        description: Immutable Agent snapshot collector commit
+        required: true
+        default: a6b68d5b5478326a4db1971966d33a2cfe61d091
+        type: string
+      slot_id:
+        description: Hosted platform slot; Hannah's Mac is not a route
+        required: true
+        default: pinokio-fully-local-windows
+        type: choice
+        options: [pinokio-fully-local-windows]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  windows-six-action:
+    if: inputs.slot_id == 'pinokio-fully-local-windows'
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      AGENT_REF: ${{ inputs.agent_ref }}
+      PINOKIOD_REF: add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
+      PTERM_REF: 5be43718701c448b43daf0ce51d8935f170065bb
+      R25_TUPLE_JSON: >-
+        {"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","artifacts":{"public/install":"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d","public/install.sh":"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285","public/install.ps1":"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"},"published_at":"2026-11-02T17:55:27Z"}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Materialize exact Agent collector source
+        shell: pwsh
+        env:
+          AGENT_ROOT: ${{ runner.temp }}\astrid-agent
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:AGENT_REF -ne 'a6b68d5b5478326a4db1971966d33a2cfe61d091') { throw 'agent_ref differs' }
+          git clone --filter=blob:none --no-checkout https://github.com/banodoco/astrid-agent.git $env:AGENT_ROOT
+          git -C $env:AGENT_ROOT fetch --no-tags --depth=1 origin $env:AGENT_REF
+          git -C $env:AGENT_ROOT checkout --detach FETCH_HEAD
+          if ((git -C $env:AGENT_ROOT rev-parse HEAD) -ne $env:AGENT_REF) { throw 'Agent HEAD differs' }
+      - name: Materialize pinned native engine dependencies
+        shell: pwsh
+        env:
+          PINOKIOD_ROOT: ${{ runner.temp }}\pinokiod
+          PTERM_ROOT: ${{ runner.temp }}\pterm
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone --filter=blob:none --no-checkout https://github.com/pinokiocomputer/pinokiod.git $env:PINOKIOD_ROOT
+          git -C $env:PINOKIOD_ROOT fetch --no-tags --depth=1 origin $env:PINOKIOD_REF
+          git -C $env:PINOKIOD_ROOT checkout --detach FETCH_HEAD
+          if ((git -C $env:PINOKIOD_ROOT rev-parse HEAD) -ne $env:PINOKIOD_REF) { throw 'pinokiod HEAD differs' }
+          npm ci --omit=dev --prefix $env:PINOKIOD_ROOT --silent
+          git clone --filter=blob:none --no-checkout https://github.com/pinokiocomputer/pterm.git $env:PTERM_ROOT
+          git -C $env:PTERM_ROOT fetch --no-tags --depth=1 origin $env:PTERM_REF
+          git -C $env:PTERM_ROOT checkout --detach FETCH_HEAD
+          if ((git -C $env:PTERM_ROOT rev-parse HEAD) -ne $env:PTERM_REF) { throw 'pterm HEAD differs' }
+          npm ci --omit=dev --prefix $env:PTERM_ROOT --silent
+      - name: Validate immutable sources and focused route checks
+        shell: pwsh
+        env:
+          AGENT_ROOT: ${{ runner.temp }}\astrid-agent
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node pinokio/providers/r25-native-collector-binding.cjs `
+            --validate-source-only true --agent-ref $env:AGENT_REF `
+            --agent-root $env:AGENT_ROOT --pinokio-root $env:GITHUB_WORKSPACE
+          node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-windows.test.cjs
+          python -m py_compile `
+            "$env:AGENT_ROOT\scripts\pinokio_snapshot_collector.py" `
+            "$env:AGENT_ROOT\scripts\pinokio_snapshot_windows.py"
+          node --check .github/venue/r25-snapshot-runner.cjs
+      - name: Run real six-action Windows session
+        shell: pwsh
+        env:
+          AGENT_ROOT: ${{ runner.temp }}\astrid-agent
+          PINOKIOD_ROOT: ${{ runner.temp }}\pinokiod
+          PTERM_ROOT: ${{ runner.temp }}\pterm
+          R25_OUTPUT: ${{ runner.temp }}\r25-snapshot-output
+          R25_DIAGNOSTICS: ${{ runner.temp }}\r25-diagnostics
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node .github/venue/r25-snapshot-runner.cjs `
+            --agent-root $env:AGENT_ROOT --pinokiod $env:PINOKIOD_ROOT `
+            --pterm $env:PTERM_ROOT --output $env:R25_OUTPUT
+      - name: Retain authenticated R-25 snapshot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r25-snapshots-pinokio-fully-local-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\r25-snapshot-output
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Retain bounded failure and inner-exit diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r25-snapshot-diagnostics-pinokio-fully-local-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\r25-diagnostics
+          if-no-files-found: warn
+          retention-days: 30
