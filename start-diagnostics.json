@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "binding": {
+    "request_id": "R-21-PUBLISHED-TUPLE-R1",
+    "runner_ref": "8c2f1fca0334e64d259c28b1f66d81715eaabec3",
+    "run_id": "41475436071",
+    "run_attempt": "1"
+  },
+  "installed_tuple_present": null,
+  "install_marker_observed": null,
+  "start": {
+    "engine_error": null,
+    "terminal_stop": null,
+    "terminal_disconnect": null
+  },
+  "runtime_status": {
+    "class": "pending",
+    "code": null
+  },
+  "port_17340_listener": null
+}

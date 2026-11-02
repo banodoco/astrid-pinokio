@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "request_id": "R-21-PUBLISHED-TUPLE-R1",
+  "runner_ref": "8c2f1fca0334e64d259c28b1f66d81715eaabec3",
+  "endpoint": "pinokio://127.0.0.1:42000/api/astrid",
+  "tuple": {
+    "runtime": "5453366458f7b4ee874c94d15ae7952e3e82d3c3",
+    "agent": "2de0726d1eaea7f7bd141251e088aa9fdf224525",
+    "app": "ce1502e94b935fe6ef1e2f363fc6b55aade4a204",
+    "pinokio": "3a6a98ae251ca126505245286e2d3e760f4348e9",
+    "old_launcher": "bbba620e3d89eeff8021417f365e6ea584203105",
+    "pinokiod": "add4a674ad1ba95bb62ec427fce519fe5bf0e9bf",
+    "pterm": "5be43718701c448b43daf0ce51d8935f170065bb"
+  },
+  "app_manifest_sha256": "920477210d01615a6698cda30f248552f13c712734e86ea56f283300cb1a9c87",
+  "agent_journey_harness": {
+    "ref": "6e46e3bb45ec3feddbd0b0617a50a157e3a4df67",
+    "executed": false
+  },
+  "workflow": {
+    "event": "push",
+    "ref": "refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3",
+    "workflow_ref": "banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/venue/M-PIN-R-21-PUSH-ROUTE-R1-C479C1A3",
+    "sha": "8c2f1fca0334e64d259c28b1f66d81715eaabec3",
+    "run_id": "41475436071",
+    "run_attempt": "1"
+  }
+}
