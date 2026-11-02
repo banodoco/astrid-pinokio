@@ -1,0 +1,13 @@
+{
+  "candidate": {
+    "agent": "e425903f7a9fa5b82973281d15054c0716b46e2d",
+    "app": "5c95abb00525e1a77d00c32042b6453d9f14f4e7",
+    "manifest_sha256": "a6eef2804e58e198d56899f1b36d97688d5cbc4a0847a82078ba144df4a207eb",
+    "pinokio": "2f085c5fc0cde192ac4a022065883c85dcccd0de",
+    "runtime": "5453366458f7b4ee874c94d15ae7952e3e82d3c3"
+  },
+  "design_sha256": "bca18796d5dfa63a2db569dfcd90d456c1b3eacccb050bcaa0e6738de78b190c",
+  "interface_sha256": "2f685c8aec21bef116f95645920717e4b12ef33c1ca820fe6185eb01ffea115d",
+  "pterm_ref": "5be43718701c448b43daf0ce51d8935f170065bb",
+  "stop_sha256": "f9d62e4e6a826fccd9791ee211dae933f46c8f99019e145abb3db3bf9595fd48"
+}
