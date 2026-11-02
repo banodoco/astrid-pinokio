@@ -46,7 +46,8 @@ class ProviderTests(unittest.TestCase):
         for name in ('agent', 'runtime'):
             refs[name] = repo(paths[name], {'file': b'fixture'})
         stop = b'synthetic stop fixture'
-        refs['pinokio'] = repo(paths['pinokio'], {'pinokio/stop.js': stop})
+        lifecycle = b'synthetic lifecycle fixture'
+        refs['pinokio'] = repo(paths['pinokio'], {'pinokio/stop.js': stop, 'pinokio/lifecycle.mjs': lifecycle})
         manifest = json.dumps({'release': 1, 'agent': {'sha': refs['agent']}, 'runtime': {'sha': refs['runtime']}}).encode()
         refs['app'] = repo(paths['app'], {'public/install-manifest.json': manifest})
         self.candidate = {**refs, 'manifest_sha256': r24.sha(manifest)}
@@ -60,15 +61,37 @@ class ProviderTests(unittest.TestCase):
         module.write_bytes(b'fixture module')
         node = root / 'node'
         node.write_bytes(b'fixture node')
-        self.binding = {'candidate': self.candidate, 'stop_sha256': r24.sha(stop), 'pterm_ref': pterm_ref}
+        daemon = root / 'daemon'
+        daemon_files = {'server/socket.js': b'fixture socket', 'kernel/api/index.js': b'fixture api'}
+        daemon_ref = repo(daemon, daemon_files)
+        home = root / 'home'
+        resource = home / 'api/astrid'
+        (resource / 'pinokio/providers').mkdir(parents=True)
+        (resource / 'pinokio/stop.js').write_bytes(stop)
+        (resource / 'pinokio/lifecycle.mjs').write_bytes(lifecycle)
+        for name in ('pinokio/providers/r24-action.cjs', 'pinokio/providers/r24-live-action.cjs'):
+            (resource / name).write_bytes(files[name])
+        scratch = root / 'scratch'
+        scratch.mkdir(mode=0o700)
+        self.binding = {'candidate': self.candidate, 'stop_sha256': r24.sha(stop),
+                        'lifecycle_sha256': r24.sha(lifecycle), 'pterm_ref': pterm_ref,
+                        'pinokiod_ref': daemon_ref,
+                        'pinokiod_sources': {name: r24.sha(data) for name, data in daemon_files.items()}}
         self.config = {'checkouts': {k: str(v) for k, v in paths.items()}, 'pterm': str(pterm),
+                       'pinokiod': str(daemon), 'scratch_root': str(scratch),
                        'node': str(node), 'node_sha256': r24.sha(node.read_bytes()),
-                       'pterm_entry_sha256': r24.sha((pterm / 'index.js').read_bytes()), 'unws_sha256': r24.sha(module.read_bytes())}
+                       'pterm_entry_sha256': r24.sha((pterm / 'index.js').read_bytes()), 'unws_sha256': r24.sha(module.read_bytes()),
+                       'engine': {'pid': 123, 'boot_id': 'a' * 36, 'start_ticks': '7',
+                                  'pinokio_home': str(home), 'port': 42000}}
         self.request = {'schema': 'astrid.r24.provider-request.v1', 'candidate': self.candidate.copy(),
                         'provider': {'ref': provider_ref, 'sources': {k: r24.sha(v) for k, v in files.items()}},
                         'stop': {'ref': refs['pinokio'], 'path': 'pinokio/stop.js', 'sha256': r24.sha(stop)},
                         'config_sha256': r24.sha(r24.canonical(self.config)), 'run_id': 'a' * 32}
-        self.patches = [patch.object(r24, 'BINDING', self.binding), patch.object(r24, 'BASE', provider)]
+        installed = {'backend_root': resource / 'app/astrid', 'version_root': resource,
+                     'python': node, 'python_sha256': r24.sha(node.read_bytes()), 'data_root': root}
+        self.patches = [patch.object(r24, 'BINDING', self.binding), patch.object(r24, 'BASE', provider),
+                        patch.object(r24, 'proc_identity', return_value={'pid': 123}),
+                        patch.object(r24, 'installed_context', return_value=installed)]
         for p in self.patches:
             p.start()
             self.addCleanup(p.stop)
@@ -92,15 +115,12 @@ class ProviderTests(unittest.TestCase):
         with self.assertRaises(ValueError): r24.validate(self.request, self.config)
 
     def test_no_injection_or_restoration_claim_and_redaction(self):
-        fake = {'dispatched': True, 'client_exit': 0, 'client_signal': None, 'messages': 1, 'disconnects': 1,
-                'errors': 0, 'post_terminal': False, 'end': 'timeout', 'settlement': 'unknown'}
-        with patch.object(r24, 'invoke_action', return_value=subprocess.CompletedProcess([], 0, json.dumps(fake).encode())):
+        with patch.object(r24, 'collect_authenticated', side_effect=ValueError('bearer secret')):
             result, diagnostic = r24.run(self.request, self.config)
         self.assertIsNone(result)
         self.assertEqual((diagnostic['busy'], diagnostic['unknown'], diagnostic['restoration']), ('not-run', 'not-run', 'unknown'))
         self.assertEqual(diagnostic['action']['settlement'], 'unknown')
-        fake['token'] = 'bearer secret'
-        with patch.object(r24, 'invoke_action', return_value=subprocess.CompletedProcess([], 0, json.dumps(fake).encode())):
+        with patch.object(r24, 'collect_authenticated', side_effect=ValueError('bearer secret')):
             result, diagnostic = r24.run(self.request, self.config)
         self.assertIsNone(result)
         self.assertNotIn('secret', json.dumps(diagnostic))
@@ -145,10 +165,7 @@ class ProviderTests(unittest.TestCase):
                 changed = copy.deepcopy(records)
                 del changed[index][key]
                 variants.append(changed)
-        action = {'dispatched': True, 'client_exit': 0, 'client_signal': None, 'messages': 1, 'disconnects': 1,
-                  'errors': 0, 'post_terminal': False, 'end': 'timeout', 'settlement': 'unknown'}
-        with patch.object(r24, 'validate', return_value=({'pinokio': Path('/fixture')}, Path('/pterm'), Path('/node'))), \
-             patch.object(r24, 'invoke_action', return_value=subprocess.CompletedProcess([], 0, json.dumps(action).encode())), \
+        with patch.object(r24, 'validate', return_value={}), \
              patch.object(r24.secrets, 'token_hex', return_value=session):
             for variant in variants:
                 with self.subTest(variant=repr(variant)):
@@ -161,19 +178,16 @@ class ProviderTests(unittest.TestCase):
 
     def test_result_diagnostic_separation_and_failure(self):
         session, records = self.observations()
-        action = {'dispatched': True, 'client_exit': 0, 'client_signal': None, 'messages': 1, 'disconnects': 1,
-                  'errors': 0, 'post_terminal': False, 'end': 'timeout', 'settlement': 'unknown'}
-        with patch.object(r24, 'invoke_action', return_value=subprocess.CompletedProcess([], 0, json.dumps(action).encode())), \
-             patch.object(r24.secrets, 'token_hex', return_value=session), \
+        with patch.object(r24.secrets, 'token_hex', return_value=session), \
              patch.object(r24, 'collect_authenticated', return_value=records):
             result, diagnostic = r24.run(self.request, self.config)
         self.assertIsNone(diagnostic)
         self.assertEqual(result['schema'], 'astrid.r24.provider-result.v1')
         for code, observations in ((1, records), (0, records[:-1]), (0, None)):
             with self.subTest(code=code, observations=observations), \
-                 patch.object(r24, 'invoke_action', return_value=subprocess.CompletedProcess([], code, json.dumps(action).encode())), \
                  patch.object(r24.secrets, 'token_hex', return_value=session), \
-                 patch.object(r24, 'collect_authenticated', return_value=observations):
+                 patch.object(r24, 'collect_authenticated', side_effect=(ValueError('failed') if code or observations is None else None),
+                              return_value=observations):
                 result, diagnostic = r24.run(self.request, self.config)
             self.assertIsNone(result)
             self.assertEqual(diagnostic['schema'], 'astrid.r24.producer-diagnostic.v1')

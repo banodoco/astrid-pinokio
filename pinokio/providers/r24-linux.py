@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import sqlite3
 import subprocess
 import sys
 
@@ -13,6 +14,7 @@ HERE = Path(__file__).resolve().parent
 BASE = HERE.parent.parent
 BINDING = json.loads((HERE / 'r24-linux-binding.json').read_bytes())
 FILES = ('pinokio/providers/r24-linux.py', 'pinokio/providers/r24-action.cjs',
+         'pinokio/providers/r24-live-action.cjs',
          'pinokio/providers/r24-linux-binding.json', 'pinokio/providers/r24-schema.json')
 HEX40 = re.compile(r'[0-9a-f]{40}\Z')
 HEX64 = re.compile(r'[0-9a-f]{64}\Z')
@@ -74,6 +76,65 @@ def regular(path):
     return path.read_bytes()
 
 
+def proc_identity(pid, node, daemon, engine):
+    if type(pid) is not int or pid < 1:
+        raise ValueError('invalid engine pid')
+    proc = Path('/proc') / str(pid)
+    boot_id = regular(Path('/proc/sys/kernel/random/boot_id')).decode().strip()
+    if engine['boot_id'] != boot_id or not re.fullmatch(r'[0-9a-f-]{36}', boot_id):
+        raise ValueError('engine boot mismatch')
+    stat = regular(proc / 'stat').decode()
+    tail = stat[stat.rfind(')') + 2:].split()
+    if len(tail) < 20 or engine['start_ticks'] != tail[19]:
+        raise ValueError('engine birth mismatch')
+    if (proc / 'cwd').resolve() != daemon or (proc / 'exe').resolve() != node.resolve():
+        raise ValueError('engine executable mismatch')
+    argv = regular(proc / 'cmdline').split(b'\0')
+    if not argv or not any(value.endswith(b'script/index.js') for value in argv):
+        raise ValueError('engine command mismatch')
+    environment = {}
+    for row in regular(proc / 'environ').split(b'\0'):
+        if b'=' in row:
+            key, value = row.split(b'=', 1)
+            if key == b'PINOKIO_HOME':
+                environment[key] = value
+    if environment.get(b'PINOKIO_HOME') != os.fsencode(engine['pinokio_home']):
+        raise ValueError('engine home mismatch')
+    port_hex = f"{engine['port']:04X}"
+    inodes = set()
+    for table in ('/proc/net/tcp', '/proc/net/tcp6'):
+        for line in Path(table).read_text(encoding='ascii').splitlines()[1:]:
+            fields = line.split()
+            if len(fields) > 9 and fields[1].split(':')[-1] == port_hex and fields[3] == '0A':
+                inodes.add(fields[9])
+    owned = {target[8:-1] for fd in (proc / 'fd').iterdir()
+             if (target := os.readlink(fd)).startswith('socket:[')}
+    if not inodes or not inodes.intersection(owned):
+        raise ValueError('engine listener ownership mismatch')
+    return {'pid': pid, 'boot_id': boot_id, 'start_ticks': engine['start_ticks'],
+            'port': engine['port'], 'node_sha256': sha(regular(node))}
+
+
+def installed_context(home, lifecycle):
+    backend = home / 'api/astrid/app/astrid'
+    install = decode(regular(backend / 'install.json'))
+    if install.get('owner') != 'haus.astrid.runtime' or install.get('managed_by') != 'pinokio':
+        raise ValueError('installed owner mismatch')
+    version = regular(backend / 'current').decode().strip()
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', version):
+        raise ValueError('invalid installed version')
+    version_root = (backend / 'versions' / version).resolve(strict=True)
+    record = decode(regular(version_root / 'version.json'))
+    python = Path(record['python']).resolve(strict=True)
+    data = Path(install['data_root']).resolve(strict=True)
+    if version_root not in python.parents or not data.is_dir() or data.is_symlink():
+        raise ValueError('installed path mismatch')
+    if sha(regular(lifecycle)) != BINDING['lifecycle_sha256']:
+        raise ValueError('lifecycle source mismatch')
+    return {'backend_root': backend, 'version_root': version_root, 'python': python,
+            'python_sha256': sha(regular(python)), 'data_root': data}
+
+
 def validate(request, config):
     if sys.platform != 'linux':
         raise ValueError('Linux required')
@@ -97,7 +158,8 @@ def validate(request, config):
     exact(request['stop'], ('ref', 'path', 'sha256'))
     if request['stop'] != {'ref': BINDING['candidate']['pinokio'], 'path': 'pinokio/stop.js', 'sha256': BINDING['stop_sha256']}:
         raise ValueError('stop identity mismatch')
-    exact(config, ('checkouts', 'pterm', 'node', 'node_sha256', 'pterm_entry_sha256', 'unws_sha256'))
+    exact(config, ('checkouts', 'pterm', 'pinokiod', 'node', 'node_sha256', 'pterm_entry_sha256',
+                   'unws_sha256', 'engine', 'scratch_root'))
     exact(config['checkouts'], ('app', 'agent', 'runtime', 'pinokio'))
     roots = {name: checkout(value, BINDING['candidate'][name]) for name, value in config['checkouts'].items()}
     if len(set(roots.values())) != 4 or provider_root in roots.values():
@@ -122,31 +184,41 @@ def validate(request, config):
         match(config[key], HEX64)
         if sha(regular(path)) != config[key]:
             raise ValueError('executable dependency mismatch')
-    return roots, pterm, node
+    daemon = checkout(config['pinokiod'], BINDING['pinokiod_ref'])
+    for rel, digest in BINDING['pinokiod_sources'].items():
+        if sha(regular(daemon / rel)) != digest or sha(git_blob(daemon, BINDING['pinokiod_ref'], rel)) != digest:
+            raise ValueError('daemon source mismatch')
+    exact(config['engine'], ('pid', 'boot_id', 'start_ticks', 'pinokio_home', 'port'))
+    engine = config['engine']
+    if engine['port'] != 42000 or not isinstance(engine['pinokio_home'], str) or not os.path.isabs(engine['pinokio_home']):
+        raise ValueError('invalid engine binding')
+    home = Path(engine['pinokio_home']).resolve(strict=True)
+    if home.is_symlink() or not home.is_dir():
+        raise ValueError('invalid engine home')
+    resource = home / 'api/astrid'
+    for rel, expected in (('pinokio/stop.js', BINDING['stop_sha256']),
+                          ('pinokio/lifecycle.mjs', BINDING['lifecycle_sha256'])):
+        if sha(regular(resource / rel)) != expected:
+            raise ValueError('engine resource tuple mismatch')
+    for rel in ('pinokio/providers/r24-action.cjs', 'pinokio/providers/r24-live-action.cjs'):
+        if sha(regular(resource / rel)) != sources[rel]:
+            raise ValueError('engine provider source mismatch')
+    scratch = Path(config['scratch_root']).resolve(strict=True) if isinstance(config['scratch_root'], str) else Path('.')
+    if not scratch.is_absolute() or scratch.is_symlink() or not scratch.is_dir() or scratch.stat().st_uid != os.getuid():
+        raise ValueError('invalid scratch root')
+    identity = proc_identity(engine['pid'], node, daemon, engine)
+    installed = installed_context(home, resource / 'pinokio/lifecycle.mjs')
+    return {'roots': roots, 'pterm': pterm, 'node': node, 'daemon': daemon, 'home': home,
+            'resource': resource, 'scratch': scratch, 'engine': identity, 'installed': installed}
 
 
 def git_blob(root, ref, rel):
     return subprocess.check_output(['git', '-C', str(root), 'show', ref + ':' + rel], stderr=subprocess.DEVNULL, timeout=30)
 
 
-def sanitize_action(action):
-    fields = ('dispatched', 'client_exit', 'client_signal', 'messages', 'disconnects', 'errors', 'post_terminal', 'end', 'settlement')
-    exact(action, fields)
-    if type(action['dispatched']) is not bool or type(action['post_terminal']) is not bool:
-        raise ValueError('invalid observer flags')
-    if action['client_exit'] is not None and (type(action['client_exit']) is not int or not -255 <= action['client_exit'] <= 255):
-        raise ValueError('invalid client exit')
-    if action['client_signal'] not in (None, 'SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP'):
-        raise ValueError('invalid signal')
-    if any(type(action[k]) is not int or not 0 <= action[k] <= 1000000 for k in ('messages', 'disconnects', 'errors')):
-        raise ValueError('invalid counters')
-    if action['end'] not in ('timeout', 'subscription-error', 'client-error', 'malformed-event', 'socket-error', 'socket-closed', 'premature-disconnect', 'duplicate-open', 'daemon-error') or action['settlement'] != 'unknown':
-        raise ValueError('invalid observer status')
-    return {key: action[key] for key in fields}
-
-
-def invoke_action(node, pterm, uri):
-    return subprocess.run([str(node), str(HERE / 'r24-action.cjs'), str(pterm), uri], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=130, check=False)
+def invoke_action(node, control):
+    return subprocess.run([str(node), str(HERE / 'r24-action.cjs'), str(control)],
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=120, check=False)
 
 
 def serialize_success(request, session, observations):
@@ -208,6 +280,8 @@ def seal_observations(request, session, observations, destination):
         raise ValueError('invalid stop binding')
     result = canonical(serialize_success(request, session, observations)) + b'\n'
     payloads = {'junit.xml': JUNIT, 'observation-result.json': result}
+    for observation in observations:
+        payloads[f"observation-{observation['kind']}.json"] = observation['evidence']
     entries = [{'path': name, 'bytes': len(data), 'sha256': sha(data)}
                for name, data in sorted(payloads.items())]
     payloads['manifest.json'] = canonical({'schema': 'astrid.r24.producer-export.v1',
@@ -254,32 +328,153 @@ def seal_observations(request, session, observations, destination):
         os.close(parent)
 
 
-def collect_authenticated(request, session, action):
-    # No current collector can authenticate the invocation, bind this session,
-    # or establish the required controls and restoration. Never accept records
-    # from request/config, environment, action stdout, or caller-provided files.
-    return None
+def protected_snapshot(context):
+    installed = context['installed']
+    data = installed['data_root']
+    support = data / 'runtime'
+    catalog = decode(regular(support / 'catalog.json'))
+    selected = catalog.get('selected_realm_id')
+    realms = [row for row in catalog.get('realms', []) if isinstance(row, dict) and row.get('realm_id') == selected]
+    if len(realms) != 1:
+        raise ValueError('selected realm unavailable')
+    realm = Path(realms[0]['data_root']).resolve(strict=True)
+    database = realm / 'realm.sqlite3'
+    if database.is_symlink() or not database.is_file():
+        raise ValueError('realm database unavailable')
+    connection = sqlite3.connect(f'file:{database}?mode=ro', uri=True, timeout=5)
+    try:
+        rows = [dict(zip(('task_id', 'capability', 'status'), row)) for row in connection.execute(
+            "SELECT id, capability, status FROM tasks WHERE lower(status) IN ('running','cancel_requested') ORDER BY id")]
+    finally:
+        connection.close()
+    watched = [installed['backend_root'] / 'current', installed['backend_root'] / 'install.json',
+               installed['version_root'] / 'version.json', support / 'catalog.json', support / 'discovery.json',
+               support / 'instance.lock', context['resource'] / 'pinokio/stop.js',
+               context['resource'] / 'pinokio/lifecycle.mjs']
+    files = {}
+    for index, item in enumerate(watched):
+        files[str(index)] = sha(regular(item)) if item.exists() else None
+    stat = database.stat()
+    return {'files': files, 'selected_realm_id_sha256': sha(str(selected).encode()),
+            'realm_root_sha256': sha(os.fsencode(realm)), 'database_device': stat.st_dev,
+            'database_inode': stat.st_ino, 'active_tasks': rows}
+
+
+def validate_live_result(value, request, session):
+    exact(value, ('schema', 'session', 'request_sha256', 'binding', 'busy', 'unknown', 'restoration'))
+    if value['schema'] != 'astrid.r24.live-action-result.v1' or value['session'] != session or \
+            value['request_sha256'] != sha(canonical(request)):
+        raise ValueError('live action binding mismatch')
+    exact(value['binding'], ('request_id', 'results', 'stop_observed', 'disconnect_observed'))
+    if value['binding']['results'] != 1 or value['binding']['stop_observed'] is not True or \
+            value['binding']['disconnect_observed'] is not True:
+        raise ValueError('engine settlement unavailable')
+    busy = value['busy']
+    exact(busy, ('task_count', 'blockers', 'headline_sha256', 'stop_refused', 'fence'))
+    if type(busy['task_count']) is not int or busy['task_count'] < 1 or busy['stop_refused'] is not True or not busy['blockers']:
+        raise ValueError('busy not established')
+    for blocker in busy['blockers']:
+        exact(blocker, ('task_id', 'blocker_kind', 'kind', 'state'))
+        if not all(isinstance(blocker[key], str) and blocker[key] for key in ('task_id', 'blocker_kind', 'state')):
+            raise ValueError('busy identity unavailable')
+    match(busy['headline_sha256'], HEX64)
+    exact(value['unknown'], ('observer_lost', 'preflight', 'fence'))
+    preflight = value['unknown']['preflight']
+    exact(preflight, ('child_pid', 'python_sha256', 'armed', 'drained', 'signal'))
+    if value['unknown']['observer_lost'] is not True or preflight['armed'] is not True or preflight['drained'] is not True \
+            or preflight['signal'] != 'SIGKILL' or type(preflight['child_pid']) is not int:
+        raise ValueError('unknown was not safely drained')
+    match(preflight['python_sha256'], HEX64)
+    restoration = value['restoration']
+    exact(restoration, ('request_id', 'results', 'stop_observed', 'disconnect_observed', 'preflight', 'observer_usable'))
+    if restoration['results'] != 1 or restoration['stop_observed'] is not True or \
+            restoration['disconnect_observed'] is not True or restoration['observer_usable'] is not True:
+        raise ValueError('restoration unavailable')
+    for fence in (busy['fence'], value['unknown']['fence']):
+        exact(fence, ('request_id', 'connect_observed', 'disconnect_observed', 'idle_observed'))
+        if any(fence[key] is not True for key in ('connect_observed', 'disconnect_observed', 'idle_observed')):
+            raise ValueError('request fence unavailable')
+    return value
+
+
+def remove_control(directory):
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for name in ('arm', 'ready.json', 'drained.json', 'control.json'):
+            try:
+                os.unlink(name, dir_fd=descriptor)
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(descriptor)
+    directory.rmdir()
+
+
+def collect_authenticated(request, session, context):
+    """Collect live engine facts; external hosted custody is still M-CI-owned."""
+    before = protected_snapshot(context)
+    token = secrets.token_hex(8)
+    control_dir = context['scratch'] / f'r24-{session}-{token}'
+    control_dir.mkdir(mode=0o700)
+    installed = context['installed']
+    control = {'schema': 'astrid.r24.live-control.v1', 'pterm': str(context['pterm']),
+        'session': session, 'request_sha256': sha(canonical(request)),
+        'live_uri': str(context['resource'] / 'pinokio/providers/r24-live-action.cjs'),
+        'stop_uri': str(context['resource'] / 'pinokio/stop.js'),
+        'lifecycle': str(context['resource'] / 'pinokio/lifecycle.mjs'),
+        'lifecycle_sha256': BINDING['lifecycle_sha256'], 'backend_root': str(installed['backend_root']),
+        'python': str(installed['python']), 'python_sha256': installed['python_sha256'],
+        'data_root': str(installed['data_root']), 'control_dir': str(control_dir)}
+    control_path = control_dir / 'control.json'
+    fd = os.open(control_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as output:
+        output.write(canonical(control))
+    proc = invoke_action(context['node'], control_path)
+    if proc.returncode != 0:
+        raise ValueError('live action collection failed')
+    action = validate_live_result(decode(proc.stdout), request, session)
+    after = protected_snapshot(context)
+    if before != after:
+        raise ValueError('protected state changed')
+    if {row['task_id'] for row in before['active_tasks']} != {row['task_id'] for row in action['busy']['blockers']}:
+        raise ValueError('busy task census mismatch')
+    remove_control(control_dir)
+    common = {'schema': 'astrid.r24.live-observation.v1', 'request_sha256': sha(canonical(request)),
+              'run_id': request['run_id'], 'session': session, 'engine': context['engine'],
+              'provider_ref': request['provider']['ref']}
+    payloads = {
+        'busy': {**common, 'kind': 'busy', 'engine_binding': action['binding'], 'busy': action['busy'],
+                 'protected_before': before, 'protected_after': after},
+        'unknown': {**common, 'kind': 'unknown', 'unknown': action['unknown'],
+                    'protected_before': before, 'protected_after': after},
+        'restoration': {**common, 'kind': 'restoration', 'restoration': action['restoration'],
+                        'protected_before': before, 'protected_after': after, 'control_removed': not control_dir.exists()},
+    }
+    source = 'pinokio/providers/r24-action.cjs'
+    outcomes = {'busy': 'busy-observed', 'unknown': 'unknown-safely-handled', 'restoration': 'restored'}
+    observations = []
+    for kind in ('busy', 'unknown', 'restoration'):
+        evidence = canonical(payloads[kind])
+        observations.append({'kind': kind, 'outcome': outcomes[kind], 'safe': True,
+            'request_sha256': common['request_sha256'], 'run_id': request['run_id'], 'session': session,
+            'source': source, 'source_sha256': request['provider']['sources'][source],
+            'evidence': evidence, 'evidence_sha256': sha(evidence)})
+    return observations
 
 
 def run(request, config, export_destination=None):
-    roots, pterm, node = validate(request, config)
-    uri = str(roots['pinokio'] / 'pinokio/stop.js')
+    context = validate(request, config)
     session = secrets.token_hex(16)
     try:
-        proc = invoke_action(node, pterm, uri)
-        if proc.returncode != 0:
-            raise ValueError('action failed')
-        action = sanitize_action(decode(proc.stdout))
-        observations = collect_authenticated(request, session, action)
-        if observations is not None:
-            result = serialize_success(request, session, observations)
-            if export_destination is not None:
-                seal_observations(request, session, observations, export_destination)
-            return result, None
+        observations = collect_authenticated(request, session, context)
+        result = serialize_success(request, session, observations)
+        if export_destination is not None:
+            seal_observations(request, session, observations, export_destination)
+        return result, None
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
         action = {'end': 'observer-error', 'settlement': 'unknown'}
-    # No busy/unknown injection or restoration source is bound. Never translate
-    # a process exit or socket disconnect into settlement, safety or restoration.
+    # A failed live control, drain, state comparison, or export never becomes a
+    # success result. External Actions/broker custody is evaluated separately.
     return None, {'schema': 'astrid.r24.producer-diagnostic.v1', 'request_sha256': sha(canonical(request)),
             'action': action, 'busy': 'not-run', 'unknown': 'not-run', 'restoration': 'unknown',
             'runtime_identity': 'unknown', 'custody': 'unknown', 'protected_state': 'unknown'}

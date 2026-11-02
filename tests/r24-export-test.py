@@ -42,19 +42,23 @@ class ExportTests(unittest.TestCase):
         return p.seal_observations(request or self.request, self.session,
                                    self.records if records is None else records, dest)
 
-    def test_deterministic_allowlist_inventory_and_no_raw_evidence(self):
+    def test_deterministic_allowlist_inventory_and_retained_raw_evidence(self):
         first, second = self.root / 'one', self.root / 'two'
         inventory = self.seal(first)
         self.assertEqual(inventory, self.seal(second, list(reversed(self.records))))
-        self.assertEqual([x['path'] for x in inventory], ['junit.xml', 'manifest.json', 'observation-result.json'])
+        self.assertEqual([x['path'] for x in inventory], ['junit.xml', 'manifest.json', 'observation-busy.json',
+            'observation-restoration.json', 'observation-result.json', 'observation-unknown.json'])
         for row in inventory:
             data = (first / row['path']).read_bytes()
             self.assertEqual(data, (second / row['path']).read_bytes())
             self.assertEqual((len(data), p.sha(data)), (row['bytes'], row['sha256']))
-            self.assertNotIn(b'synthetic', data)
+            if row['path'].startswith('observation-') and row['path'] != 'observation-result.json':
+                self.assertIn(b'synthetic', data)
+            else:
+                self.assertNotIn(b'synthetic', data)
         manifest = json.loads((first / 'manifest.json').read_bytes())
         self.assertEqual(manifest['qualification'], 'not-evaluated')
-        self.assertEqual(manifest['files'], [inventory[0], inventory[2]])
+        self.assertEqual(manifest['files'], [row for row in inventory if row['path'] != 'manifest.json'])
         self.assertIn(b'<skipped ', (first / 'junit.xml').read_bytes())
 
     def test_invalid_observations_never_create_directory(self):
@@ -110,7 +114,7 @@ class ExportTests(unittest.TestCase):
                   'end': 'socket-closed', 'settlement': 'unknown'}
         dest = self.root / 'out'
         with patch.object(p, 'validate', return_value=({'pinokio': self.root}, self.root, self.root)), \
-             patch.object(p, 'invoke_action', return_value=subprocess.CompletedProcess([], 0, json.dumps(action).encode())):
+             patch.object(p, 'collect_authenticated', side_effect=ValueError('collector unavailable')):
             result, diagnostic = p.run(self.request, {}, dest)
         self.assertIsNone(result)
         self.assertEqual(diagnostic['custody'], 'unknown')
