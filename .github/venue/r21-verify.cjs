@@ -39,7 +39,7 @@ const ENDPOINT = 'pinokio://127.0.0.1:42000/api/astrid';
 // This lane is the dedicated diagnostic workflow source.  The product tuple
 // above remains the candidate under observation; this execution lane is never
 // substituted for its Pinokio product pin.
-const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-CANDIDATE-APP-SERVE-R1';
+const PRODUCT_REF = 'refs/heads/lane/M-PIN/R-21-VENUE-REF-BINDING-R1';
 const VENUE_REF = 'refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1';
 const WORKFLOW_PATH = '.github/workflows/r21-real-engine.yml';
 const FIRST_REFUSAL = "Astrid is still running. Choose Pinokio's Stop button, then try again.";

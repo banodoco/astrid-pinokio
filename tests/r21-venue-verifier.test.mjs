@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { test } from 'node:test';
 import verifier from '../.github/venue/r21-verify.cjs';
@@ -112,7 +113,7 @@ test('R-21 venue verifier rejects a successful-looking wrapper with a nonzero in
   assert.throws(() => verifyReceipt(value), /zero inner PTerm exit/);
 });
 
-test('R-21 dispatch binding accepts only the exact product dispatch or self-serve venue ref', () => {
+test('R-21 dispatch binding accepts only the exact dedicated request or self-serve venue ref', () => {
   const environment = {
     GITHUB_EVENT_NAME: 'push',
     GITHUB_REF: 'refs/heads/venue/M-PIN-R-21-CANDIDATE-APP-SERVE-R1',
@@ -134,8 +135,8 @@ test('R-21 dispatch binding accepts only the exact product dispatch or self-serv
   const manualEnvironment = {
     ...environment,
     GITHUB_EVENT_NAME: 'workflow_dispatch',
-    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-CANDIDATE-APP-SERVE-R1',
-    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-CANDIDATE-APP-SERVE-R1',
+    GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-VENUE-REF-BINDING-R1',
+    GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-VENUE-REF-BINDING-R1',
   };
   const manualInput = { request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: 'a'.repeat(40) };
   const manual = validateDispatch(manualInput, manualEnvironment);
@@ -148,6 +149,29 @@ test('R-21 dispatch binding accepts only the exact product dispatch or self-serv
   assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@refs/heads/lane/M-PIN/R-21-R13' }), /workflow source/);
   assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_WORKFLOW_REF: 'banodoco/astrid-pinokio/.github/workflows/other.yml@refs/heads/lane/M-PIN/R-21-PUBLISHED-TUPLE-R1' }), /workflow source/);
   assert.throws(() => validateDispatch(manualInput, { ...manualEnvironment, GITHUB_WORKFLOW_REF: `untrusted/${manualEnvironment.GITHUB_WORKFLOW_REF}` }), /workflow source/);
+});
+
+test('R-21 dedicated request admits only this lane at its exact checked-out head', () => {
+  const lane = 'lane/M-PIN/R-21-VENUE-REF-BINDING-R1';
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  assert.equal(execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim(), lane);
+  const ref = `refs/heads/${lane}`;
+  const environment = {
+    GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: ref,
+    GITHUB_SHA: sha, GITHUB_WORKFLOW_SHA: sha,
+    GITHUB_WORKFLOW_REF: `banodoco/astrid-pinokio/.github/workflows/r21-real-engine.yml@${ref}`,
+    GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1',
+  };
+  const input = { request_id: REQUEST_ID, confirmation: CONFIRMATION, runner_ref: sha };
+  assert.equal(validateDispatch(input, environment).workflow.sha, sha);
+  const wrongSha = `${sha.slice(0, -1)}${sha.endsWith('0') ? '1' : '0'}`;
+  assert.throws(() => validateDispatch(input, {
+    ...environment, GITHUB_REF: 'refs/heads/lane/M-PIN/R-21-CORRECTIONS-INTEGRATION-R1',
+  }), /GitHub ref/);
+  assert.throws(() => validateDispatch({ ...input, runner_ref: wrongSha }, environment), /runner_ref\/GITHUB_SHA binding/);
+  assert.throws(() => validateDispatch(input, {
+    ...environment, GITHUB_SHA: wrongSha, GITHUB_WORKFLOW_SHA: wrongSha,
+  }), /runner_ref\/GITHUB_SHA binding/);
 });
 
 test('publisher binds the run and only retains sanitized evidence with inner exits', async () => {
