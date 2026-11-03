@@ -19,11 +19,11 @@ const runner = fs.readFileSync(runnerPath, 'utf8');
 const hostedWorkflow = fs.readFileSync(hostedWorkflowPath, 'utf8');
 const defaultRegisteredWorkflow = fs.readFileSync(defaultRegisteredWorkflowPath, 'utf8');
 
-const venueRef = '6c159e87ebb4f8965f93f6de7a9cfa25778b01d4';
-const runnerSha256 = '0139869dbfcba0e18613e35c732916f197e7d5a623726509070de5f2d87bf1c8';
-const runnerBlob = '54829e23741a8fd26efe538b48e4afc9f0459620';
-const observerSha256 = 'b3eb6d0943efaf8aaae268f6ffd94ab8826a7053aff4df142238cc74b73fc94f';
-const observerBlob = 'd7eb13d3716528d95f8c24bd4b02033adb03faaa';
+const venueRef = '60a7fa6461cc68722e32874b7389188eecbe1b2c';
+const runnerSha256 = 'f74ea2a7c68583c860bf57af4a21fdddff25702119fb354ee9dc15636a9bd4bf';
+const runnerBlob = '5264e930da8ba52a47ee18a91a21acb8a46e2185';
+const observerSha256 = 'e4bae94a210365eb00b0889a550ce9b9d6b945de0a8d9be10f07510849eb6244';
+const observerBlob = 'bf75540eabe1bbdc00897de1ddfa302e356fe801';
 const wrapperRef = '37e2337271cffe275374fe9a2eda73e8948ef17a';
 const wrapperSha256 = 'c9abcd60a839de2001195f207e63133632d457bc2c4fa921f3ba4c09efdd0570';
 const installPs1Digest = 'bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258';
