@@ -6,7 +6,7 @@ const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const test = require('node:test');
 
 const {
@@ -16,7 +16,33 @@ const {
 const { createInstallDiagnostics, ptermExit } = require('../.github/venue/r21-observer-diagnostics.cjs');
 
 function tempRoot() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'r25-mac-observability-'));
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'r25-mac-observability-')));
+}
+
+function macIdentityProbe(pid) {
+  if (process.platform !== 'darwin' || !Number.isSafeInteger(pid) || pid < 1) return null;
+  const run = args => {
+    try {
+      return { exit: 0, stdout: execFileSync(args[0], args.slice(1), { encoding: 'utf8', timeout: 2000, maxBuffer: 16 * 1024 }).slice(0, 2048) };
+    } catch (error) {
+      return {
+        exit: Number.isInteger(error.status) ? error.status : null,
+        error: String(error.message || error).slice(0, 512),
+        stdout: Buffer.isBuffer(error.stdout) ? error.stdout.toString('utf8').slice(0, 2048) : '',
+        stderr: Buffer.isBuffer(error.stderr) ? error.stderr.toString('utf8').slice(0, 2048) : '',
+      };
+    }
+  };
+  return {
+    executable_expected: fs.realpathSync(process.execPath),
+    lsof_txt: run(['lsof', '-a', '-p', String(pid), '-d', 'txt', '-Fn']),
+    ps_comm: run(['ps', '-p', String(pid), '-o', 'comm=']),
+    ps_command: run(['ps', '-p', String(pid), '-o', 'command=']),
+  };
+}
+
+function identityContext(identity) {
+  return JSON.stringify({ identity, mac_identity_probe: macIdentityProbe(identity?.expected?.pid) });
 }
 
 function waitForClose(child) {
@@ -145,7 +171,7 @@ test('setup failure preserves the inner exit, sends no daemon TERM, and verifies
     await waitForFile(childPidFile);
     descendantPid = Number(fs.readFileSync(childPidFile, 'utf8'));
     const identity = captureOwnedDaemonIdentity(daemon, { cwd: root, runRoot: root, args: [script] });
-    assert.equal(identity.available, true, JSON.stringify(identity));
+    assert.equal(identity.available, true, identityContext(identity));
     const innerExit = await ptermExit(inner, 'R-25 setup-install', 1000);
     assert.deepEqual(innerExit, { code: 23, signal: null });
     const started = process.hrtime.bigint();
@@ -181,7 +207,7 @@ test('setup failure preserves the inner exit, sends no daemon TERM, and verifies
 
 test('cleanup keeps uncertainty when a descendant is outside the private run root', async () => {
   const root = tempRoot();
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-mac-observability-outside-'));
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'r25-mac-observability-outside-')));
   const script = writeDaemonFixture(root);
   const childPidFile = path.join(root, 'child.pid');
   const termFile = path.join(root, 'term.log');
@@ -196,7 +222,7 @@ test('cleanup keeps uncertainty when a descendant is outside the private run roo
     descendantPid = Number(fs.readFileSync(childPidFile, 'utf8'));
     const identity = captureOwnedDaemonIdentity(daemon, { cwd: root, runRoot: root, args: [script] });
     const cleanup = await cleanupOwnedDaemon(daemon, { identity, killMs: 250 });
-    assert.equal(cleanup.status, 'failed');
+    assert.equal(cleanup.status, 'failed', identityContext(identity));
     assert.equal(cleanup.cleanup_verified, false);
     assert.equal(cleanup.failure, 'descendant-census-unavailable');
     assert.equal(cleanup.direct_signal_attempted, false);
@@ -226,7 +252,7 @@ test('cleanup fails closed and leaves the daemon untouched when identity changes
     await waitForFile(childPidFile);
     descendantPid = Number(fs.readFileSync(childPidFile, 'utf8'));
     const identity = captureOwnedDaemonIdentity(daemon, { cwd: root, runRoot: root, args: [script] });
-    assert.equal(identity.available, true, JSON.stringify(identity));
+    assert.equal(identity.available, true, identityContext(identity));
     const changed = { ...identity, expected: { ...identity.expected, start_identity: 'not-the-captured-birth' } };
     const cleanup = await cleanupOwnedDaemon(daemon, { identity: changed, killMs: 100 });
     assert.equal(cleanup.failure, 'daemon-identity-mismatch');
