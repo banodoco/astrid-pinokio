@@ -32,22 +32,34 @@ function createActionTracker() {
     failure() { return failure; },
   };
 }
-function ptermExit(child, label, timeoutMs, diagnostic = null) {
+function ptermExit(child, label, timeoutMs, diagnostic = null, { signal = null } = {}) {
   const note = (event, value) => { try { (typeof diagnostic === 'function' ? diagnostic : diagnostic?.pterm)?.(event, value); } catch {} };
   const beforeTimeout = value => { try { diagnostic?.beforeTimeout?.(value); } catch {} };
   const started = Date.now();
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    let settled = false;
+    let timer;
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      fn(value);
+    };
+    const onAbort = () => settle(reject, new Error(`${label} installer failure marker`));
+    timer = setTimeout(() => {
       const fired = Date.now();
       beforeTimeout({ at: fired, pid: child.pid });
       child.kill('SIGTERM');
-      reject(new Error(`${label} PTerm timeout`));
+      settle(reject, new Error(`${label} PTerm timeout`));
       note('timer-fire', { at: fired });
     }, timeoutMs);
-    child.once('error', () => { clearTimeout(timer); reject(new Error(`${label} PTerm spawn failed`)); note('spawn-error'); });
-    child.once('exit', (code, signal) => { clearTimeout(timer); resolve({ code, signal: signal || null }); note('child-exit', { code, signal }); });
-    child.once('close', (code, signal) => note('child-close', { code, signal: signal || null }));
+    child.once('error', () => { settle(reject, new Error(`${label} PTerm spawn failed`)); note('spawn-error'); });
+    child.once('exit', (code, childSignal) => { settle(resolve, { code, signal: childSignal || null }); note('child-exit', { code, signal: childSignal }); });
+    child.once('close', (code, childSignal) => note('child-close', { code, signal: childSignal || null }));
     note('timer-start', { started, deadline: started + timeoutMs });
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -58,7 +70,8 @@ const installKinds = ['start', 'stream', 'result', 'error', 'installer-failure-m
 const installMethods = ['shell.run', 'local.set', 'script.start', 'input'];
 const installStages = ['daemon-spawn', 'daemon-ready', 'observer-open', 'observer-subscribe',
   'pterm-spawn', 'pterm-timer-start', 'pterm-timer-fire', 'pterm-exit', 'pterm-close',
-  'process-snapshot-before-timeout', 'installer-output-before-timeout', 'installer-output-capture', 'setup-complete', 'cleanup-start'];
+  'process-snapshot-before-timeout', 'installer-output-before-timeout', 'process-snapshot-before-failure-marker',
+  'installer-output-before-failure-marker', 'installer-output-capture', 'setup-complete', 'cleanup-start'];
 const INSTALL_TEXT_LIMIT = 2048;
 const INSTALL_STAGE_LIMIT = 40;
 const timestamp = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)

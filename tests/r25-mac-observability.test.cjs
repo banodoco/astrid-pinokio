@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -10,9 +11,9 @@ const test = require('node:test');
 
 const {
   createBoundedCapture, copyBoundedTail, captureProcessSnapshot,
-  identityMismatches, captureOwnedDaemonIdentity, cleanupOwnedDaemon,
+  identityMismatches, captureOwnedDaemonIdentity, cleanupOwnedDaemon, observeAction,
 } = require('../.github/venue/r25-snapshot-runner.cjs');
-const { ptermExit } = require('../.github/venue/r21-observer-diagnostics.cjs');
+const { createInstallDiagnostics, ptermExit } = require('../.github/venue/r21-observer-diagnostics.cjs');
 
 function tempRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'r25-mac-observability-'));
@@ -88,6 +89,45 @@ test('Darwin signal identity requires the exact captured command line and every 
   const missingFreshCommand = { ...observed };
   delete missingFreshCommand.command_line;
   assert.ok(identityMismatches(missingFreshCommand, expected, 'darwin').includes('command-identity-unavailable'));
+});
+
+test('setup failure marker bounds the PTerm wait without signalling its child', async () => {
+  const root = tempRoot();
+  let handler;
+  let evidence;
+  const child = new EventEmitter();
+  child.pid = 321;
+  child.kill = signal => { child.sent = signal; return true; };
+  const socket = {
+    addEventListener: (_name, callback) => { handler = callback; },
+    send: () => setTimeout(() => {
+      handler({ data: JSON.stringify({ type: 'stream', data: { raw: 'ASTRID_PINOKIO_FAIL' } }) });
+      handler({ data: JSON.stringify({ type: 'stream', data: { raw: 'URE' } }) });
+    }, 10),
+  };
+  const diagnostic = createInstallDiagnostics({ action: 'setup-install', slot_id: 'pinokio-backend-macos' }, value => { evidence = value; });
+  let markerSnapshotCaptured = false;
+  diagnostic.beforeFailureMarker = value => {
+    markerSnapshotCaptured = value.pid === child.pid;
+    diagnostic.stage('process-snapshot-before-failure-marker');
+  };
+  const started = Date.now();
+  try {
+    await assert.rejects(observeAction({
+      io: { openSocket: async () => socket, disposeSocket: () => {}, status: async () => true },
+      ptermRoot: root, home: root, endpoint: 'pinokio://test', appRoot: root,
+      script: 'pinokio/install.js', action: 'setup-install', logRoot: root,
+      timeoutMs: 10_000, diagnostic, spawnProcess: () => child,
+    }), /installer failure marker/);
+    assert.ok(Date.now() - started < 1000, 'marker did not stop the setup wait promptly');
+    assert.equal(child.sent, undefined, 'marker handling must not signal an unverified process');
+    assert.equal(evidence.last_error.kind, 'installer-failure-marker');
+    assert.equal(evidence.timer.fired_at, null);
+    assert.equal(markerSnapshotCaptured, true);
+    assert.ok(evidence.stages.some(stage => stage.stage === 'process-snapshot-before-failure-marker'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('setup failure preserves the inner exit, sends no daemon TERM, and verifies owned descendants are gone', async () => {

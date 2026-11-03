@@ -725,20 +725,30 @@ async function waitForRouteReadiness(trace, timeoutMs = 120000) {
   throw new Error('independent fully-local editor/Runtime readiness timeout');
 }
 
-async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, action, logRoot, timeoutMs = 30 * 60 * 1000, diagnostic = null }) {
+async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, action, logRoot, timeoutMs = 30 * 60 * 1000, diagnostic = null, spawnProcess = spawn }) {
   const socket = await io.openSocket();
   diagnostic?.stage('observer-open');
   let terminal = { stop: false, disconnect: false, error: false };
   let firstError = null;
+  let markerTail = '';
+  let childPid = null;
+  const abort = new AbortController();
   const onMessage = event => {
     try {
       const packet = JSON.parse(String(event.data));
       diagnostic?.packet(packet);
+      const raw = packet?.type === 'stream' && typeof packet.data?.raw === 'string' ? packet.data.raw : '';
+      const markerSeen = (markerTail + raw).includes('ASTRID_PINOKIO_FAILURE');
+      markerTail = packet?.type === 'stream' ? (markerTail + raw).slice(-('ASTRID_PINOKIO_FAILURE'.length - 1)) : '';
       if (packet?.type === 'event' && packet.data === 'stop') terminal.stop = true;
       if (packet?.type === 'event' && packet.data === 'disconnect') terminal.disconnect = true;
-      if (packet?.type === 'error' || packet?.type === 'installer-failure-marker') {
+      if (packet?.type === 'error' || packet?.type === 'installer-failure-marker' || markerSeen) {
         terminal.error = true;
         if (!firstError) firstError = { kind: packet.type === 'error' ? 'engine-error' : 'installer-failure-marker' };
+        if (packet?.type !== 'error') {
+          diagnostic?.beforeFailureMarker?.({ at: Date.now(), pid: childPid });
+          abort.abort();
+        }
       }
     } catch { if (!firstError) firstError = { kind: 'malformed-engine-packet' }; }
   };
@@ -752,9 +762,10 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
     const bounded = diagnostic?.stdio || null;
     const stdout = bounded ? null : fs.openSync(stdoutPath, 'wx', 0o600);
     const stderr = bounded ? null : fs.openSync(stderrPath, 'wx', 0o600);
-    const child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', endpoint], {
+    const child = spawnProcess(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', endpoint], {
       cwd: home, env: process.env, stdio: bounded ? ['ignore', 'pipe', 'pipe'] : ['ignore', stdout, stderr],
     });
+    childPid = child.pid;
     diagnostic?.stage('pterm-spawn');
     if (bounded) {
       child.stdout.on('data', chunk => bounded.stdout.append(chunk));
@@ -763,7 +774,7 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
       child.stderr.on('close', () => bounded.stderr.close());
     }
     let innerExit;
-    try { innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs, diagnostic ? { pterm: diagnostic.pterm, beforeTimeout: diagnostic.beforeTimeout } : null); }
+    try { innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs, diagnostic ? { pterm: diagnostic.pterm, beforeTimeout: diagnostic.beforeTimeout } : null, { signal: abort.signal }); }
     finally { if (bounded) { bounded.stdout.close(); bounded.stderr.close(); } else { fs.closeSync(stdout); fs.closeSync(stderr); } }
     await new Promise(resolve => setTimeout(resolve, 500));
     return { script, inner_exit: innerExit, terminal, first_error: firstError,
@@ -844,6 +855,12 @@ async function main() {
   })) : null;
   const setupDiagnosticView = setupDiagnostic ? Object.assign({}, setupDiagnostic, {
     stdio: setupOutput,
+    beforeFailureMarker(value = {}) {
+      captureProcessSnapshot(path.join(diagnostics, 'process-snapshot-before-failure-marker.json'), [value.pid, daemon?.pid]);
+      setupDiagnostic.stage('process-snapshot-before-failure-marker');
+      copyBoundedTail(path.join(isolatedUserHome, 'Library', 'Logs', 'Astrid Runtime', 'install.log'), path.join(diagnostics, 'installer-output-before-failure-marker.log'));
+      setupDiagnostic.stage('installer-output-before-failure-marker');
+    },
     beforeTimeout(value) {
       const processSnapshot = captureProcessSnapshot(path.join(diagnostics, 'process-snapshot-before-timeout.json'), [value.pid, daemon?.pid]);
       setupDiagnostic.stage('process-snapshot-before-timeout');
@@ -972,7 +989,7 @@ async function main() {
 module.exports = {
   actionPlan, routeConfig, createBoundedCapture, copyBoundedTail, captureProcessSnapshot,
   readProcessIdentity, identityMismatches, captureOwnedDaemonIdentity,
-  ownedProcessCensus, finalOwnedProcessCensus, cleanupOwnedDaemon, resolveProducerJob,
+  ownedProcessCensus, finalOwnedProcessCensus, cleanupOwnedDaemon, resolveProducerJob, observeAction,
 };
 if (require.main === module) {
   main().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });
