@@ -71,7 +71,7 @@ function __r25CrossSgrMatcherPair(state, ordinal, term, eol) {
       state.sgr_color_setting_proven !== true || state.sgr_color_setting_failed === true ||
       state.sgr_matcher_pair_write_attempted === true) return;
   state.sgr_matcher_pair_write_attempted = true;
-  const input = `echo pinokio${eol}echo pinokio${eol}`;
+  const input = 'echo pinokio' + eol + 'echo pinokio' + eol;
   __r25CrossProbeWrite(ordinal, 'matcher-pair', input);
   try {
     term.write(input);

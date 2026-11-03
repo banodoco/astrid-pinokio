@@ -9,7 +9,7 @@ const { patchCrossOsSource } = require('../.github/venue/r25-cross-os-pty.cjs');
 const { patchWindowsSource } = require('../.github/venue/r25-windows-pty-diagnostics.cjs');
 const { PINOKIOD_SHELL_SHA256, patchSource: patchSgrSource, sha256 } = require('../.github/venue/r25-pinokiod-pty-instrumentation.cjs');
 function fixture() { return ["const __r25PtyFs = require('fs');", '    this.prompt_pattern = await this.prompt(params.path)',
-  '      term.onData((data) => {', "                __r25PtyCapture('prompt-probe-write-return', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })",
+  '      term.onData((data) => {', "        __r25PtyProcessing(__r25PromptState, 'callback', { ready: this.prompt_ready, done: this.prompt_done, input_length: typeof data === 'string' ? data.length : 0, input_probe_count: __r25PtyProbeCount(data), input_command_line_count: __r25InputCommandLines })", "                __r25PtyCapture('prompt-probe-write-return', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })",
   "              __r25PtyProcessing(__r25PromptState, 'resolve')",
   "                const __r25CmdEchoProbe = /^cmd(?:\\.exe)?$/i.test(__r25PtyPath.win32.basename(String(this.shell || '')))\n                  __r25PtyProcessing(__r25PromptState, 'callback', { nonce_probe_attempted: true, cmd_echo_state_probe_attempted: __r25CmdEchoProbe })\n                    if (__r25CmdEchoProbe) term.write(`echo${this.EOL}`)\n                    term.write(`echo ${__r25PromptState.nonce}${this.EOL}`)",
   '                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)'].join('\n'); }
@@ -65,6 +65,42 @@ test('changed-input overlay keeps matcher pair and nonce, records guard/write me
  } finally {fs.rmSync(root,{recursive:true,force:true});}
 });
 
+test('SGR changed input waits for callback-confirmed removal proof before writing matcher pair', () => {
+ const source=patchCrossOsSource(fixture(),path.resolve(__dirname,'../.github/venue/r25-macos-diagnostic.cjs'));
+ const runtime=source.slice(0,source.indexOf("const __r25PtyFs"));
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'r25-cross-sgr-boundary-'));
+ const capture=path.join(root,'cross.json');
+ try {
+  const writes=[];
+  const state={sgr_color_setting_proven:false,sgr_color_setting_failed:false};
+  const term={write(input){writes.push(input)}};
+  const context={require,Buffer,Date,Map,JSON,process:{platform:'win32',env:{
+   ASTRID_R25_CROSS_OS_DIAGNOSTIC:'1',ASTRID_R25_WINDOWS_SGR_DIAGNOSTIC:'1',ASTRID_R25_CROSS_CAPTURE_FILE:capture,
+  }}};
+  vm.runInNewContext(runtime+`__r25CrossSgrMatcherPair(state,2,term,'\\r\\n');`,{...context,state,term});
+  assert.deepEqual(writes,[],'pair is not delivered before the proof callback');
+
+  state.sgr_color_setting_proven=true;
+  vm.runInNewContext(runtime+`__r25CrossSgrMatcherPair(state,2,term,'\\r\\n');`,{...context,state,term});
+  assert.deepEqual(writes,['echo pinokio\r\necho pinokio\r\n']);
+  assert.equal(state.sgr_matcher_pair_write_attempted,true);
+  assert.equal(state.sgr_matcher_pair_write_returned,true);
+  const data=JSON.parse(fs.readFileSync(capture,'utf8'));
+  assert.deepEqual(data.prompt_probes[0].writes.map(write=>write.role),['matcher-pair']);
+  assert.ok(data.prompt_probes[0].writes[0].returned_at);
+
+  vm.runInNewContext(runtime+`__r25CrossSgrMatcherPair(state,2,term,'\\r\\n');`,{...context,state,term});
+  assert.equal(writes.length,1,'a repeated callback cannot send a second pair');
+  const failed={sgr_color_setting_proven:true,sgr_color_setting_failed:true};
+  vm.runInNewContext(runtime+`__r25CrossSgrMatcherPair(failed,3,term,'\\r\\n');`,{...context,failed,term});
+  assert.equal(writes.length,1,'a failure marker suppresses the matcher pair');
+
+  // Composition binds the send to the native callback after the instrumenter
+  // has updated the callback-derived proof predicate.
+  assert.ok(source.indexOf("__r25PtyProcessing(__r25PromptState, 'callback', { ready: this.prompt_ready, done: this.prompt_done, input_length:") < source.indexOf('__r25CrossSgrMatcherPair(__r25PromptState, __r25PromptOrdinal, term, this.EOL)'));
+ } finally {fs.rmSync(root,{recursive:true,force:true});}
+});
+
 test('SGR then cross-OS overlays compose on authentic pinned pinokiod source', () => {
  const pinnedPath=path.join(__dirname,'fixtures','pinokiod-shell-add4a674ad1ba95bb62ec427fce519fe5bf0e9bf.js');
  const pinned=fs.readFileSync(pinnedPath,'utf8');
@@ -74,10 +110,11 @@ test('SGR then cross-OS overlays compose on authentic pinned pinokiod source', (
  const combined=patchCrossOsSource(windows,path.resolve(__dirname,'../.github/venue/r25-macos-diagnostic.cjs'));
  assert.doesNotThrow(()=>new vm.Script(combined));
 
- // The SGR pass intentionally changes only the prompt input branch. The
- // cross-OS pass must bind to that combined form and preserve both input
- // payloads and pinokiod's literal matcher predicate.
- assert.ok(combined.includes("if (process.env.ASTRID_R25_WINDOWS_SGR_DIAGNOSTIC === '1') { term.write(`Remove-Module PSReadLine -ErrorAction SilentlyContinue; if (-not (Get-Module -Name PSReadLine)) { Write-Output 'R25_SGR_COLOR_DISABLED' } else { Write-Output 'R25_SGR_COLOR_SETTING_FAILED' }${this.EOL}echo pinokio${this.EOL}echo pinokio${this.EOL}`) }"));
+ // The changed input writes PSReadLine removal by itself and waits for its
+ // callback-confirmed proof before the unchanged matcher pair is written.
+ assert.ok(combined.includes("const __r25SgrRemovalInput = `Remove-Module PSReadLine -ErrorAction SilentlyContinue; if (-not (Get-Module -Name PSReadLine)) { Write-Output 'R25_SGR_COLOR_DISABLED' } else { Write-Output 'R25_SGR_COLOR_SETTING_FAILED' }${this.EOL}`"));
+ assert.doesNotMatch(combined,/R25_SGR_COLOR_DISABLED[^`]*echo pinokio/);
+ assert.ok(combined.includes("__r25CrossSgrMatcherPair(__r25PromptState, __r25PromptOrdinal, term, this.EOL)"));
  assert.ok(combined.includes("const __r25MatcherPairInput = `echo pinokio${this.EOL}echo pinokio${this.EOL}`"));
  assert.ok(combined.includes("const __r25NonceInput = `echo ${__r25PromptState.nonce}${this.EOL}`"));
  const matcher="let re = /(.+)echo pinokio[\\r\\n]+pinokio[\\r\\n]+(\\1)/gs";
