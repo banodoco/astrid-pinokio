@@ -20,6 +20,7 @@ function sourceFixture() {
     'const path = require("path")',
     '      let term = pty.spawn(this.shell, this.args, config)',
     '      term.onData((data) => {',
+    '                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)',
     '              term.kill()',
     '          this.ptyProcess = pty.spawn(this.shell, shellArgs, config)',
     '          this.ptyProcess.onData((data) => {',
@@ -31,8 +32,10 @@ function sourceFixture() {
 test('patches the exact source anchors and exposes every bounded PTY boundary marker', () => {
   const source = sourceFixture().join('\n') + '\n';
   const result = patchSource(source, { expectedSha256: sha256(Buffer.from(source, 'utf8')) });
-  assert.equal(result.replacements.length, 8);
+  assert.equal(result.replacements.length, 9);
   for (const marker of PTY_MARKERS) assert.match(result.source, new RegExp(marker));
+  assert.match(result.source, /__r25PromptFirstOutput = true; __r25PtyCapture\('prompt-first-output'\)[\s\S]*else if \(!__r25PromptFollowupOutput\)[\s\S]*prompt-followup-output/);
+  assert.match(result.source, /__r25PtyCapture\('prompt-probe-write'\)\n                term\.write\(`echo pinokio\$\{this\.EOL\}echo pinokio\$\{this\.EOL\}`\)/);
   assert.notEqual(result.patchedSha256, result.sourceSha256);
 });
 

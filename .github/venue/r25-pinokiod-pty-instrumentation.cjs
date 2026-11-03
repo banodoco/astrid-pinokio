@@ -9,7 +9,7 @@ const PINOKIOD_REF = 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf';
 const PINOKIOD_SHELL_RELATIVE = 'kernel/shell.js';
 const PINOKIOD_SHELL_SHA256 = 'e39ebef4ffcbd381cd1f3962b56ddfead3ed4354733d15d2d3a2d23ecf5a7da6';
 const PTY_MARKERS = Object.freeze([
-  'prompt-pty-spawn', 'prompt-first-output', 'prompt-recognized',
+  'prompt-pty-spawn', 'prompt-first-output', 'prompt-followup-output', 'prompt-probe-write', 'prompt-recognized',
   'prompt-kill-start', 'prompt-kill-end', 'prompt-native-exit',
   'exec-pty-spawn', 'exec-first-output', 'exec-prompt-recognized',
   'exec-command-write', 'exec-native-exit',
@@ -101,12 +101,17 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
     {
       name: 'prompt-pty-spawn',
       needle: '      let term = pty.spawn(this.shell, this.args, config)\n',
-      replacement: '      let term = pty.spawn(this.shell, this.args, config)\n      __r25PtyCapture(\'prompt-pty-spawn\', { pid: term?.pid, ppid: process.pid })\n      __r25PtyAttachExit(term, \'prompt-native-exit\')\n      let __r25PromptFirstOutput = false\n',
+      replacement: '      let term = pty.spawn(this.shell, this.args, config)\n      __r25PtyCapture(\'prompt-pty-spawn\', { pid: term?.pid, ppid: process.pid })\n      __r25PtyAttachExit(term, \'prompt-native-exit\')\n      let __r25PromptFirstOutput = false\n      let __r25PromptFollowupOutput = false\n',
     },
     {
       name: 'prompt-first-output',
       needle: '      term.onData((data) => {\n',
-      replacement: '      term.onData((data) => {\n        if (!__r25PromptFirstOutput) { __r25PromptFirstOutput = true; __r25PtyCapture(\'prompt-first-output\') }\n',
+      replacement: '      term.onData((data) => {\n        if (!__r25PromptFirstOutput) { __r25PromptFirstOutput = true; __r25PtyCapture(\'prompt-first-output\') }\n        else if (!__r25PromptFollowupOutput) { __r25PromptFollowupOutput = true; __r25PtyCapture(\'prompt-followup-output\') }\n',
+    },
+    {
+      name: 'prompt-probe-write',
+      needle: '                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)\n',
+      replacement: '                __r25PtyCapture(\'prompt-probe-write\')\n                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)\n',
     },
     {
       name: 'prompt-recognized-and-kill',
