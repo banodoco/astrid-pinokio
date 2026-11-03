@@ -11,9 +11,11 @@ const test = require('node:test');
 const sequencePath = path.join(__dirname, '..', '.github', 'venue', 'r25-option-b-macos-sequence.sh');
 const wrapperPath = path.join(__dirname, '..', '.github', 'venue', 'r25-local-macos-option-b.sh');
 const runnerPath = path.join(__dirname, '..', '.github', 'venue', 'r25-snapshot-runner.cjs');
+const hostedWorkflowPath = path.join(__dirname, '..', '.github', 'workflows', 'r25-snapshot-journey.yml');
 const sequence = fs.readFileSync(sequencePath, 'utf8');
 const wrapper = fs.readFileSync(wrapperPath, 'utf8');
 const runner = fs.readFileSync(runnerPath, 'utf8');
+const hostedWorkflow = fs.readFileSync(hostedWorkflowPath, 'utf8');
 
 const venueRef = '6c159e87ebb4f8965f93f6de7a9cfa25778b01d4';
 const runnerSha256 = '0139869dbfcba0e18613e35c732916f197e7d5a623726509070de5f2d87bf1c8';
@@ -68,6 +70,20 @@ test('macOS sequence binds and invokes the corrected immutable wrapper', () => {
   assert.equal(crypto.createHash('sha256').update(fs.readFileSync(observerPath)).digest('hex'), observerSha256);
   assert.equal(childProcess.execFileSync('git', ['rev-parse', `HEAD:${path.relative(path.join(__dirname, '..'), runnerPath)}`], { encoding: 'utf8' }).trim(), runnerBlob);
   assert.equal(childProcess.execFileSync('git', ['rev-parse', `HEAD:${path.relative(path.join(__dirname, '..'), observerPath)}`], { encoding: 'utf8' }).trim(), observerBlob);
+});
+
+test('hosted macOS workflow independently dispatches both modes with the exact published tuple', () => {
+  assert.match(hostedWorkflow, /runs-on: macos-15/);
+  assert.match(hostedWorkflow, /options: \[pinokio-backend-macos, pinokio-fully-local-macos\]/);
+  assert.match(hostedWorkflow, /candidate_tuple:/);
+  assert.match(hostedWorkflow, /R25_TUPLE_JSON: \$\{\{ inputs\.candidate_tuple/);
+  assert.match(hostedWorkflow, /candidate_tuple differs from published CURRENT-TUPLE\.json/);
+  assert.match(hostedWorkflow, /R25_LAUNCHD_TARGET="gui\/\$\(id -u\)\/haus\.astrid\.runtime"/);
+  assert.match(hostedWorkflow, /test "\$\(id -u\)" -gt 0/);
+  assert.match(hostedWorkflow, /test "\$\(id -un\)" != root/);
+  assert.match(hostedWorkflow, /r25-snapshots-\$\{\{ env\.SLOT_ID \}\}/);
+  assert.match(hostedWorkflow, /r25-snapshot-diagnostics-\$\{\{ env\.SLOT_ID \}\}/);
+  assert.doesNotMatch(hostedWorkflow, /R25_LAUNCHD_TARGET: gui\/501\//);
 });
 
 test('macOS route preserves both inner row exit codes and returns the wrapper result', () => {

@@ -12,11 +12,16 @@ on:
         default: a6b68d5b5478326a4db1971966d33a2cfe61d091
         type: string
       slot_id:
-        description: Hosted platform slot
+        description: One independent hosted macOS mode
         required: true
         default: pinokio-fully-local-macos
         type: choice
-        options: [pinokio-fully-local-macos]
+        options: [pinokio-backend-macos, pinokio-fully-local-macos]
+      candidate_tuple:
+        description: Exact published CURRENT-TUPLE.json candidate
+        required: true
+        default: '{"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","artifacts":{"public/install":"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d","public/install.sh":"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285","public/install.ps1":"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"},"published_at":"2026-11-02T17:55:27Z"}'
+        type: string
 
 permissions:
   actions: read
@@ -24,7 +29,7 @@ permissions:
 
 jobs:
   macos-six-action:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.slot_id == 'pinokio-fully-local-macos')
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.slot_id == 'pinokio-backend-macos' || inputs.slot_id == 'pinokio-fully-local-macos'))
     runs-on: macos-15
     timeout-minutes: 90
     env:
@@ -33,11 +38,9 @@ jobs:
       SLOT_ID: ${{ github.event_name == 'push' && 'pinokio-fully-local-macos' || inputs.slot_id }}
       R25_TARGET_OS: macos
       R25_SLOT_ID: ${{ github.event_name == 'push' && 'pinokio-fully-local-macos' || inputs.slot_id }}
-      R25_LAUNCHD_TARGET: gui/501/haus.astrid.runtime
       PINOKIOD_REF: add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
       PTERM_REF: 5be43718701c448b43daf0ce51d8935f170065bb
-      R25_TUPLE_JSON: >-
-        {"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","artifacts":{"public/install":"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d","public/install.sh":"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285","public/install.ps1":"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"},"published_at":"2026-11-02T17:55:27Z"}
+      R25_TUPLE_JSON: ${{ inputs.candidate_tuple || '{"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","artifacts":{"public/install":"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d","public/install.sh":"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285","public/install.ps1":"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"},"published_at":"2026-11-02T17:55:27Z"}' }}
     steps:
       - name: Preserve exact Git blob bytes on macOS
         shell: bash
@@ -61,6 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$AGENT_REF" = 'a6b68d5b5478326a4db1971966d33a2cfe61d091'
+          node -e 'const got=JSON.parse(process.env.R25_TUPLE_JSON); const want=JSON.parse(process.argv[1]); if(JSON.stringify(got)!==JSON.stringify(want)) throw new Error("candidate_tuple differs from published CURRENT-TUPLE.json")' '{"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","artifacts":{"public/install":"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d","public/install.sh":"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285","public/install.ps1":"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"},"published_at":"2026-11-02T17:55:27Z"}'
           git clone --filter=blob:none --no-checkout https://github.com/banodoco/astrid-agent.git "$AGENT_ROOT"
           git -C "$AGENT_ROOT" fetch --no-tags --depth=1 origin "$AGENT_REF"
           git -C "$AGENT_ROOT" config core.autocrlf false
@@ -124,6 +128,9 @@ jobs:
           R25_DIAGNOSTICS: ${{ runner.temp }}/r25-diagnostics
         run: |
           set -euo pipefail
+          test "$(id -u)" -gt 0
+          test "$(id -un)" != root
+          export R25_LAUNCHD_TARGET="gui/$(id -u)/haus.astrid.runtime"
           node .github/venue/r25-snapshot-runner.cjs \
             --agent-root "$AGENT_ROOT" --pinokiod "$PINOKIOD_ROOT" \
             --pterm "$PTERM_ROOT" --output "$R25_OUTPUT"
@@ -131,7 +138,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r25-snapshots-pinokio-fully-local-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: r25-snapshots-${{ env.SLOT_ID }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/r25-snapshot-output
           if-no-files-found: warn
           retention-days: 30
@@ -139,7 +146,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r25-snapshot-diagnostics-pinokio-fully-local-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: r25-snapshot-diagnostics-${{ env.SLOT_ID }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/r25-diagnostics
           if-no-files-found: warn
           retention-days: 30
