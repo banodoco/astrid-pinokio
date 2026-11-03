@@ -311,6 +311,37 @@ test('legacy R0 Update refuses first click, then Stop and fresh retry reach inst
   assert.match(shells[1].params.message, /astrid.*install/s);
 });
 
+test('legacy R0 first-click refuses with an empty running map when an owned supervisor is live', async (t) => {
+  const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || require('node:os').tmpdir(), 'astrid-u4-supervisor-'));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const appDirectory = path.join(temporary, 'pinokio', 'api', 'Astrid');
+  const programs = path.join(appDirectory, 'app');
+  const backendRoot = path.join(programs, 'astrid');
+  fs.mkdirSync(backendRoot, { recursive: true });
+  fs.writeFileSync(path.join(programs, 'install-mode.json'), JSON.stringify({ schema_version: 1, mode: 'backend' }));
+  fs.writeFileSync(path.join(backendRoot, 'pinokio-control.json'), JSON.stringify({ schema: 1, pid: 123, port: 4567 }));
+  const calls = [];
+  const app = library.createApp({ platform: 'linux', appDirectory, environment: {}, lifecycle: {
+    preflightStop: async () => { calls.push('runtime-preflight'); return { safe: true, final_down_required: true }; },
+  } });
+  const update = await load('pinokio/update.js', app)({}, {});
+  const uri = app.paths.join(app.APP_DIR, 'pinokio', 'start.js');
+  const kernel = { api: { running: {}, stop: () => assert.fail('first-click preflight must not stop the Pinokio session') } };
+  const output = [];
+  assert.equal(app.hasOwnedSupervisor(), true, 'the fixture is a valid live Pinokio-owned supervisor record');
+  await assert.rejects(update.run[0].method({}, ({ raw }) => output.push(raw), kernel), /Choose Pinokio's Stop button, then try again/);
+  assert.deepEqual(calls, ['runtime-preflight']);
+  assert.match(output.join(''), /Choose Pinokio's Stop button/);
+
+  // A controller-map entry is independently sufficient even when the owned
+  // supervisor record is absent, matching stopOwnedStart's conservative OR.
+  fs.rmSync(path.join(backendRoot, 'pinokio-control.json'));
+  kernel.api.running[uri] = true;
+  calls.length = 0;
+  await assert.rejects(update.run[0].method({}, () => {}, kernel), /Choose Pinokio's Stop button, then try again/);
+  assert.deepEqual(calls, ['runtime-preflight']);
+});
+
 test('Update performs only installed-CLI recovery before any new launcher or manifest fetch', async (t) => {
   const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'astrid-pinokio-recovery-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));

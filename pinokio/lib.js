@@ -444,8 +444,7 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
       // lock admission is authoritative. While its Pinokio controller remains,
       // preserve the established first-click Stop instruction.
       const startUri = paths.join(APP_DIR, 'pinokio', 'start.js');
-      const active = kernel?.api?.running
-        ? Boolean(kernel.api.running[startUri]) : hasOwnedSupervisor();
+      const active = Boolean(kernel?.api?.running?.[startUri]) || hasOwnedSupervisor();
       if (report?.final_down_required && active) {
         throw new Error("Astrid is still running. Choose Pinokio's Stop button, then try again.");
       }
