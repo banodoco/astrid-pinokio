@@ -14,6 +14,7 @@ function patchCrossOsSource(source, macHelper) {
   const runtime = String.raw`
 const __r25CrossFs = require('fs');
 const __r25CrossPath = require('path');
+const __r25CrossCrypto = require('crypto');
 const __r25CrossMacHelper = require(${JSON.stringify(macHelper)});
 const __r25CrossMac = new Map();
 const __r25CrossPreShell = [];
@@ -44,6 +45,30 @@ function __r25CrossProbe(ordinal, field) {
   if (!probe) { if (__r25CrossProbes.length >= 32) return; probe = {prompt_ordinal: ordinal}; __r25CrossProbes.push(probe); }
   probe[field] = new Date().toISOString();
 }
+function __r25CrossProbeWrite(ordinal, role, input, returned = false) {
+  if (process.env.ASTRID_R25_CROSS_OS_DIAGNOSTIC !== '1') return;
+  let probe = __r25CrossProbes.find(item => item.prompt_ordinal === ordinal);
+  if (!probe) { if (__r25CrossProbes.length >= 32) return; probe = {prompt_ordinal: ordinal}; __r25CrossProbes.push(probe); }
+  if (!Array.isArray(probe.writes)) probe.writes = [];
+  let write = probe.writes.find(item => item.role === role);
+  if (!write) {
+    if (probe.writes.length >= 4 || typeof input !== 'string') return;
+    const bytes = Buffer.from(input, 'utf8');
+    write = {role, bytes: bytes.length, sha256: __r25CrossCrypto.createHash('sha256').update(bytes).digest('hex'), attempted_at: new Date().toISOString()};
+    probe.writes.push(write);
+  }
+  if (returned) write.returned_at = new Date().toISOString();
+  __r25CrossWrite();
+}
+function __r25CrossWriteAudit(ordinal, shell, guard) {
+  if (process.env.ASTRID_R25_CROSS_OS_DIAGNOSTIC !== '1') return;
+  let probe = __r25CrossProbes.find(item => item.prompt_ordinal === ordinal);
+  if (!probe) { if (__r25CrossProbes.length >= 32) return; probe = {prompt_ordinal: ordinal}; __r25CrossProbes.push(probe); }
+  probe.shell_basename = typeof shell === 'string' ? shell.slice(0, 80) : null;
+  probe.no_argument_echo_guard = guard === true;
+  probe.no_argument_echo_write = false;
+  __r25CrossWrite();
+}
 function __r25CrossMacPrompt(ordinal) {
   if (process.platform !== 'darwin' || process.env.ASTRID_R25_CROSS_OS_DIAGNOSTIC !== '1') return null;
   if (!__r25CrossMac.has(ordinal)) {
@@ -61,6 +86,22 @@ function __r25CrossMacPrompt(ordinal) {
   replace('      term.onData((data) => {', '      term.onData((data) => {\n        __r25CrossMacPrompt(__r25PromptOrdinal)?.onData(data)\n        __r25CrossWrite()');
   const probe = "                __r25PtyCapture('prompt-probe-write-return', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })";
   replace(probe, probe + "\n                __r25CrossProbe(__r25PromptOrdinal, 'written_at')" + '\n                __r25CrossMacPrompt(__r25PromptOrdinal)?.probeWritten()\n                __r25CrossWrite()');
+  replace("                const __r25CmdEchoProbe = /^cmd(?:\\.exe)?$/i.test(__r25PtyPath.win32.basename(String(this.shell || '')))\n",
+    "                const __r25CmdEchoProbe = /^cmd(?:\\.exe)?$/i.test(__r25PtyPath.win32.basename(String(this.shell || '')))\n" +
+    "                __r25PtyProcessing(__r25PromptState, 'callback', { nonce_probe_attempted: true, cmd_echo_state_probe_attempted: false })\n" +
+    "                __r25CrossWriteAudit(__r25PromptOrdinal, __r25PtyPath.win32.basename(String(this.shell || '')), __r25CmdEchoProbe)\n");
+  replace('                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)',
+    "                const __r25MatcherPairInput = `echo pinokio${this.EOL}echo pinokio${this.EOL}`\n" +
+    "                __r25CrossProbeWrite(__r25PromptOrdinal, 'matcher-pair', __r25MatcherPairInput)\n" +
+    "                term.write(__r25MatcherPairInput)\n" +
+    "                __r25CrossProbeWrite(__r25PromptOrdinal, 'matcher-pair', __r25MatcherPairInput, true)");
+  replace('                    if (__r25CmdEchoProbe) term.write(`echo${this.EOL}`)',
+    "                    // The cmd-only no-argument echo is omitted for this changed-input probe.");
+  replace('                    term.write(`echo ${__r25PromptState.nonce}${this.EOL}`)',
+    "                    const __r25NonceInput = `echo ${__r25PromptState.nonce}${this.EOL}`\n" +
+    "                    __r25CrossProbeWrite(__r25PromptOrdinal, 'nonce', __r25NonceInput)\n" +
+    "                    term.write(__r25NonceInput)\n" +
+    "                    __r25CrossProbeWrite(__r25PromptOrdinal, 'nonce', __r25NonceInput, true)");
   const resolved = "              __r25PtyProcessing(__r25PromptState, 'resolve')";
   replace(resolved, resolved + "\n              __r25CrossProbe(__r25PromptOrdinal, 'resolved_at')" + '\n              __r25CrossMacPrompt(__r25PromptOrdinal)?.promptResolved()\n              __r25CrossWrite()');
   return source;
