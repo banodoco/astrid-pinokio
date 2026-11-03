@@ -125,27 +125,73 @@ function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot,
   async function waitForReadiness() {
     const deadline = Date.now() + pollMs;
     while (!cancelled.signal.aborted && Date.now() < deadline) {
-      if (await engineResourceReady() && await runtimeReady() && await applicationReady()) return;
+      const engine_resource = await engineResourceReady();
+      if (!engine_resource) { await delay(Math.min(1500, Math.max(0, deadline - Date.now()))); continue; }
+      const runtime_health = await runtimeReady();
+      if (!runtime_health) { await delay(Math.min(1500, Math.max(0, deadline - Date.now()))); continue; }
+      const application = await applicationReady();
+      if (application) return { engine_resource, runtime_health, application };
       await delay(Math.min(1500, Math.max(0, deadline - Date.now())));
     }
     throw new Error('independent Runtime/application readiness timeout');
   }
-  async function startOldLauncher() {
+  async function startOldLauncher({ onReadiness = null, onOutput = null, onTerminal = null, onClientState = null } = {}) {
     const script = 'pinokio/start.js';
     note('start-client', 'pending');
+    let observer;
+    const terminal = { stop: 0, disconnect: 0, error: 0, malformed: 0 };
     const child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', endpoint], {
-      cwd: home, env: process.env, stdio: ['ignore', 'ignore', 'ignore'],
+      cwd: home, env: process.env, stdio: onOutput ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'ignore', 'ignore'],
     });
-    const entry = { child };
+    const entry = { child, observer, terminal };
     clients.add(entry);
-    entry.closed = new Promise(resolve => child.once('close', () => { clients.delete(entry); resolve(); }));
+    entry.closed = new Promise(resolve => child.once('close', (code, signal) => {
+      entry.exited = { code, signal: signal || null };
+      clients.delete(entry);
+      if (entry.readinessComplete) { try { onClientState?.({ pid: child.pid || null, exited: entry.exited, still_owned: false }); } catch {} }
+      resolve(entry.exited);
+    }));
+    if (onOutput) {
+      child.stdout.on('data', chunk => { try { onOutput('stdout', chunk); } catch {} });
+      child.stderr.on('data', chunk => { try { onOutput('stderr', chunk); } catch {} });
+    }
+    if (onTerminal) {
+      try {
+        observer = await openSocket();
+        entry.observer = observer;
+        observer.addEventListener('message', event => {
+          try {
+            const packet = JSON.parse(String(event.data));
+            if (packet?.type === 'event' && ['stop', 'disconnect'].includes(packet.data)) terminal[packet.data] += 1;
+            if (packet?.type === 'error' || packet?.type === 'installer-failure-marker') terminal.error += 1;
+            try { onTerminal({ ...terminal }); } catch {}
+          } catch { terminal.malformed += 1; try { onTerminal({ ...terminal }); } catch {} }
+        });
+        observer.send(JSON.stringify({ uri: path.join(appRoot, script), mode: 'listen' }));
+      } catch (error) {
+        if (observer) disposeSocket(observer);
+        throw error;
+      }
+    }
     const failure = new Promise(resolve => child.once('error', () => resolve(new Error('historical Start PTerm spawn failed'))));
+    const prematureExit = entry.closed.then(exit => entry.readinessComplete ? null
+      : new Error(`historical Start PTerm exited before readiness (${exit.signal || exit.code})`));
     const phase = async promise => {
-      const error = await Promise.race([promise.then(() => null), failure]);
-      if (error) { note('start-client', 'error'); throw error; }
+      const result = await Promise.race([
+        promise.then(value => ({ value })), failure.then(error => ({ error })), prematureExit.then(error => ({ error })),
+      ]);
+      if (result.error) {
+        if (/PTerm (?:spawn failed|exited before readiness)/.test(result.error.message)) note('start-client', 'error');
+        throw result.error;
+      }
+      return result.value;
     };
     await phase(waitForStatus(path.join(appRoot, script), true, 'historical Start'));
-    await phase(waitForReadiness());
+    const readiness = await phase(waitForReadiness());
+    if (entry.exited) throw new Error('historical Start PTerm exited before readiness');
+    entry.readinessComplete = true;
+    try { onReadiness?.(readiness); } catch {}
+    try { onClientState?.({ pid: child.pid || null, exited: entry.exited || null, still_owned: clients.has(entry) }); } catch {}
     return child;
   }
   async function cleanup() {
@@ -160,6 +206,7 @@ function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot,
         try { child.kill('SIGKILL'); } catch {}
         if (!await wait()) child.unref();
       }
+      if (entry.observer) disposeSocket(entry.observer);
     }));
   }
   return { openSocket, disposeSocket, status, waitForStatus, engineResourceReady, runtimeReady, applicationReady, waitForReadiness, startOldLauncher, cleanup };

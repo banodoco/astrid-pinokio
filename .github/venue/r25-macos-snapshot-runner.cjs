@@ -809,7 +809,13 @@ function actionPlan(action, index, tuple, origin) {
 async function main() {
   const cli = args(process.argv.slice(2));
   const crossDiagnostic = cli['cross-os-diagnostic'] === 'true' && cli['setup-only'] === 'true';
+  const backendStartDiagnostic = cli['backend-start-diagnostic'] === 'true' && cli['setup-only'] === 'true';
   if (cli['cross-os-diagnostic'] === 'true' && !crossDiagnostic) throw new Error('cross-OS diagnostics require setup-only');
+  if (cli['backend-start-diagnostic'] === 'true'
+      && (!backendStartDiagnostic || TARGET_OS !== 'macos' || SLOT !== 'pinokio-backend-macos' || process.platform !== 'darwin'
+        || !String(process.env.R25_ISOLATION_EVIDENCE_REF || '').trim())) {
+    throw new Error('backend Start diagnostics require a setup-only macOS backend-slot run');
+  }
   const tuple = JSON.parse(cli.tuple || process.env.R25_TUPLE_JSON || '{}');
   binding.validateRequest({ schema: 'astrid.r25.pinokio-snapshot-request.v1', slot_id: SLOT, tuple, origin: { repository_id: 1, repository_full_name: 'x/y', workflow_id: 1, workflow_ref: 'x', workflow_sha: '0000000000000000000000000000000000000000', run_id: 1, run_attempt: 1, head_sha: '0000000000000000000000000000000000000000', producer_job_id: 1, producer_job_name: 'x', artifact_id: null, artifact_name: `r25-snapshots-${SLOT}-x` }, collector: { agent_ref: AGENT_REF, pinokio_ref: PINOKIO_SOURCE_REF, sources: binding.flattenedSources }, actions: ACTIONS.map((action, index) => ({ action, action_id: `x-${index}`, action_sha256: '0'.repeat(64) })), targets: TARGETS });
   if (canonical(tuple) !== canonical(tupleExpected)) throw new Error('tuple differs from pinned CURRENT-TUPLE');
@@ -911,6 +917,7 @@ async function main() {
     setupDiagnostic.stage('daemon-spawn');
   }
   let trace = null;
+  const observerEvents = [];
   let worker = null;
   let finalCensus = null;
   let cleanupResult = null;
@@ -924,7 +931,7 @@ async function main() {
     if (!daemonReady) throw new Error('native pinokiod did not reach readiness');
     setupDiagnostic?.stage('daemon-ready');
     const { WebSocket } = require(path.join(ptermRoot, 'node_modules', 'unws'));
-    trace = createObserverIO({ WebSocket, fetch, spawn, record: () => {}, appRoot, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', pollMs: 120000 });
+    trace = createObserverIO({ WebSocket, fetch, spawn, record: value => { if (observerEvents.length < 128) observerEvents.push(value); }, appRoot, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', pollMs: 120000 });
     // Installation is disposable preparation, outside the six measured
     // boundaries. It is still driven through the real Pinokio engine and is
     // allowed to fail closed before an evidence session can begin.
@@ -938,6 +945,53 @@ async function main() {
     if (preparation.first_error || preparation.inner_exit.code !== 0 || preparation.terminal.error) throw new Error('disposable Pinokio install preparation failed');
     if (crossDiagnostic) {
       writeCanonical(path.join(diagnostics, 'r25-setup-result.json'), { schema: 'astrid.r25.setup-diagnostic-result.v1', diagnostic_only: true, preparation });
+      return;
+    }
+    if (backendStartDiagnostic) {
+      const startOutput = {
+        stdout: createBoundedCapture(path.join(diagnostics, 'start.stdout.log'), 16 * 1024),
+        stderr: createBoundedCapture(path.join(diagnostics, 'start.stderr.log'), 16 * 1024),
+      };
+      let readyText = '';
+      let readiness = null;
+      let client = null;
+      let terminal = { stop: 0, disconnect: 0, error: 0, malformed: 0 };
+      try {
+        const pterm = await trace.startOldLauncher({
+          onOutput(stream, chunk) {
+            const value = Buffer.from(chunk);
+            startOutput[stream].append(value.toString('utf8'));
+            if (stream === 'stdout') {
+              readyText = (readyText + value.toString('utf8')).slice(-512);
+            }
+          },
+          onReadiness(value) { readiness = value; },
+          onTerminal(value) { terminal = value; },
+          onClientState(value) { client = value; },
+        });
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        const readySentinel = readyText.includes('ASTRID_PINOKIO_READY');
+        const refusal = !readySentinel ? 'ready-sentinel-unobserved'
+          : terminal.error || terminal.stop || terminal.disconnect ? 'top-level-terminal-packet-observed'
+            : terminal.malformed ? 'terminal-packet-observation-malformed'
+            : !readiness || Object.values(readiness).some(value => value !== true) ? 'independent-readiness-incomplete'
+              : !client || client.exited || !client.still_owned ? 'start-client-not-live-and-owned' : null;
+        const result = {
+          schema: 'astrid.r25.backend-start-diagnostic.v1', diagnostic_only: true,
+          slot_id: SLOT, isolation_evidence_ref: process.env.R25_ISOLATION_EVIDENCE_REF,
+          readiness, ready_sentinel_observed: readySentinel, terminal_observation_window_ms: 2000,
+          terminal_packets: terminal, client_lifecycle: {
+            pid: pterm.pid || null, exited: client?.exited || null,
+            alive_after_readiness: Boolean(client && !client.exited && client.still_owned),
+            settlement: 'long-lived-client-observed; no exit result claimed',
+          },
+          observer_events: observerEvents, refusal,
+        };
+        writeCanonical(path.join(diagnostics, 'backend-start-diagnostic.json'), result);
+        if (refusal) throw new Error(`backend Start diagnostic refused: ${refusal}`);
+      } finally {
+        for (const capture of Object.values(startOutput)) capture.close();
+      }
       return;
     }
     const mode = readJson(path.join(appRoot, 'app', 'install-mode.json'));
