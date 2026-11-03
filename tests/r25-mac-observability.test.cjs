@@ -8,8 +8,10 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const test = require('node:test');
 
-const { createBoundedCapture, copyBoundedTail, captureProcessSnapshot } = require('../.github/venue/r25-snapshot-runner.cjs');
-const { cleanupOwnedDaemon } = require('../.github/venue/r25-snapshot-runner.cjs');
+const {
+  createBoundedCapture, copyBoundedTail, captureProcessSnapshot,
+  captureOwnedDaemonIdentity, cleanupOwnedDaemon,
+} = require('../.github/venue/r25-snapshot-runner.cjs');
 const { ptermExit } = require('../.github/venue/r21-observer-diagnostics.cjs');
 
 function tempRoot() {
@@ -21,27 +23,103 @@ function waitForClose(child) {
   return new Promise(resolve => child.once('close', resolve));
 }
 
-test('setup failure keeps its inner exit and cleans only the owned daemon within a bound', async () => {
-  const daemon = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);'], { stdio: 'ignore' });
+async function waitForFile(file, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(file)) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for ${file}`);
+}
+
+function writeDaemonFixture(root) {
+  const script = path.join(root, 'daemon.cjs');
+  fs.writeFileSync(script, `
+const fs = require('node:fs');
+const { spawn } = require('node:child_process');
+const role = process.argv[2] || 'daemon';
+if (role === 'child') { setInterval(() => {}, 1000); }
+else {
+  const child = spawn(process.execPath, [__filename, 'child'], { cwd: process.cwd(), stdio: 'ignore' });
+  fs.writeFileSync(process.env.CHILD_PID_FILE, String(child.pid));
+  process.on('SIGTERM', () => fs.appendFileSync(process.env.TERM_FILE, 'SIGTERM\\n'));
+  setInterval(() => {}, 1000);
+}
+`, { mode: 0o600 });
+  return script;
+}
+
+function isAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+test('setup failure preserves the inner exit, sends no daemon TERM, and reports descendants as residual', async () => {
+  const root = tempRoot();
+  const script = writeDaemonFixture(root);
+  const childPidFile = path.join(root, 'child.pid');
+  const termFile = path.join(root, 'term.log');
+  const daemon = spawn(process.execPath, [script], {
+    cwd: root, env: { ...process.env, CHILD_PID_FILE: childPidFile, TERM_FILE: termFile }, stdio: 'ignore',
+  });
   const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], { stdio: 'ignore' });
   const inner = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(23), 20);'], { stdio: 'ignore' });
+  let descendantPid = null;
   try {
+    await waitForFile(childPidFile);
+    descendantPid = Number(fs.readFileSync(childPidFile, 'utf8'));
+    const identity = captureOwnedDaemonIdentity(daemon, { cwd: root, runRoot: root, args: [script] });
+    assert.equal(identity.available, true, JSON.stringify(identity));
     const innerExit = await ptermExit(inner, 'R-25 setup-install', 1000);
     assert.deepEqual(innerExit, { code: 23, signal: null });
     const started = process.hrtime.bigint();
-    const cleanup = await cleanupOwnedDaemon(daemon, { termMs: 50, killMs: 250 });
+    const cleanup = await cleanupOwnedDaemon(daemon, { identity, killMs: 250 });
     const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
     assert.equal(cleanup.signal, 'SIGKILL');
     assert.deepEqual(cleanup.exit, { code: null, signal: 'SIGKILL' });
-    assert.equal(cleanup.bounded, true);
+    assert.equal(cleanup.status, 'failed');
+    assert.equal(cleanup.cleanup_verified, false);
+    assert.equal(cleanup.direct_signal_attempted, true);
+    assert.deepEqual(cleanup.residuals, [{ kind: 'daemon-descendants', status: 'unknown', reason: 'runner does not inspect or signal descendants' }]);
     assert.ok(elapsedMs < 1000, `owned-daemon cleanup took ${elapsedMs.toFixed(1)}ms`);
+    assert.equal(fs.existsSync(termFile), false, 'daemon received an unsafe SIGTERM');
+    assert.equal(isAlive(descendantPid), true, 'unverified descendant was unexpectedly terminated');
     assert.equal(unrelated.exitCode, null);
     assert.doesNotThrow(() => process.kill(unrelated.pid, 0));
   } finally {
     for (const child of [daemon, unrelated, inner]) {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     }
+    if (descendantPid && isAlive(descendantPid)) process.kill(descendantPid, 'SIGKILL');
     await Promise.all([waitForClose(daemon), waitForClose(unrelated), waitForClose(inner)]);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cleanup fails closed and leaves the daemon untouched when identity changes', async () => {
+  const root = tempRoot();
+  const script = writeDaemonFixture(root);
+  const childPidFile = path.join(root, 'child.pid');
+  const termFile = path.join(root, 'term.log');
+  const daemon = spawn(process.execPath, [script], {
+    cwd: root, env: { ...process.env, CHILD_PID_FILE: childPidFile, TERM_FILE: termFile }, stdio: 'ignore',
+  });
+  let descendantPid = null;
+  try {
+    await waitForFile(childPidFile);
+    descendantPid = Number(fs.readFileSync(childPidFile, 'utf8'));
+    const identity = captureOwnedDaemonIdentity(daemon, { cwd: root, runRoot: root, args: [script] });
+    assert.equal(identity.available, true, JSON.stringify(identity));
+    const changed = { ...identity, expected: { ...identity.expected, start_identity: 'not-the-captured-birth' } };
+    const cleanup = await cleanupOwnedDaemon(daemon, { identity: changed, killMs: 100 });
+    assert.equal(cleanup.failure, 'daemon-identity-mismatch');
+    assert.equal(cleanup.direct_signal_attempted, false);
+    assert.equal(cleanup.signal, null);
+    assert.equal(isAlive(daemon.pid), true);
+    assert.equal(fs.existsSync(termFile), false);
+  } finally {
+    if (daemon.exitCode === null && daemon.signalCode === null) daemon.kill('SIGKILL');
+    if (descendantPid && isAlive(descendantPid)) process.kill(descendantPid, 'SIGKILL');
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

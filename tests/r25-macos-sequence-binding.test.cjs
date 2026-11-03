@@ -16,8 +16,8 @@ const wrapper = fs.readFileSync(wrapperPath, 'utf8');
 const runner = fs.readFileSync(runnerPath, 'utf8');
 
 const venueRef = '4dd993439fea508aaafbad0e1f4794f97a99e7bf';
-const runnerSha256 = 'cabaa255d629c375e949574748d28992e4e10d638dca37a7247f813af2709d2e';
-const runnerBlob = 'b399c6ec85a9cbf24d0565234a612e75d575b523';
+const runnerSha256 = 'edbcc507cfb1627b2eaa614cece3716cd8ac1cf532378d5e0a9b418e8e8c94f4';
+const runnerBlob = '8abfb57227b07f7ac812ff4ae09e99174b9928b9';
 const observerSha256 = 'b3eb6d0943efaf8aaae268f6ffd94ab8826a7053aff4df142238cc74b73fc94f';
 const observerBlob = 'd7eb13d3716528d95f8c24bd4b02033adb03faaa';
 const wrapperRef = '37e2337271cffe275374fe9a2eda73e8948ef17a';

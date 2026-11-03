@@ -172,18 +172,165 @@ function waitForChildExit(child, timeoutMs) {
   });
 }
 
-async function cleanupOwnedDaemon(daemon, { termMs = 2000, killMs = 1000 } = {}) {
-  const alreadyExited = childExitResult(daemon);
-  if (alreadyExited) return { signal: null, exit: alreadyExited, bounded: true };
-  try { daemon.kill('SIGTERM'); } catch {}
-  let exit = await waitForChildExit(daemon, termMs);
-  if (exit) return { signal: 'SIGTERM', exit, bounded: true };
-  try { daemon.kill('SIGKILL'); } catch {}
-  exit = await waitForChildExit(daemon, killMs);
-  if (!exit) {
-    try { daemon.unref(); } catch {}
+function realPath(value) {
+  try { return fs.realpathSync(value); } catch { return null; }
+}
+
+function currentUid() {
+  return typeof process.getuid === 'function' ? process.getuid() : null;
+}
+
+function readLsofPath(pid, descriptor) {
+  const output = execFileSync('lsof', ['-a', '-p', String(pid), '-d', descriptor, '-Fn'], {
+    encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 2000,
+  });
+  const rows = output.split('\n').filter(line => line.startsWith('n')).map(line => line.slice(1));
+  return rows.length === 1 ? realPath(rows[0]) : null;
+}
+
+function readProcessIdentity(pid) {
+  if (!Number.isSafeInteger(pid) || pid < 1) return { available: false, reason: 'invalid-pid', pid };
+  try {
+    if (process.platform === 'linux') {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const end = stat.lastIndexOf(')');
+      if (end < 0) throw new Error('proc-stat-format');
+      const fields = stat.slice(end + 2).trim().split(/\s+/);
+      const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
+      const uidLine = status.split('\n').find(line => line.startsWith('Uid:'));
+      const uidFields = uidLine ? uidLine.trim().split(/\s+/).slice(1) : [];
+      const argv = fs.readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').filter(Boolean);
+      const boot = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+      const ppid = Number(fields[1]);
+      const startTicks = fields[19];
+      const uid = Number(uidFields[1] || uidFields[0]);
+      if (!Number.isSafeInteger(ppid) || !/^\d+$/.test(startTicks) || !Number.isSafeInteger(uid) || !argv.length || !boot) {
+        throw new Error('proc-identity-fields-unavailable');
+      }
+      return {
+        available: true, pid, ppid, uid, executable: realPath(`/proc/${pid}/exe`),
+        cwd: realPath(`/proc/${pid}/cwd`), argv,
+        start_identity: `linux:${boot}:${startTicks}`,
+      };
+    }
+    if (process.platform === 'darwin') {
+      const ps = format => execFileSync('ps', ['-p', String(pid), '-o', format], {
+        encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 2000,
+      }).trim();
+      const ppid = Number(ps('ppid='));
+      const uid = Number(ps('uid='));
+      const commandLine = ps('command=');
+      const start = ps('lstart=');
+      const executable = readLsofPath(pid, 'txt');
+      const cwd = readLsofPath(pid, 'cwd');
+      if (!Number.isSafeInteger(ppid) || !Number.isSafeInteger(uid) || !commandLine || !start || !executable || !cwd) {
+        throw new Error('macos-identity-fields-unavailable');
+      }
+      return {
+        available: true, pid, ppid, uid, executable, cwd, command_line: commandLine,
+        start_identity: `macos:${start}`,
+      };
+    }
+    return { available: false, pid, reason: `unsupported-platform:${process.platform}` };
+  } catch (error) {
+    return { available: false, pid, reason: `identity-read-failed:${error.code || error.message || 'unknown'}` };
   }
-  return { signal: 'SIGKILL', exit, bounded: Boolean(exit) };
+}
+
+function ownedDirectory(value, uid) {
+  const resolved = realPath(value);
+  if (!resolved || resolved !== path.resolve(value) || resolved === path.parse(resolved).root) return null;
+  try {
+    const stat = fs.statSync(resolved);
+    return stat.isDirectory() && (uid === null || stat.uid === uid) ? resolved : null;
+  } catch { return null; }
+}
+
+function pathWithin(root, child) {
+  return Boolean(root && child && (child === root || child.startsWith(`${root}${path.sep}`)));
+}
+
+function sameArray(left, right) {
+  return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function identityMismatches(observed, expected) {
+  const reasons = [];
+  if (!observed?.available) return [observed?.reason || 'current-identity-unavailable'];
+  if (observed.pid !== expected.pid) reasons.push('pid-changed');
+  if (observed.ppid !== expected.ppid) reasons.push('ppid-changed');
+  if (observed.uid !== expected.uid) reasons.push('uid-changed');
+  if (observed.executable !== expected.executable) reasons.push('executable-changed');
+  if (observed.cwd !== expected.cwd) reasons.push('cwd-changed');
+  if (observed.start_identity !== expected.start_identity) reasons.push('birth-identity-changed');
+  if (process.platform === 'linux' && !sameArray(observed.argv, expected.argv)) reasons.push('argv-changed');
+  if (process.platform === 'darwin' && (!observed.command_line.includes(expected.script) || !observed.command_line.includes(path.basename(expected.executable)))) reasons.push('command-changed');
+  if (!pathWithin(expected.run_root, observed.cwd)) reasons.push('cwd-outside-run-root');
+  return reasons;
+}
+
+function captureOwnedDaemonIdentity(daemon, { cwd, runRoot, args }) {
+  const pid = daemon?.pid;
+  const uid = currentUid();
+  const root = ownedDirectory(runRoot, uid);
+  const expectedCwd = ownedDirectory(cwd, uid);
+  const executable = realPath(process.execPath);
+  const script = args?.[0] ? realPath(args[0]) : null;
+  const observed = readProcessIdentity(pid);
+  const expected = {
+    pid, ppid: process.pid, uid, executable, cwd: expectedCwd, run_root: root,
+    script, argv: executable && script ? [executable, script, ...(args.slice(1))] : null,
+    start_identity: observed.start_identity,
+  };
+  const reasons = [];
+  if (!root) reasons.push('run-root-identity-unavailable');
+  if (!expectedCwd) reasons.push('daemon-cwd-identity-unavailable');
+  if (!executable || !script) reasons.push('daemon-executable-identity-unavailable');
+  if (!observed.available) reasons.push(observed.reason);
+  if (reasons.length === 0) reasons.push(...identityMismatches(observed, expected));
+  return {
+    schema: 'astrid.r25.daemon-identity.v1', available: reasons.length === 0,
+    captured_at: new Date().toISOString(), expected, observed,
+    reasons: [...new Set(reasons)],
+  };
+}
+
+function releaseUnsignalledDaemon(daemon) {
+  try { daemon.unref(); } catch {}
+}
+
+async function cleanupOwnedDaemon(daemon, { identity = null, killMs = 1000 } = {}) {
+  const residuals = [{ kind: 'daemon-descendants', status: 'unknown', reason: 'runner does not inspect or signal descendants' }];
+  const base = {
+    schema: 'astrid.r25.daemon-cleanup.v1', status: 'failed', cleanup_verified: false,
+    direct_signal_attempted: false, signal: null, bounded: false, residuals,
+  };
+  const alreadyExited = childExitResult(daemon);
+  if (alreadyExited) return { ...base, bounded: true, exit: alreadyExited, failure: 'daemon-exited-with-descendants-unverified' };
+  if (!identity?.available) {
+    releaseUnsignalledDaemon(daemon);
+    return { ...base, bounded: true, failure: 'daemon-identity-unavailable', identity: identity || null };
+  }
+  const observed = readProcessIdentity(identity.expected.pid);
+  const mismatches = identityMismatches(observed, identity.expected);
+  if (mismatches.length) {
+    releaseUnsignalledDaemon(daemon);
+    return { ...base, bounded: true, failure: 'daemon-identity-mismatch', identity: { ...identity, cleanup_observed: observed, mismatches } };
+  }
+  let signalError = null;
+  try { process.kill(identity.expected.pid, 'SIGKILL'); } catch (error) { signalError = error.code || error.message || 'signal-failed'; }
+  if (signalError) {
+    releaseUnsignalledDaemon(daemon);
+    return { ...base, bounded: true, failure: 'direct-sigkill-failed', signal_error: signalError, identity: { ...identity, cleanup_observed: observed } };
+  }
+  const exit = await waitForChildExit(daemon, killMs);
+  if (!exit) releaseUnsignalledDaemon(daemon);
+  return {
+    ...base, direct_signal_attempted: true, direct_target: identity.expected.pid,
+    signal: 'SIGKILL', exit, bounded: Boolean(exit),
+    failure: exit ? 'daemon-killed-but-descendants-unverified' : 'daemon-exit-unverified',
+    identity: { ...identity, cleanup_observed: observed },
+  };
 }
 
 async function githubJson(url) {
@@ -458,6 +605,10 @@ async function main() {
     env: daemonEnv,
     stdio: daemonOutput ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'ignore', 'ignore'],
   });
+  const daemonScript = path.join(pinokiodRoot, 'script', 'index.js');
+  const daemonIdentity = captureOwnedDaemonIdentity(daemon, {
+    cwd: pinokiodRoot, runRoot: path.dirname(pinokiodRoot), args: [daemonScript],
+  });
   if (daemonOutput) {
     daemon.stdout.on('data', chunk => daemonOutput.stdout.append(chunk));
     daemon.stderr.on('data', chunk => daemonOutput.stderr.append(chunk));
@@ -465,10 +616,10 @@ async function main() {
     daemon.stderr.on('close', () => daemonOutput.stderr.close());
     setupDiagnostic.stage('daemon-spawn');
   }
-  process.once('exit', () => { if (daemon.exitCode === null) daemon.kill(); });
   let trace = null;
   let worker = null;
   let finalCensus = null;
+  let cleanupResult = null;
   try {
     let daemonReady = false;
     for (let attempt = 0; attempt < 90; attempt += 1) {
@@ -551,14 +702,23 @@ async function main() {
     }
     try { if (trace) await trace.cleanup(); } finally {
       if (worker?.exitCode === null) worker.kill();
-      await cleanupOwnedDaemon(daemon);
+      cleanupResult = await cleanupOwnedDaemon(daemon, { identity: daemonIdentity });
+      const cleanupFile = path.join(process.env.R25_DIAGNOSTICS || path.dirname(output), 'daemon-cleanup.json');
+      try {
+        fs.mkdirSync(path.dirname(cleanupFile), { recursive: true });
+        fs.writeFileSync(cleanupFile, `${JSON.stringify(cleanupResult, null, 2)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'w' });
+      } catch {}
       daemonOutput?.stdout.close();
       daemonOutput?.stderr.close();
     }
   }
+  if (cleanupResult && cleanupResult.status !== 'verified') throw new Error(`daemon cleanup failed closed: ${cleanupResult.failure}`);
 }
 
-module.exports = { actionPlan, routeConfig, createBoundedCapture, copyBoundedTail, captureProcessSnapshot, cleanupOwnedDaemon };
+module.exports = {
+  actionPlan, routeConfig, createBoundedCapture, copyBoundedTail, captureProcessSnapshot,
+  readProcessIdentity, captureOwnedDaemonIdentity, cleanupOwnedDaemon,
+};
 if (require.main === module) {
   main().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });
 }
