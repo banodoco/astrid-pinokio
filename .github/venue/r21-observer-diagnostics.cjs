@@ -48,6 +48,47 @@ function ptermExit(child, label, timeoutMs, diagnostic = null) {
   });
 }
 
+function childExitValue(child) {
+  if (Number.isInteger(child?.exitCode) || child?.signalCode) {
+    return { code: Number.isInteger(child.exitCode) ? child.exitCode : null, signal: child.signalCode || null };
+  }
+  return null;
+}
+
+function waitForChildExit(child, timeoutMs) {
+  const existing = childExitValue(child);
+  if (existing) return Promise.resolve(existing);
+  return new Promise(resolve => {
+    let timer;
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    child.once('exit', (code, signal) => finish({ code, signal: signal || null }));
+    timer = setTimeout(() => finish(childExitValue(child)), timeoutMs);
+  });
+}
+
+// PTerm may ignore the first termination request on a hosted Windows runner.
+// Keep this bounded so a setup failure cannot strand the observer, while the
+// child exit event remains available to the diagnostics recorder when it does
+// terminate normally.
+async function terminateChild(child, termGraceMs = 2000, killGraceMs = 1000) {
+  if (!child || childExitValue(child)) return childExitValue(child);
+  try { child.kill('SIGTERM'); } catch {}
+  let result = await waitForChildExit(child, termGraceMs);
+  if (result) return result;
+  try { child.kill('SIGKILL'); } catch {}
+  result = await waitForChildExit(child, killGraceMs);
+  if (!result) {
+    try { child.unref(); } catch {}
+  }
+  return result;
+}
+
 // The pinned engine emits start.data.current/total/method, and stream/result
 // index/total. Never retain packet content, arbitrary method names, or errors.
 const INSTALL_TRACE_LIMIT = 40;
@@ -69,6 +110,7 @@ function projectInstallEvidence(raw, binding) {
     last_native_event: selectEvent(raw?.last_native_event, ['start', 'stream', 'result', 'error', 'installer-failure-marker']),
     last_start: selectEvent(raw?.last_start, ['start']),
     last_result: selectEvent(raw?.last_result, ['result']),
+    first_error: selectEvent(raw?.first_error, ['error', 'installer-failure-marker']),
     last_error: selectEvent(raw?.last_error, ['error', 'installer-failure-marker']),
     last_terminal: selectEvent(raw?.last_terminal, ['stop', 'disconnect']),
     timer: { started_at: timestamp(timer.started_at), deadline_at: timestamp(timer.deadline_at), fired_at: timestamp(timer.fired_at) },
@@ -108,7 +150,10 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
       if (!['stop', 'disconnect'].includes(kind)) state.last_native_event = item;
       if (kind === 'start') state.last_start = item;
       if (kind === 'result') state.last_result = item;
-      if (kind === 'error' || kind === 'installer-failure-marker') state.last_error = item;
+      if (kind === 'error' || kind === 'installer-failure-marker') {
+        if (!state.first_error) state.first_error = item;
+        state.last_error = item;
+      }
       if (kind === 'stop' || kind === 'disconnect') state.last_terminal = item;
       state.events.push(item);
       if (state.events.length > INSTALL_TRACE_LIMIT) state.events.shift();
@@ -161,4 +206,4 @@ function createTrace() {
     snapshot() { return entries.slice(); },
   };
 }
-module.exports = { TRACE_LIMIT, transportFailure, projectOperation, createTrace, actionPhase, projectActionFailure, createActionTracker, ptermExit, INSTALL_TRACE_LIMIT, projectInstallEvidence, createInstallDiagnostics };
+module.exports = { TRACE_LIMIT, transportFailure, projectOperation, createTrace, actionPhase, projectActionFailure, createActionTracker, ptermExit, childExitValue, waitForChildExit, terminateChild, INSTALL_TRACE_LIMIT, projectInstallEvidence, createInstallDiagnostics };
