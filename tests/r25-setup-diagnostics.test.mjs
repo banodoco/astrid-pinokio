@@ -55,15 +55,17 @@ test('retains bounded shell child lifecycle and bootstrap stage evidence', () =>
     JSON.stringify({ schema: 'astrid.r25.setup-shell.v1', at: '2026-11-02T21:59:59.000Z', kind: 'shell-helper-start', pid: 41, ppid: 40 }),
     JSON.stringify({ schema: 'astrid.r25.setup-shell.v1', at: '2026-11-02T22:00:00.000Z', kind: 'shell-child-spawn', pid: 42, ppid: 41 }),
     JSON.stringify({ schema: 'astrid.r25.setup-shell.v1', at: '2026-11-02T22:00:01.000Z', kind: 'bootstrap-stage', stage: 'bootstrap.invoke-installer', status: 'start' }),
+    JSON.stringify({ schema: 'astrid.r25.setup-shell.v1', at: '2026-11-02T22:00:01.500Z', kind: 'shell-command-exit', code: 23, pid: 43 }),
     JSON.stringify({ schema: 'astrid.r25.setup-shell.v1', at: '2026-11-02T22:00:02.000Z', kind: 'shell-child-exit', code: null, signal: 'SIGTERM' }),
     JSON.stringify({ schema: 'astrid.r25.setup-shell.v1', at: '2026-11-02T22:00:02.000Z', kind: 'shell-child-close', code: null, signal: 'SIGTERM' }),
   ].join('\n'));
   let saved;
   const diagnostics = createInstallDiagnostics({ schema: 'astrid.r25.pinokio-setup-diagnostics.v1' }, value => { saved = value; });
   diagnostics.shell(shellLog);
-  assert.deepEqual(saved.shell_events.map(item => item.kind), ['shell-helper-start', 'shell-child-spawn', 'bootstrap-stage', 'shell-child-exit', 'shell-child-close']);
+  assert.deepEqual(saved.shell_events.map(item => item.kind), ['shell-helper-start', 'shell-child-spawn', 'bootstrap-stage', 'shell-command-exit', 'shell-child-exit', 'shell-child-close']);
   assert.deepEqual(saved.shell_events[0], { at: '2026-11-02T21:59:59.000Z', kind: 'shell-helper-start', pid: 41, ppid: 40 });
-  assert.equal(saved.shell_events[3].signal, 'SIGTERM');
+  assert.deepEqual(saved.shell_events[3], { at: '2026-11-02T22:00:01.500Z', kind: 'shell-command-exit', code: 23, pid: 43 });
+  assert.equal(saved.shell_events[4].signal, 'SIGTERM');
   assert.equal(saved.shell_events[2].stage, 'bootstrap.invoke-installer');
   fs.rmSync(root, { recursive: true, force: true });
 });

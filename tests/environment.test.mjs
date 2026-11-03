@@ -304,6 +304,39 @@ test('native shell wrapper strips a Pinokio environment at the real child bounda
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
+test('diagnostic POSIX inner exit sentinel distinguishes command exit from observer teardown', async t => {
+  if (process.platform === 'win32') return t.skip('POSIX shell capture');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'astrid-inner-exit-')));
+  const appDirectory = path.join(root, 'api', 'astrid');
+  const userHome = path.join(root, 'home');
+  fs.mkdirSync(appDirectory, { recursive: true }); fs.mkdirSync(userHome);
+  const diagnosticFile = path.join(appDirectory, '_r25-setup-shell-diagnostics.jsonl');
+  const environment = { HOME: userHome, PATH: process.env.PATH, ASTRID_R25_SETUP_DIAGNOSTICS: '1' };
+  try {
+    const status = await runShell({ appDirectory, environment, message: 'exit 23', explicit: {}, pinokioEnvironment: true });
+    assert.equal(status, 23);
+    const rows = fs.readFileSync(diagnosticFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    const sentinel = rows.find(row => row.kind === 'shell-command-exit');
+    assert.equal(sentinel.code, 23);
+    assert.match(sentinel.at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+    assert.equal(typeof sentinel.pid, 'number');
+
+    fs.rmSync(diagnosticFile);
+    let shell;
+    const pending = runShell({ appDirectory, environment, message: 'sleep 5', explicit: {}, pinokioEnvironment: true,
+      spawnProcess(command, args, options) {
+        shell = require('node:child_process').spawn(command, args, options);
+        setTimeout(() => shell.kill('SIGTERM'), 50);
+        return shell;
+      },
+    });
+    await pending;
+    const teardownRows = fs.readFileSync(diagnosticFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(teardownRows.some(row => row.kind === 'shell-command-exit'), false);
+    assert.equal(shell.signalCode, 'SIGTERM');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('older Pinokio tool/cache records refuse Start and block Reset before mutation when preflight is unavailable', async () => {
   for (const platform of ['darwin', 'linux', 'win32']) {
     const f = fixture(platform, 'backend');

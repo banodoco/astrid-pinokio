@@ -47,7 +47,10 @@ function ptermExit(child, label, timeoutMs, diagnostic = null, { signal = null, 
       // The diagnostic observer is a separate WebSocket client. Request
       // PTerm termination synchronously on refusal instead of waiting for
       // the caller to unwind into its normal cleanup path.
-      if (terminateOnAbort) { try { child.kill('SIGTERM'); } catch {} }
+      if (terminateOnAbort) {
+        note('signal-request', { signal: 'SIGTERM' });
+        try { child.kill('SIGTERM'); } catch {}
+      }
       reject(signal.reason instanceof Error && signal.reason.name !== 'AbortError' ? signal.reason : new Error(`${label} installer failure marker`));
     };
     const timer = setTimeout(async () => {
@@ -127,9 +130,9 @@ const INSTALL_TEXT_LIMIT = 4096;
 const installKinds = ['start', 'stream', 'result', 'error', 'installer-failure-marker', 'stop', 'disconnect'];
 const installMethods = ['shell.run', 'local.set', 'script.start', 'input'];
 const installStages = ['daemon-spawn-start', 'daemon-spawn', 'daemon-ready', 'daemon-error', 'observer-open', 'observer-subscribe',
-  'pterm-spawn', 'pterm-timer-start', 'pterm-timer-fire', 'pterm-exit', 'pterm-close',
+  'pterm-spawn', 'pterm-timer-start', 'pterm-timer-fire', 'pterm-signal-request', 'pterm-exit', 'pterm-close',
   'process-snapshot-before-timeout', 'installer-output-before-timeout', 'process-snapshot-before-failure-marker', 'installer-output-before-failure-marker', 'installer-output-capture', 'setup-complete', 'cleanup-start'];
-const shellKinds = ['shell-helper-start', 'shell-child-spawn', 'shell-child-error', 'shell-child-exit', 'shell-child-close', 'bootstrap-stage'];
+const shellKinds = ['shell-helper-start', 'shell-child-spawn', 'shell-child-error', 'shell-child-exit', 'shell-child-close', 'shell-command-exit', 'bootstrap-stage'];
 const snapshotErrors = ['unsupported-platform', 'invalid-request', 'timeout', 'process-limit', 'output-limit', 'command-error', 'malformed-output'];
 const shellStages = ['bootstrap.download-installer', 'bootstrap.download-manifest', 'bootstrap.invoke-installer', 'bootstrap.cleanup'];
 const shellStatuses = ['start', 'complete'];
@@ -171,6 +174,9 @@ function projectShellEvent(value) {
   } else if (value.kind === 'shell-helper-start' || value.kind === 'shell-child-spawn') {
     result.pid = boundedPid(value.pid);
     result.ppid = boundedPid(value.ppid);
+  } else if (value.kind === 'shell-command-exit') {
+    result.code = boundedCode(value.code);
+    result.pid = boundedPid(value.pid);
   } else if (value.kind === 'shell-child-error') {
     result.error = value.error === true;
   } else {
@@ -247,7 +253,7 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
       const raw = packet?.type === 'stream' && typeof packet.data?.raw === 'string' ? packet.data.raw : '';
       const marker = packet?.type === 'stream' && (streamTail + raw).includes(failureMarker);
       streamTail = packet?.type === 'stream' ? (streamTail + raw).slice(-(failureMarker.length - 1)) : '';
-      const kind = packet?.type === 'event' && packet.data === 'stop' ? 'stop' :
+      const kind = packet?.type === 'event' && ['stop', 'disconnect'].includes(packet.data) ? packet.data :
         marker ? 'installer-failure-marker' : packet?.type;
       if (!installKinds.includes(kind)) return;
       const ms = now();
@@ -293,7 +299,7 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
       if (event === 'child-close') { state.child.close_at = at; state.child.close_code = value.code;
         state.child.close_signal = value.signal; state.child.close_observed = true; }
       const stage = { 'timer-start': 'pterm-timer-start', 'timer-fire': 'pterm-timer-fire',
-        'child-exit': 'pterm-exit', 'child-close': 'pterm-close' }[event];
+        'signal-request': 'pterm-signal-request', 'child-exit': 'pterm-exit', 'child-close': 'pterm-close' }[event];
       if (stage) {
         state.stages.push({ stage, timestamp: at });
         if (state.stages.length > INSTALL_STAGE_LIMIT) state.stages.shift();
