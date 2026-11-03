@@ -112,8 +112,8 @@ function prepareCheckout(source, appDirectory) {
   let environment = fs.readFileSync(environmentFile, 'utf8');
   const refSetting = /^\s*ASTRID_APP_REF\s*=.*$/m;
   environment = refSetting.test(environment)
-    ? environment.replace(refSetting, 'ASTRID_APP_REF=feat/pinokio')
-    : `${environment.trimEnd()}\nASTRID_APP_REF=feat/pinokio\n`;
+    ? environment.replace(refSetting, 'ASTRID_APP_REF=main')
+    : `${environment.trimEnd()}\nASTRID_APP_REF=main\n`;
   fs.writeFileSync(environmentFile, environment);
 }
 
@@ -440,7 +440,7 @@ async function setup() {
   environment.ASTRID_PINOKIO_APP_DIR = appDirectory;
   environment.ASTRID_RUNTIME_DOOR_PORT = '17340';
   const app = library.createApp({ platform: process.platform, appDirectory, environment });
-  assert.equal(app.appRef(), 'feat/pinokio', 'Install must select the manifest ref from _ENVIRONMENT');
+  assert.equal(app.appRef(), 'main', 'Install must select the manifest ref from _ENVIRONMENT');
   const servicesBefore = await fakeServices(pinokioHome, userHome, environment);
   return { pinokioHome, userHome, appDirectory, cacheDirectory, binDirectory, environment, app, servicesBefore };
 }
