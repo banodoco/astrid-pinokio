@@ -377,8 +377,8 @@ async function main() {
     daemonOutput?.stderr.close();
     throw new Error('native pinokiod did not reach readiness');
   }
-  setupDiagnostics.stage('daemon-ready', { pid: daemon.pid, ppid: process.pid });
   refreshPtyCaptureStatus();
+  setupDiagnostics.stage('daemon-ready', { pid: daemon.pid, ppid: process.pid });
   const { WebSocket } = require(path.join(ptermRoot, 'node_modules', 'unws'));
   const trace = createObserverIO({ WebSocket, fetch, spawn, record: () => {}, appRoot, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', pollMs: 120000 });
   const ptermOutput = setupOnly ? {
