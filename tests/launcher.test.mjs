@@ -277,7 +277,9 @@ test('Update performs only installed-CLI recovery before any new launcher or man
     const node = path.join(versionRoot, 'node', 'bin', 'node');
     const python = path.join(versionRoot, 'py', 'bin', 'python');
     const profile = path.join(versionRoot, 'profile.json');
-    const npm = path.resolve(path.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    const npm = process.platform === 'win32'
+      ? path.join(path.dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+      : path.resolve(path.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
     const npx = path.join(path.dirname(npm), 'npx-cli.js');
     for (const file of [node, python, profile, npm, npx]) fs.mkdirSync(path.dirname(file), { recursive: true });
     for (const file of [node, python, profile, npm, npx]) fs.writeFileSync(file, '');
@@ -1243,7 +1245,7 @@ test('fully-local Update route stages failure, promotes success, and reports ins
     const target = git(seed, 'rev-parse', 'HEAD');
     const events = [];
     let ready = true;
-    const app = library.createApp({ platform: 'linux', appDirectory, environment: process.env,
+    const app = library.createApp({ platform: process.platform, appDirectory, environment: process.env,
       lifecycle: { preflightStop: async () => { events.push('preflight'); },
         requestGracefulStop: async () => { events.push('stop'); ready = false; }, waitForInstallerLock: async () => {} },
       localUpdateOperations: {

@@ -113,7 +113,7 @@ test('historical fully-local Install and Update arrays retain the editor manifes
     const parsed = askCurrentAgentParser(calls[0].action, calls[0].manifest);
     assert.equal(parsed.mode, 'update');
     assert.equal(parsed.managed_by, 'pinokio');
-    assert.equal(parsed.manifest, calls[0].manifest);
+    assert.equal(parsed.manifest, path.normalize(calls[0].manifest));
   }
 });
 
