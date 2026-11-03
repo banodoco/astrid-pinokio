@@ -10,7 +10,7 @@ on:
       - 'pinokio/**'
       - 'tests/**'
   push:
-    branches: [main, release-1, "int/**"]
+    branches: [main, release-1, "int/**", "lane/M-CI/C-PIN-WINDOWS-UNIT-ENV-R1"]
   workflow_dispatch:
   schedule:
     - cron: '17 4 * * *'
@@ -35,10 +35,30 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          install: util-linux
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
-      - run: node --test --test-reporter=spec tests/*.test.mjs
+      - name: Verify Windows process-group utility
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          command -v setsid
+          setsid --version
+      - name: Focused watchdog test (Windows)
+        if: runner.os == 'Windows'
+        run: node --test tests/r21-watchdog.test.mjs
+        shell: msys2 {0}
+      - name: Unit tests (Windows)
+        if: runner.os == 'Windows'
+        run: node --test --test-reporter=spec tests/*.test.mjs
+        shell: msys2 {0}
+      - name: Unit tests (Unix)
+        if: runner.os != 'Windows'
+        run: node --test --test-reporter=spec tests/*.test.mjs
         shell: bash
 
   pinokio-smoke:
