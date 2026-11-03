@@ -24,6 +24,7 @@ test('pinned source overlay is exact, anchored and refuses source drift', () => 
   assert.match(patched.source, /__m46Bind\(request, actionKey, initialPayload, steps\)/);
   assert.match(patched.source, /__m46Step\(request, i, total, rpc\)/);
   assert.match(patched.source, /__m46Emit\('rpc-return'/);
+  assert.match(patched.source, /priorStat\.size <= 65536/);
   assert.throws(() => patchSource(`${source}\n// drift`), /source hash differs/);
   assert.equal(PINOKIOD_REF, 'add4a674ad1ba95bb62ec427fce519fe5bf0e9bf');
 });

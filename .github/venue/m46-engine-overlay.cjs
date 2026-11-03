@@ -100,7 +100,9 @@ function __m46Emit(kind, fields) {
   if (!file || !['action-resolved', 'rpc-dispatch', 'rpc-return'].includes(kind)) return
   const row = { schema: 'astrid.pinokio.engine-observation.v1', kind, observed_at: new Date().toISOString(), ...fields }
   try {
-    const previous = require('fs').existsSync(file) ? require('fs').readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-127) : []
+    const exists = require('fs').existsSync(file)
+    const priorStat = exists ? require('fs').statSync(file) : null
+    const previous = priorStat && priorStat.size <= 65536 ? require('fs').readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-127) : []
     const line = JSON.stringify(row)
     if (Buffer.byteLength(line, 'utf8') > 4096) return
     const rows = [...previous, line]
