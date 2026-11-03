@@ -247,9 +247,10 @@ function promptHarness(root, scenarios = []) {
     __pty: { spawn: () => {
       const term = {
         pid: ++pid,
+        writes: [],
         onData(callback) { this.dataCallback = callback; },
         onExit(callback) { this.exitCallback = callback; },
-        write() {},
+        write(data) { this.writes.push(data); },
         kill() {},
         emit(data) { return this.dataCallback(data); },
         exit(event) { return this.exitCallback(event); },
@@ -446,5 +447,100 @@ test('bounded discriminator attributes command loss before filtering, in filteri
     const output = fs.readFileSync(harness.file, 'utf8');
     assert.doesNotMatch(output, /PS>|echo pinokio|\[removed\]|ordinary text/);
     assert.ok(Buffer.byteLength(output) <= 4096);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('nonce predicates distinguish echoed command from output without retaining nonce text', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-nonce-predicates-'));
+  try {
+    const file = path.join(root, 'markers.jsonl');
+    const context = {
+      Buffer, Date, JSON, Set, require,
+      process: { env: { ASTRID_R25_SETUP_DIAGNOSTICS: '1', ASTRID_R25_PTY_CAPTURE_FILE: file } },
+    };
+    vm.runInNewContext(`${RUNTIME}
+      __r25PtyLatestPromptOrdinal = 1;
+      const make = (nonce) => {
+        const state = __r25PtyNewProcessing(1, 44);
+        state.nonce = nonce;
+        __r25PtyProcessing(state, 'callback', { nonce_probe_attempted: true, nonce_probe_write_returned: true });
+        return state;
+      };
+      const outputOnly = make('r25_positive');
+      __r25PtyCountNonceLines(outputOnly, '\\nr25_positive\\r\\n');
+      __r25PtyProcessing(outputOnly, 'callback');
+      globalThis.positive = { command: outputOnly.nonce_command_line_count, output: outputOnly.nonce_output_line_count,
+        observed: outputOnly.nonce_probe_executed, absent: outputOnly.nonce_probe_not_executed_after_write };
+      const commandOnly = make('r25_negative');
+      __r25PtyCountNonceLines(commandOnly, 'PS> echo r25_negative\\r\\n');
+      __r25PtyProcessing(commandOnly, 'callback');
+      globalThis.negative = { command: commandOnly.nonce_command_line_count, output: commandOnly.nonce_output_line_count,
+        observed: commandOnly.nonce_probe_executed, absent: commandOnly.nonce_probe_not_executed_after_write };
+      const none = make('r25_none');
+      __r25PtyProcessing(none, 'callback');
+      globalThis.noData = { command: none.nonce_command_line_count, output: none.nonce_output_line_count,
+        observed: none.nonce_probe_executed, absent: none.nonce_probe_not_executed_after_write };
+    `, context);
+    assert.deepEqual(JSON.parse(JSON.stringify(context.positive)), { command: 0, output: 1, observed: true, absent: false });
+    assert.deepEqual(JSON.parse(JSON.stringify(context.negative)), { command: 1, output: 0, observed: false, absent: true });
+    assert.deepEqual(JSON.parse(JSON.stringify(context.noData)), { command: 0, output: 0, observed: false, absent: true });
+    const output = fs.readFileSync(file, 'utf8');
+    assert.doesNotMatch(output, /r25_positive|r25_negative|r25_none|echo /);
+    assert.match(output, /"nonce_probe_executed":false/);
+    assert.match(output, /"nonce_probe_not_executed_after_write":true/);
+    assert.ok(Buffer.byteLength(output) <= 4096);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('nonce command and output counters handle split chunks and CR/LF line endings', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-nonce-chunks-'));
+  try {
+    const file = path.join(root, 'markers.jsonl');
+    const context = {
+      Buffer, Date, JSON, Set, require,
+      process: { env: { ASTRID_R25_SETUP_DIAGNOSTICS: '1', ASTRID_R25_PTY_CAPTURE_FILE: file } },
+    };
+    vm.runInNewContext(`${RUNTIME}
+      __r25PtyLatestPromptOrdinal = 1;
+      const state = __r25PtyNewProcessing(1, 45);
+      state.nonce = 'r25_split';
+      __r25PtyProcessing(state, 'callback', { nonce_probe_attempted: true, nonce_probe_write_returned: true });
+      for (const chunk of ['PS> ech', 'o r25_s', 'plit\\r', '\\nr25_', 'split\\n']) {
+        __r25PtyCountNonceLines(state, chunk);
+        __r25PtyProcessing(state, 'callback');
+      }
+      globalThis.result = { command: state.nonce_command_line_count, output: state.nonce_output_line_count,
+        observed: state.nonce_probe_executed, absent: state.nonce_probe_not_executed_after_write };
+    `, context);
+    assert.deepEqual(JSON.parse(JSON.stringify(context.result)), { command: 1, output: 1, observed: true, absent: false });
+    const output = fs.readFileSync(file, 'utf8');
+    assert.doesNotMatch(output, /r25_split|echo /);
+    assert.match(output, /"nonce_command_line_count":1/);
+    assert.match(output, /"nonce_output_line_count":1/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('injected prompt correlates a bounded nonce write after the original probe and records no output', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-nonce-write-'));
+  try {
+    const harness = promptHarness(root);
+    const run = harness.start({ serialized: 'ordinary screen' });
+    run.shell.prompt_ready = false;
+    run.term.emit('initial prompt output');
+    await new Promise(resolve => setTimeout(resolve, 550));
+    assert.equal(run.term.writes.length, 2);
+    assert.equal(run.term.writes[0], 'echo pinokio\necho pinokio\n');
+    assert.match(run.term.writes[1], /^echo r25_[a-f0-9]{24}\n$/);
+    const row = harness.rows().find(item => item.kind === 'prompt-processing');
+    assert.equal(row.nonce_probe_attempted, true);
+    assert.equal(row.nonce_probe_write_returned, true);
+    assert.equal(row.nonce_command_line_count, 0);
+    assert.equal(row.nonce_output_line_count, 0);
+    assert.equal(row.nonce_probe_executed, false);
+    assert.equal(row.nonce_probe_not_executed_after_write, true);
+    assert.doesNotMatch(fs.readFileSync(harness.file, 'utf8'), /r25_[a-f0-9]{24}|echo /);
+    const original = sourceFixture();
+    const patched = patchSource(original, { expectedSha256: sha256(Buffer.from(original, 'utf8')) });
+    assert.equal((patched.source.match(/let re = \/\(\.\+\)echo pinokio/g) || []).length, 1);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

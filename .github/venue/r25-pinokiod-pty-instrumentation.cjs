@@ -123,6 +123,10 @@ function __r25PtyNewProcessing(promptOrdinal, promptPid) {
     probe_command_count: 0, probe_command_line_count: 0, probe_output_line_count: 0, probe_command_output_sequence_count: 0,
     probe_command_separator_count: 0, probe_output_separator_count: 0,
     repeated_prefix_equal: false, repeated_prefix_check_count: 0, shape_scan_truncated: false,
+    nonce_command_line_count: 0, nonce_output_line_count: 0,
+    nonce_probe_attempted: false, nonce_probe_write_returned: false,
+    nonce_probe_executed: false, nonce_probe_not_executed_after_write: false,
+    nonce_carry: '', nonce: null,
   };
 }
 function __r25PtyErrorClass(error) {
@@ -161,6 +165,26 @@ function __r25PtyCountProbeCommandLines(state, side, value) {
   state[countField] = Math.min(1000, state[countField] + added);
   state[carryField] = combined.slice(-13);
   return state[countField];
+}
+function __r25PtyNewNonce() {
+  return 'r25_' + require('crypto').randomBytes(12).toString('hex');
+}
+function __r25PtyCountNonceLines(state, value) {
+  if (!state || typeof value !== 'string' || !state.nonce || !state.nonce_probe_attempted) return;
+  const carry = typeof state.nonce_carry === 'string' ? state.nonce_carry : '';
+  const combined = carry + value;
+  const command = new RegExp('(?:^|[\\s>])echo ' + state.nonce + '(?=[\\r\\n])', 'g');
+  const output = new RegExp('(?:^|[\\r\\n])' + state.nonce + '(?=[\\r\\n])', 'g');
+  let match;
+  while ((match = command.exec(combined)) !== null) {
+    if (match.index + match[0].length >= carry.length) state.nonce_command_line_count = Math.min(1000, state.nonce_command_line_count + 1);
+  }
+  while ((match = output.exec(combined)) !== null) {
+    if (match.index + match[0].length >= carry.length) state.nonce_output_line_count = Math.min(1000, state.nonce_output_line_count + 1);
+  }
+  state.nonce_carry = combined.slice(-(state.nonce.length + 8));
+  state.nonce_probe_executed = state.nonce_output_line_count > 0;
+  state.nonce_probe_not_executed_after_write = state.nonce_probe_write_returned && !state.nonce_probe_executed;
 }
 function __r25PtyRegexShape(value) {
   const shape = { probe_command_count: 0, probe_command_line_count: 0, probe_output_line_count: 0, probe_command_output_sequence_count: 0,
@@ -228,7 +252,10 @@ function __r25PtyProcessing(state, stage, values = {}) {
         }
       } else if (field === 'match') state.match = values.match === true;
       else if (field === 'regex_shape') Object.assign(state, values.regex_shape);
-      else if (field === 'ready' || field === 'done') state[field] = values[field] === true;
+      else if (field === 'ready' || field === 'done' || field === 'nonce_probe_attempted' || field === 'nonce_probe_write_returned') {
+        state[field] = values[field] === true;
+        if (field === 'nonce_probe_write_returned') state.nonce_probe_not_executed_after_write = state.nonce_probe_write_returned && !state.nonce_probe_executed;
+      }
       else if (field.endsWith('_length') || field.endsWith('_count')) state[field] = __r25PtyBound(values[field]);
     }
     if (!((stage === 'vt-write' && values.write_return === true && state.write_callback_count > 0)
@@ -250,6 +277,12 @@ function __r25PtyProcessing(state, stage, values = {}) {
       repeated_prefix_equal: state.repeated_prefix_equal,
       repeated_prefix_check_count: state.repeated_prefix_check_count,
       shape_scan_truncated: state.shape_scan_truncated,
+      nonce_command_line_count: state.nonce_command_line_count,
+      nonce_output_line_count: state.nonce_output_line_count,
+      nonce_probe_attempted: state.nonce_probe_attempted,
+      nonce_probe_write_returned: state.nonce_probe_write_returned,
+      nonce_probe_executed: state.nonce_probe_executed,
+      nonce_probe_not_executed_after_write: state.nonce_probe_not_executed_after_write,
       filter_calls: state.filter_calls, queue_calls: state.queue_calls, write_calls: state.write_calls,
       write_return_count: state.write_return_count, write_callback_count: state.write_callback_count,
       serialize_count: state.serialize_count, regex_count: state.regex_count, normalize_count: state.normalize_count,
@@ -313,17 +346,17 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
     {
       name: 'prompt-pty-spawn',
       needle: '      let term = pty.spawn(this.shell, this.args, config)\n',
-      replacement: '      __r25PtyBeginPrompt()\n      const __r25PromptOrdinal = __r25PtyPromptOrdinal\n      let term = pty.spawn(this.shell, this.args, config)\n      __r25PtySetPromptPid(term?.pid)\n      const __r25PromptState = __r25PtyNewProcessing(__r25PromptOrdinal, term?.pid)\n      __r25PtyProcessing(__r25PromptState, \'callback\', { ready: this.prompt_ready, done: this.prompt_done })\n      __r25PtyCapture(\'prompt-pty-spawn\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid, pid: term?.pid, ppid: process.pid })\n      __r25PtyAttachExit(term, \'prompt-native-exit\', __r25PromptOrdinal, term?.pid)\n      let __r25PromptFirstOutput = false\n      let __r25PromptFollowupOutput = false\n      let __r25PromptProbeWriteReturned = false\n      let __r25PromptPostProbeOutput = false\n',
+      replacement: '      __r25PtyBeginPrompt()\n      const __r25PromptOrdinal = __r25PtyPromptOrdinal\n      let term = pty.spawn(this.shell, this.args, config)\n      __r25PtySetPromptPid(term?.pid)\n      const __r25PromptState = __r25PtyNewProcessing(__r25PromptOrdinal, term?.pid)\n      try { __r25PromptState.nonce = __r25PtyNewNonce() } catch {}\n      __r25PtyProcessing(__r25PromptState, \'callback\', { ready: this.prompt_ready, done: this.prompt_done })\n      __r25PtyCapture(\'prompt-pty-spawn\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid, pid: term?.pid, ppid: process.pid })\n      __r25PtyAttachExit(term, \'prompt-native-exit\', __r25PromptOrdinal, term?.pid)\n      let __r25PromptFirstOutput = false\n      let __r25PromptFollowupOutput = false\n      let __r25PromptProbeWriteReturned = false\n      let __r25PromptPostProbeOutput = false\n',
     },
     {
       name: 'prompt-first-output',
       needle: '      term.onData((data) => {\n',
-      replacement: '      term.onData((data) => {\n        if (!__r25PromptFirstOutput) { __r25PromptFirstOutput = true; __r25PtyCapture(\'prompt-first-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        else if (!__r25PromptFollowupOutput) { __r25PromptFollowupOutput = true; __r25PtyCapture(\'prompt-followup-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        if (__r25PromptProbeWriteReturned && !__r25PromptPostProbeOutput) { __r25PromptPostProbeOutput = true; __r25PtyCapture(\'prompt-post-probe-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        __r25PromptState.callback_count = Math.min(10000, __r25PromptState.callback_count + 1)\n        const __r25InputCommandLines = __r25PtyCountProbeCommandLines(__r25PromptState, \'input\', data)\n        __r25PtyProcessing(__r25PromptState, \'callback\', { ready: this.prompt_ready, done: this.prompt_done, input_length: typeof data === \'string\' ? data.length : 0, input_probe_count: __r25PtyProbeCount(data), input_command_line_count: __r25InputCommandLines })\n',
+      replacement: '      term.onData((data) => {\n        if (!__r25PromptFirstOutput) { __r25PromptFirstOutput = true; __r25PtyCapture(\'prompt-first-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        else if (!__r25PromptFollowupOutput) { __r25PromptFollowupOutput = true; __r25PtyCapture(\'prompt-followup-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        if (__r25PromptProbeWriteReturned && !__r25PromptPostProbeOutput) { __r25PromptPostProbeOutput = true; __r25PtyCapture(\'prompt-post-probe-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        __r25PromptState.callback_count = Math.min(10000, __r25PromptState.callback_count + 1)\n        const __r25InputCommandLines = __r25PtyCountProbeCommandLines(__r25PromptState, \'input\', data)\n        __r25PtyCountNonceLines(__r25PromptState, data)\n        __r25PtyProcessing(__r25PromptState, \'callback\', { ready: this.prompt_ready, done: this.prompt_done, input_length: typeof data === \'string\' ? data.length : 0, input_probe_count: __r25PtyProbeCount(data), input_command_line_count: __r25InputCommandLines })\n',
     },
     {
       name: 'prompt-probe-write',
       needle: '                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)\n',
-      replacement: '                __r25PtyCapture(\'prompt-probe-write\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })\n                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)\n                __r25PromptProbeWriteReturned = true\n                __r25PtyCapture(\'prompt-probe-write-return\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })\n',
+      replacement: '                __r25PtyCapture(\'prompt-probe-write\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })\n                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)\n                __r25PromptProbeWriteReturned = true\n                __r25PtyCapture(\'prompt-probe-write-return\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })\n                if (__r25PromptState.nonce) {\n                  __r25PtyProcessing(__r25PromptState, \'callback\', { nonce_probe_attempted: true })\n                  try {\n                    term.write(`echo ${__r25PromptState.nonce}${this.EOL}`)\n                    __r25PtyProcessing(__r25PromptState, \'callback\', { nonce_probe_write_returned: true })\n                  } catch {}\n                }\n',
     },
     {
       name: 'prompt-filter-and-queue',
