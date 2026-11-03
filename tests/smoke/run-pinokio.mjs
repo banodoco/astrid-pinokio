@@ -388,10 +388,16 @@ function createLockRefusalCapture({ environment, pinokioHome, userHome }) {
       const lockPathLabel = environment.XDG_DATA_HOME
         ? '$XDG_DATA_HOME/astrid-install.lock'
         : '$HOME/.local/share/astrid-install.lock';
-      const inDisposableState = isWithin(lockPath, pinokioHome) || isWithin(lockPath, userHome);
+      const declaredInDisposableState = isWithin(lockPath, pinokioHome) || isWithin(lockPath, userHome);
+      let resolvedLockPath;
+      let pathResolutionFailed = false;
+      try { resolvedLockPath = fs.realpathSync(lockPath); }
+      catch (error) { pathResolutionFailed = error?.code !== 'ENOENT'; }
+      const inDisposableState = declaredInDisposableState && !pathResolutionFailed
+        && (!resolvedLockPath || isWithin(resolvedLockPath, pinokioHome) || isWithin(resolvedLockPath, userHome));
       let record;
       if (inDisposableState) {
-        try { record = captureLockRefusal({ lockPath, lockPathLabel }); } catch { record = null; }
+        try { record = captureLockRefusal({ lockPath: resolvedLockPath || lockPath, lockPathLabel }); } catch { record = null; }
       }
       if (!record) {
         record = {
@@ -399,7 +405,10 @@ function createLockRefusalCapture({ environment, pinokioHome, userHome }) {
           platform: process.platform,
           lock_path: lockPathLabel,
           device: 'unknown', inode: 'unknown', holder_pid: 'unknown', holders: [],
-          limitations: [inDisposableState ? 'diagnostic-snapshot-failed' : 'lock-path-outside-disposable-state'],
+          limitations: [
+            pathResolutionFailed ? 'lock-path-resolution-unavailable'
+              : inDisposableState ? 'diagnostic-snapshot-failed' : 'lock-path-outside-disposable-state',
+          ],
         };
       }
       process.stdout.write(`[pinokio-lock-refusal] ${JSON.stringify(record)}\n`);
