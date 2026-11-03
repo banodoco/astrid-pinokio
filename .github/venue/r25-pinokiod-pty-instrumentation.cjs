@@ -19,6 +19,9 @@ const PRESERVED_MARKERS = Object.freeze(['prompt-probe-write-return', 'prompt-po
 const RETAINED_PROMPT_MARKERS = Object.freeze(['prompt-pty-spawn-start', 'prompt-pty-spawn', 'prompt-probe-write', ...PRESERVED_MARKERS]);
 const MAX_ROWS = 16;
 const MAX_BYTES = 4096;
+const MAX_MATCHER_CAPTURE_BYTES = 32768;
+const MAX_MATCHER_CAPTURE_ROWS = 8;
+const MAX_MATCHER_INPUT_BYTES = 8192;
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -42,6 +45,8 @@ let __r25PtyLatestPromptOrdinal = null;
 let __r25PtyNextPromptOrdinal = 0;
 let __r25PtyPromptOrdinal = null;
 let __r25PtyPromptPid = null;
+const __r25PtyMatcherRows = [];
+let __r25PtyMatcherBytes = 0;
 function __r25PtyPid(value) {
   return Number.isInteger(value) && value > 0 && value <= 0xffffffff ? value : null;
 }
@@ -105,6 +110,50 @@ function __r25PtyCapture(kind, fields = {}) {
   try {
     __r25PtyFs.mkdirSync(__r25PtyPath.dirname(file), { recursive: true });
     __r25PtyFs.writeFileSync(file, __r25PtyRows.join(''), { encoding: 'utf8', mode: 0o600 });
+  } catch {}
+}
+function __r25PtyCaptureMatcherInput(value, promptOrdinal) {
+  const file = process.env.ASTRID_R25_MATCHER_CAPTURE_FILE;
+  if (process.env.ASTRID_R25_SETUP_DIAGNOSTICS !== '1' || process.env.ASTRID_R25_CMD_PROMPT2 !== '1'
+      || promptOrdinal !== 2 || typeof file !== 'string' || !file || typeof value !== 'string'
+      || __r25PtyMatcherRows.length >= ${MAX_MATCHER_CAPTURE_ROWS}) return;
+  const raw = value;
+  const redacted = raw
+    .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]*PRIVATE KEY-----/gi, '[REDACTED PRIVATE KEY]')
+    .replace(/(authorization\s*[:=]\s*(?:bearer|basic)\s+)[^\s,;]+/gi, '$1[REDACTED]')
+    .replace(/((?:token|password|passwd|secret|api[-_ ]?key|client[-_ ]?secret|access[-_ ]?key)\s*[=:]\s*["']?)[^\s,"';}]+/gi, '$1[REDACTED]')
+    .replace(/((?:--?(?:token|password|passwd|secret|api[-_ ]?key)|bearer)\s+)[^\s,;]+/gi, '$1[REDACTED]')
+    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[REDACTED]@')
+    .replace(/(https?:\/\/[^\s?#]+)\?[^\s#]*/gi, '$1?[REDACTED]')
+    .replace(/\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16})\b/g, '[REDACTED TOKEN]');
+  const remaining = ${MAX_MATCHER_CAPTURE_BYTES} - __r25PtyMatcherBytes;
+  const budget = Math.min(${MAX_MATCHER_INPUT_BYTES}, remaining - 512);
+  if (budget < 1) return;
+  let captured = redacted;
+  let truncated = false;
+  if (Buffer.byteLength(captured, 'utf8') > budget) {
+    let low = 0;
+    let high = captured.length;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (Buffer.byteLength(captured.slice(0, middle), 'utf8') <= budget) low = middle;
+      else high = middle - 1;
+    }
+    captured = captured.slice(0, low);
+    truncated = true;
+  }
+  const row = { at: new Date().toISOString(), kind: 'serialized-matcher-input', prompt_ordinal: 2,
+    input_index: __r25PtyMatcherRows.length + 1, original_bytes: Buffer.byteLength(raw, 'utf8'),
+    original_sha256: require('crypto').createHash('sha256').update(raw, 'utf8').digest('hex'),
+    redacted: redacted !== raw, truncated, serialized_input: captured };
+  const line = JSON.stringify(row) + '\n';
+  const bytes = Buffer.byteLength(line, 'utf8');
+  if (__r25PtyMatcherBytes + bytes > ${MAX_MATCHER_CAPTURE_BYTES}) return;
+  __r25PtyMatcherRows.push(line);
+  __r25PtyMatcherBytes += bytes;
+  try {
+    __r25PtyFs.mkdirSync(__r25PtyPath.dirname(file), { recursive: true });
+    __r25PtyFs.writeFileSync(file, __r25PtyMatcherRows.join(''), { encoding: 'utf8', mode: 0o600 });
   } catch {}
 }
 function __r25PtyBound(value, max = 1000000) {
@@ -358,7 +407,7 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
     {
       name: 'prompt-pty-spawn',
       needle: '      let term = pty.spawn(this.shell, this.args, config)\n',
-      replacement: '      __r25PtyBeginPrompt()\n      const __r25PromptOrdinal = __r25PtyPromptOrdinal\n      let term = pty.spawn(this.shell, this.args, config)\n      __r25PtySetPromptPid(term?.pid)\n      const __r25PromptState = __r25PtyNewProcessing(__r25PromptOrdinal, term?.pid)\n      try { __r25PromptState.nonce = __r25PtyNewNonce() } catch {}\n      __r25PtyProcessing(__r25PromptState, \'callback\', { ready: this.prompt_ready, done: this.prompt_done })\n      __r25PtyCapture(\'prompt-pty-spawn\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid, pid: term?.pid, ppid: process.pid })\n      __r25PtyAttachExit(term, \'prompt-native-exit\', __r25PromptOrdinal, term?.pid)\n      let __r25PromptFirstOutput = false\n      let __r25PromptFollowupOutput = false\n      let __r25PromptProbeWriteReturned = false\n      let __r25PromptPostProbeOutput = false\n',
+      replacement: '      __r25PtyBeginPrompt()\n      const __r25PromptOrdinal = __r25PtyPromptOrdinal\n      const __r25PromptCmdOverride = process.env.ASTRID_R25_SETUP_DIAGNOSTICS === \'1\' && process.env.ASTRID_R25_CMD_PROMPT2 === \'1\' && __r25PromptOrdinal === 2\n      const __r25PromptShell = __r25PromptCmdOverride ? \'cmd.exe\' : this.shell\n      const __r25PromptArgs = __r25PromptCmdOverride ? [\'/D\'] : this.args\n      let term = pty.spawn(__r25PromptShell, __r25PromptArgs, config)\n      __r25PtySetPromptPid(term?.pid)\n      const __r25PromptState = __r25PtyNewProcessing(__r25PromptOrdinal, term?.pid)\n      try { __r25PromptState.nonce = __r25PtyNewNonce() } catch {}\n      __r25PtyProcessing(__r25PromptState, \'callback\', { ready: this.prompt_ready, done: this.prompt_done })\n      __r25PtyCapture(\'prompt-pty-spawn\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid, pid: term?.pid, ppid: process.pid })\n      __r25PtyAttachExit(term, \'prompt-native-exit\', __r25PromptOrdinal, term?.pid)\n      let __r25PromptFirstOutput = false\n      let __r25PromptFollowupOutput = false\n      let __r25PromptProbeWriteReturned = false\n      let __r25PromptPostProbeOutput = false\n',
     },
     {
       name: 'prompt-first-output',
@@ -373,7 +422,7 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
     {
       name: 'prompt-filter-and-queue',
       needle: '      let queue = fastq((data, cb) => {\n        if (this.prompt_ready) {\n          vt.write(data, () => {\n            let buf = vts.serialize()\n            let re = /(.+)echo pinokio[\\r\\n]+pinokio[\\r\\n]+(\\1)/gs\n            const match = re.exec(buf)\n            if (match && match.length > 0) {\n',
-      replacement: '      let queue = fastq((data, cb) => {\n        __r25PtyProcessing(__r25PromptState, \'queue-worker\', { ready: this.prompt_ready, done: this.prompt_done })\n        if (this.prompt_ready) {\n          __r25PromptState.write_calls = Math.min(10000, __r25PromptState.write_calls + 1)\n          __r25PtyProcessing(__r25PromptState, \'vt-write\')\n          try { vt.write(data, () => {\n            __r25PromptState.write_callback_count = Math.min(10000, __r25PromptState.write_callback_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'vt-callback\')\n            __r25PromptState.serialize_count = Math.min(10000, __r25PromptState.serialize_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'serialize\')\n            let buf\n            try { buf = vts.serialize() } catch (error) { __r25PtyFailure(__r25PromptState, \'serialize\', error); throw error }\n            __r25PtyProcessing(__r25PromptState, \'serialize\', { serialize_length: typeof buf === \'string\' ? buf.length : 0, serialized_probe_count: __r25PtyProbeCount(buf) })\n            __r25PromptState.regex_count = Math.min(10000, __r25PromptState.regex_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'regex\')\n            let re = /(.+)echo pinokio[\\r\\n]+pinokio[\\r\\n]+(\\1)/gs\n            let match\n            try { match = re.exec(buf) } catch (error) { __r25PtyFailure(__r25PromptState, \'regex\', error); throw error }\n            __r25PtyProcessing(__r25PromptState, \'regex\', { match: Boolean(match && match.length > 0), regex_shape: __r25PtyRegexShape(buf) })\n            if (match && match.length > 0) {\n',
+      replacement: '      let queue = fastq((data, cb) => {\n        __r25PtyProcessing(__r25PromptState, \'queue-worker\', { ready: this.prompt_ready, done: this.prompt_done })\n        if (this.prompt_ready) {\n          __r25PromptState.write_calls = Math.min(10000, __r25PromptState.write_calls + 1)\n          __r25PtyProcessing(__r25PromptState, \'vt-write\')\n          try { vt.write(data, () => {\n            __r25PromptState.write_callback_count = Math.min(10000, __r25PromptState.write_callback_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'vt-callback\')\n            __r25PromptState.serialize_count = Math.min(10000, __r25PromptState.serialize_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'serialize\')\n            let buf\n            try { buf = vts.serialize() } catch (error) { __r25PtyFailure(__r25PromptState, \'serialize\', error); throw error }\n            __r25PtyProcessing(__r25PromptState, \'serialize\', { serialize_length: typeof buf === \'string\' ? buf.length : 0, serialized_probe_count: __r25PtyProbeCount(buf) })\n            __r25PtyCaptureMatcherInput(buf, __r25PromptOrdinal)\n            __r25PromptState.regex_count = Math.min(10000, __r25PromptState.regex_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'regex\')\n            let re = /(.+)echo pinokio[\\r\\n]+pinokio[\\r\\n]+(\\1)/gs\n            let match\n            try { match = re.exec(buf) } catch (error) { __r25PtyFailure(__r25PromptState, \'regex\', error); throw error }\n            __r25PtyProcessing(__r25PromptState, \'regex\', { match: Boolean(match && match.length > 0), regex_shape: __r25PtyRegexShape(buf) })\n            if (match && match.length > 0) {\n',
     },
     {
       name: 'prompt-normalize-resolve',

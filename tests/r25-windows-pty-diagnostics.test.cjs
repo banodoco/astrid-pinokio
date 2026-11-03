@@ -16,6 +16,7 @@ test('Windows callback overlay records the actual registry args, prompt ordinal 
   const result = patchWindowsSource(fixture());
   assert.match(result.source, /args: shellArgs, cwd: config.cwd, env: config.env/);
   assert.match(result.source, /role: __r25PromptOrdinal === 2 \? 'prompt-2'/);
+  assert.match(result.source, /shell: __r25PromptShell, args: __r25PromptArgs/);
   assert.match(result.source, /this.exec_cmd \|\| this.cmd/);
   assert.equal(result.replacements.length, 5);
   assert.equal(MAX_CAPTURE_BYTES, 16384);
@@ -36,6 +37,8 @@ test('native-callback simulation retains both spawn identities, computes their d
     const text = fs.readFileSync(file,'utf8');
     const rows = text.trim().split('\n').map(JSON.parse);
     const diff = rows.find(row => row.kind==='spawn' && row.role==='prompt-2').diff;
+    const actualArgv = rows.find(row => row.kind==='spawn' && row.role==='prompt-2').actual_argv;
+    assert.deepEqual(actualArgv, ['cmd.exe', '/D']);
     assert.equal(diff.args_equal,false);
     assert.equal(diff.cwd_equal,false);
     assert.deepEqual(diff.env_changed,['PATH']);

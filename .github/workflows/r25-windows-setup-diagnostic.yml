@@ -6,6 +6,12 @@ on:
       - lane/M-PIN/R-PIN-CROSS-OS-DIAGNOSTIC
       - lane/M-PIN/R-PIN-41609304921-RESULT
   workflow_dispatch:
+    inputs:
+      windows_cmd_prompt2:
+        description: 'Use cmd.exe /D for Windows prompt 2 and capture the bounded matcher input'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -24,6 +30,7 @@ jobs:
       PTERM_REF: 5be43718701c448b43daf0ce51d8935f170065bb
       R25_CROSS_OS_DIAGNOSTIC: '1'
       R25_SETUP_TIMEOUT_MS: 600000
+      R25_WINDOWS_CMD_PROMPT2: ${{ inputs.windows_cmd_prompt2 && 'true' || 'false' }}
       R25_TUPLE_JSON: >-
         {"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","artifacts":{"public/install":"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d","public/install.sh":"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285","public/install.ps1":"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"},"published_at":"2026-11-02T17:55:27Z"}
     steps:
@@ -111,7 +118,7 @@ jobs:
           R25_DIAGNOSTICS: ${{ runner.temp }}\r25-diagnostics
         run: |
           $ErrorActionPreference = 'Stop'
-          node .github/venue/r25-snapshot-runner.cjs --agent-root $env:AGENT_ROOT --pinokiod $env:PINOKIOD_ROOT --pterm $env:PTERM_ROOT --output $env:R25_OUTPUT --setup-only true --cross-os-diagnostic true --setup-timeout-ms $env:R25_SETUP_TIMEOUT_MS
+          node .github/venue/r25-snapshot-runner.cjs --agent-root $env:AGENT_ROOT --pinokiod $env:PINOKIOD_ROOT --pterm $env:PTERM_ROOT --output $env:R25_OUTPUT --setup-only true --cross-os-diagnostic true --cmd-prompt2-diagnostic $env:R25_WINDOWS_CMD_PROMPT2 --setup-timeout-ms $env:R25_SETUP_TIMEOUT_MS
       - name: Retain bounded setup diagnostics
         if: always()
         uses: actions/upload-artifact@v4

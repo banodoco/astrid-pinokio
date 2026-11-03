@@ -313,6 +313,10 @@ async function main() {
   const home = path.join(path.dirname(output), 'pinokio-home');
   const appRoot = path.join(home, 'api', 'astrid');
   const setupOnly = cli['setup-only'] === 'true';
+  const cmdPrompt2Diagnostic = cli['cmd-prompt2-diagnostic'] === 'true';
+  if (cmdPrompt2Diagnostic && (!setupOnly || process.platform !== 'win32' || cli['cross-os-diagnostic'] !== 'true')) {
+    throw new Error('prompt-2 CMD discriminator requires a Windows setup-only cross-OS diagnostic');
+  }
   const ptermRoot = cli.pterm || process.env.PTERM_ROOT;
   const pinokiodRoot = cli.pinokiod || process.env.PINOKIOD_ROOT;
   if (!ptermRoot || !pinokiodRoot || !cli['agent-root']) throw new Error('runner roots are incomplete');
@@ -363,6 +367,10 @@ async function main() {
     ...(setupOnly ? { ASTRID_R25_PTY_CAPTURE_FILE: path.join(diagnostics, 'r25-pty-diagnostics.jsonl') } : {}) };
   if (setupOnly && cli['cross-os-diagnostic'] === 'true') Object.assign(daemonEnv, { ASTRID_R25_CROSS_OS_DIAGNOSTIC: '1', ASTRID_R25_CROSS_CAPTURE_FILE: path.join(diagnostics, 'cross-os-pty.json') });
   if (setupOnly && process.platform === 'win32') daemonEnv.ASTRID_R25_WINDOWS_PTY_CAPTURE_FILE = path.join(diagnostics, 'r25-windows-pty-diagnostics.jsonl');
+  if (cmdPrompt2Diagnostic) {
+    daemonEnv.ASTRID_R25_CMD_PROMPT2 = '1';
+    daemonEnv.ASTRID_R25_MATCHER_CAPTURE_FILE = path.join(diagnostics, 'r25-serialized-matcher-input.jsonl');
+  }
   const daemonOutput = setupOnly ? {
     stdout: createBoundedCapture(path.join(diagnostics, 'daemon.stdout.log')),
     stderr: createBoundedCapture(path.join(diagnostics, 'daemon.stderr.log')),

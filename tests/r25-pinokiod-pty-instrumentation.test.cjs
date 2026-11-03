@@ -233,20 +233,22 @@ test('injected runtime keeps the actual marker file bounded and command-free', (
   }
 });
 
-function promptHarness(root, scenarios = []) {
+function promptHarness(root, env = {}) {
   let pid = 3000;
   const terms = [];
   const source = sourceFixture();
   const patched = patchSource(source, { expectedSha256: sha256(Buffer.from(source, 'utf8')) });
   const sandbox = {
     Buffer, Date, JSON, Set, Promise, Math, Number, Boolean, Object,
-    process: { pid: 2999, env: { ASTRID_R25_SETUP_DIAGNOSTICS: '1', ASTRID_R25_PTY_CAPTURE_FILE: path.join(root, 'markers.jsonl') } },
+    process: { pid: 2999, env: { ASTRID_R25_SETUP_DIAGNOSTICS: '1', ASTRID_R25_PTY_CAPTURE_FILE: path.join(root, 'markers.jsonl'), ...env } },
     require,
     module: { exports: {} }, exports: {},
     __scenario: null,
-    __pty: { spawn: () => {
+    __pty: { spawn: (shell, args) => {
       const term = {
         pid: ++pid,
+        shell,
+        args,
         writes: [],
         killCount: 0,
         onData(callback) { this.dataCallback = callback; },
@@ -290,7 +292,7 @@ function promptHarness(root, scenarios = []) {
     shell.prompt_ready = true;
     shell.prompt_done = false;
     shell.shell = scenario.shell || 'stub';
-    shell.args = [];
+    shell.args = scenario.args || [];
     shell.EOL = '\n';
     shell.filterDecsync = data => {
       if (scenario.filterThrows) throw scenario.filterThrows;
@@ -518,6 +520,59 @@ test('nonce command and output counters handle split chunks and CR/LF line endin
     assert.doesNotMatch(output, /r25_split|echo /);
     assert.match(output, /"nonce_command_line_count":1/);
     assert.match(output, /"nonce_output_line_count":1/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('opt-in CMD discriminator changes only prompt 2 and captures bounded serialized matcher inputs', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-cmd-prompt2-'));
+  const file = path.join(root, 'serialized.jsonl');
+  try {
+    const harness = promptHarness(root, { ASTRID_R25_CMD_PROMPT2: '1', ASTRID_R25_MATCHER_CAPTURE_FILE: file });
+    const first = harness.start({ shell: 'powershell.exe', args: ['-NoLogo', '-NoProfile'], serialized: '' });
+    assert.equal(first.term.shell, 'powershell.exe');
+    assert.deepEqual(first.term.args, ['-NoLogo', '-NoProfile']);
+    const serialized = 'C:\\Users\\worker> echo pinokio\r\npinokio\r\nC:\\Users\\worker> token=secret-value\r\n';
+    const second = harness.start({ shell: 'powershell.exe', args: ['-NoLogo', '-NoProfile'], serialized });
+    assert.equal(second.term.shell, 'cmd.exe');
+    assert.deepEqual(Array.from(second.term.args), ['/D']);
+    second.term.emit('private callback data');
+    const rows = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].prompt_ordinal, 2);
+    assert.equal(rows[0].original_bytes, Buffer.byteLength(serialized));
+    assert.equal(rows[0].original_sha256, require('node:crypto').createHash('sha256').update(serialized).digest('hex'));
+    assert.equal(rows[0].redacted, true);
+    assert.equal(rows[0].truncated, false);
+    assert.equal(rows[0].serialized_input, serialized.replace('secret-value', '[REDACTED]'));
+    const largeRoot = path.join(root, 'large');
+    fs.mkdirSync(largeRoot);
+    const largeFile = path.join(largeRoot, 'serialized.jsonl');
+    const largeHarness = promptHarness(largeRoot, { ASTRID_R25_CMD_PROMPT2: '1', ASTRID_R25_MATCHER_CAPTURE_FILE: largeFile });
+    largeHarness.start({ shell: 'powershell.exe', args: ['-NoLogo', '-NoProfile'], serialized: '' });
+    const large = largeHarness.start({ shell: 'powershell.exe', args: ['-NoLogo', '-NoProfile'], serialized: 'x'.repeat(40000) });
+    for (let index = 0; index < 9; index += 1) large.term.emit(`private callback ${index}`);
+    const boundedRows = fs.readFileSync(largeFile, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.ok(boundedRows.length <= 8);
+    assert.equal(boundedRows[0].original_bytes, 40000);
+    assert.equal(boundedRows[0].truncated, true);
+    assert.ok(Buffer.byteLength(fs.readFileSync(largeFile, 'utf8')) <= 32768);
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /secret-value|private callback data/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('CMD prompt 2 override and matcher capture stay disabled without the explicit opt-in', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-cmd-prompt2-off-'));
+  const file = path.join(root, 'serialized.jsonl');
+  try {
+    const harness = promptHarness(root, { ASTRID_R25_MATCHER_CAPTURE_FILE: file });
+    const first = harness.start({ shell: 'powershell.exe', args: ['-NoLogo', '-NoProfile'], serialized: '' });
+    const second = harness.start({ shell: 'powershell.exe', args: ['-NoLogo', '-NoProfile'], serialized: 'PS> echo pinokio\r\npinokio\r\nPS> ' });
+    assert.equal(first.term.shell, 'powershell.exe');
+    assert.deepEqual(first.term.args, ['-NoLogo', '-NoProfile']);
+    assert.equal(second.term.shell, 'powershell.exe');
+    assert.deepEqual(second.term.args, ['-NoLogo', '-NoProfile']);
+    second.term.emit('private callback data');
+    assert.equal(fs.existsSync(file), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
