@@ -16,6 +16,7 @@ const windows = process.platform === 'win32';
 const paths = windows ? path.win32 : path.posix;
 const shell = windows ? 'powershell.exe' : 'bash';
 const fixturePath = path.join(repository, 'tests', 'fixtures', 'pinokio-env.mjs');
+const smokeAppRef = 'int/r1';
 
 function log(message) {
   process.stdout.write(`[pinokio-smoke] ${message}\n`);
@@ -108,6 +109,10 @@ function prepareCheckout(source, appDirectory) {
   const branch = 'ci-smoke';
   execFileSync('git', ['-C', source, 'checkout', '-B', branch, 'HEAD'], { stdio: 'inherit' });
   execFileSync('git', ['clone', '--branch', branch, '--single-branch', source, appDirectory], { stdio: 'inherit' });
+  const environmentFile = path.join(appDirectory, '_ENVIRONMENT');
+  const environmentText = fs.readFileSync(environmentFile, 'utf8');
+  assert.match(environmentText, /^ASTRID_APP_REF=.*$/m, 'launcher _ENVIRONMENT must declare ASTRID_APP_REF');
+  fs.writeFileSync(environmentFile, environmentText.replace(/^ASTRID_APP_REF=.*$/m, `ASTRID_APP_REF=${smokeAppRef}`));
 }
 
 async function processTreeKill(child) {
@@ -433,7 +438,7 @@ async function setup() {
   environment.ASTRID_PINOKIO_APP_DIR = appDirectory;
   environment.ASTRID_RUNTIME_DOOR_PORT = '17340';
   const app = library.createApp({ platform: process.platform, appDirectory, environment });
-  assert.equal(app.appRef(), 'feat/pinokio', 'Install must select the manifest ref from _ENVIRONMENT');
+  assert.equal(app.appRef(), smokeAppRef, 'Install must select the manifest ref from _ENVIRONMENT');
   const servicesBefore = await fakeServices(pinokioHome, userHome, environment);
   return { pinokioHome, userHome, appDirectory, cacheDirectory, binDirectory, environment, app, servicesBefore };
 }
