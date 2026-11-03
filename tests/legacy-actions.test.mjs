@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const agent = path.resolve(repository, '../../../../astrid-agent');
+const agent = process.env.ASTRID_AGENT_SOURCE || path.resolve(repository, '../../../../astrid-agent');
 const revisions = ['bbba620e', 'c3b4cd5', '5e1f256'];
 
 function oldModule(revision, file, app) {
@@ -68,16 +68,21 @@ function askCurrentAgentParser(action, manifest) {
   if (action !== 'install') args.push(`--${action}`);
   if (manifest) args.push('--manifest', manifest);
   const code = [
-    'import json, sys',
-    'from astrid.installer.cli import parser',
-    'parsed = parser().parse_args(json.loads(sys.argv[1]))',
+    'import argparse, ast, json, sys',
+    'from pathlib import Path',
+    'source_path = Path(sys.argv[1])',
+    'module = ast.parse(source_path.read_text(encoding="utf8"))',
+    'parser_function = next(node for node in module.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "parser")',
+    'namespace = {"argparse": argparse, "Path": Path}',
+    'exec(compile(ast.Module(body=[parser_function], type_ignores=[]), str(source_path), "exec"), namespace)',
+    'parsed = namespace["parser"]().parse_args(json.loads(sys.argv[2]))',
     'mode = "app-update" if parsed.update_app else "update" if parsed.update else "uninstall" if parsed.uninstall else "install"',
     'print(json.dumps({"mode": mode, "managed_by": parsed.managed_by, "manifest": str(parsed.manifest) if parsed.manifest else None}))',
   ].join('; ');
-  const result = spawnSync('python', ['-c', code, JSON.stringify(args)], {
+  const result = spawnSync('python', ['-c', code, path.join(agent, 'astrid', 'installer', 'cli.py'), JSON.stringify(args)], {
     cwd: agent, encoding: 'utf8', timeout: 20000,
   });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(result.status, 0, `spawn error: ${result.error?.message ?? 'none'}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`);
   return JSON.parse(result.stdout);
 }
 

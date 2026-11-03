@@ -35,6 +35,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: banodoco/astrid-agent
+          ref: main
+          path: astrid-agent
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Set Agent source for parser fixtures
+        shell: bash
+        run: echo "ASTRID_AGENT_SOURCE=$GITHUB_WORKSPACE/astrid-agent" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
