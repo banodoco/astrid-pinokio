@@ -71,6 +71,13 @@ jobs:
         with:
           node-version: 20.19.4
       - run: node tests/smoke/run-pinokio.mjs
+      - name: Upload Linux smoke failure diagnostics
+        if: always() && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinokio-linux-smoke-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/astrid-pinokio-smoke-diagnostics/
+          if-no-files-found: ignore
 
   fully-local:
     name: Fully local (ubuntu-latest)
