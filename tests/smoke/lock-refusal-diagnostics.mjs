@@ -34,7 +34,7 @@ function safeArgv(procRoot, pid) {
   }
 }
 
-function processIdentity(procRoot, pid, lockStat) {
+function processIdentity(procRoot, pid, lockStat, lockPathLabel) {
   let comm = UNKNOWN;
   let ppid = UNKNOWN;
   try { comm = fs.readFileSync(path.join(procRoot, String(pid), 'comm'), 'utf8').trim().slice(0, 80) || UNKNOWN; } catch { /* process exited or procfs is restricted */ }
@@ -51,22 +51,27 @@ function processIdentity(procRoot, pid, lockStat) {
     parent = { pid: ppid, comm: parentComm, argv: safeArgv(procRoot, ppid) };
   }
 
-  let fdLink = UNKNOWN;
+  let fdLink = { status: UNKNOWN };
   try {
     const fdRoot = path.join(procRoot, String(pid), 'fd');
     const names = fs.readdirSync(fdRoot).slice(0, 64);
-    fdLink = 'not-found';
+    fdLink = { status: 'not-found' };
     for (const name of names) {
       try {
         const stat = fs.statSync(path.join(fdRoot, name), { bigint: true });
         if (stat.dev === lockStat.dev && stat.ino === lockStat.ino) {
-          fdLink = 'matched-lock-inode';
+          const linkTarget = fs.readlinkSync(path.join(fdRoot, name));
+          fdLink = {
+            status: 'matched-lock-inode',
+            fd_number: name,
+            target: `${lockPathLabel}${linkTarget.endsWith(' (deleted)') ? ' (deleted)' : ''}`,
+          };
           break;
         }
       } catch { /* descriptor closed during bounded scan */ }
     }
   } catch { /* procfs is restricted or process exited */ }
-  return { pid, ppid, comm, argv: safeArgv(procRoot, pid), fd_link: fdLink, parent };
+  return { pid, ppid, comm, argv: safeArgv(procRoot, pid), fd_symlink: fdLink, parent };
 }
 
 /** Read-only snapshot for a Linux flock refusal. No lock is opened or probed. */
@@ -117,6 +122,6 @@ export function captureLockRefusal({ lockPath, lockPathLabel = '$LOCK_ROOT/astri
   if (uniquePids.length === 1) record.holder_pid = uniquePids[0];
   else if (uniquePids.length > 1) record.holder_pid = 'multiple';
   else record.limitations.push('matching-kernel-flock-holder-not-visible');
-  record.holders = uniquePids.map((pid) => processIdentity(procRoot, pid, lockStat));
+  record.holders = uniquePids.map((pid) => processIdentity(procRoot, pid, lockStat, lockPathLabel));
   return record;
 }

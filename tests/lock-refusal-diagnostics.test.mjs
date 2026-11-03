@@ -38,7 +38,9 @@ test('Linux lock refusal capture records a present disposable flock holder', { s
     assert.equal(record.inode, String(fs.statSync(lockPath).ino));
     assert.equal(record.holder_pid, child.pid);
     assert.equal(record.holders[0].pid, child.pid);
-    assert.equal(record.holders[0].fd_link, 'matched-lock-inode');
+    assert.equal(record.holders[0].fd_symlink.status, 'matched-lock-inode');
+    assert.match(record.holders[0].fd_symlink.fd_number, /^\d+$/);
+    assert.equal(record.holders[0].fd_symlink.target, '$LOCK_ROOT/astrid-install.lock');
     assert.equal(record.holders[0].comm, 'python3');
     assert.equal(record.limitations.length, 0);
     assert.equal(JSON.stringify(record).includes(scratch), false, 'diagnostic must redact disposable absolute paths');
