@@ -198,7 +198,8 @@ function projectInstallEvidence(raw, binding) {
   const shellEvents = Array.isArray(raw?.shell_events) ? raw.shell_events.slice(-INSTALL_TRACE_LIMIT).map(projectShellEvent).filter(Boolean) : [];
   const stages = Array.isArray(raw?.stages) ? raw.stages.slice(-INSTALL_STAGE_LIMIT).map(item => {
     if (!installStages.includes(item?.stage) || !timestamp(item?.timestamp)) return null;
-    return { stage: item.stage, timestamp: item.timestamp, pid: boundedPid(item.pid), ppid: boundedPid(item.ppid) };
+    return { stage: item.stage, timestamp: item.timestamp, pid: boundedPid(item.pid), ppid: boundedPid(item.ppid),
+      ...(item.stage === 'pterm-signal-request' ? { signal: ['SIGTERM'].includes(item.signal) ? item.signal : null } : {}) };
   }).filter(Boolean) : [];
   const preCleanup = raw?.pre_cleanup || {};
   return { schema: 1, binding, events, shell_events: shellEvents, last_activity: projectEvent(raw?.last_activity),
@@ -301,7 +302,7 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
       const stage = { 'timer-start': 'pterm-timer-start', 'timer-fire': 'pterm-timer-fire',
         'signal-request': 'pterm-signal-request', 'child-exit': 'pterm-exit', 'child-close': 'pterm-close' }[event];
       if (stage) {
-        state.stages.push({ stage, timestamp: at });
+        state.stages.push({ stage, timestamp: at, ...(event === 'signal-request' ? { signal: value.signal } : {}) });
         if (state.stages.length > INSTALL_STAGE_LIMIT) state.stages.shift();
       }
       persist();

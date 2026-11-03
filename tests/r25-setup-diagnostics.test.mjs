@@ -83,7 +83,7 @@ test('diagnostic timeline keeps step dispatch, disconnect, and observer signal r
     ['start', '2026-11-03T11:04:21.991Z'],
     ['disconnect', '2026-11-03T11:04:22.028Z'],
   ]);
-  assert.deepEqual(saved.stages.at(-1), { stage: 'pterm-signal-request', timestamp: '2026-11-03T11:04:22.029Z', pid: null, ppid: null });
+  assert.deepEqual(saved.stages.at(-1), { stage: 'pterm-signal-request', timestamp: '2026-11-03T11:04:22.029Z', pid: null, ppid: null, signal: 'SIGTERM' });
   assert.equal(saved.events[0].index, 3);
   assert.equal(saved.events[0].method, 'shell.run');
 });
