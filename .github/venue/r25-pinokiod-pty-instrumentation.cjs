@@ -125,7 +125,7 @@ function __r25PtyNewProcessing(promptOrdinal, promptPid) {
     repeated_prefix_equal: false, repeated_prefix_check_count: 0, shape_scan_truncated: false,
     nonce_command_line_count: 0, nonce_output_line_count: 0,
     nonce_probe_attempted: false, nonce_probe_write_returned: false,
-    nonce_probe_executed: false, nonce_probe_not_executed_after_write: false,
+    nonce_probe_executed: false, nonce_output_absent_after_write: false,
     nonce_carry: '', nonce: null,
   };
 }
@@ -184,7 +184,7 @@ function __r25PtyCountNonceLines(state, value) {
   }
   state.nonce_carry = combined.slice(-(state.nonce.length + 8));
   state.nonce_probe_executed = state.nonce_output_line_count > 0;
-  state.nonce_probe_not_executed_after_write = state.nonce_probe_write_returned && !state.nonce_probe_executed;
+  state.nonce_output_absent_after_write = state.nonce_probe_write_returned && !state.nonce_probe_executed;
 }
 function __r25PtyRegexShape(value) {
   const shape = { probe_command_count: 0, probe_command_line_count: 0, probe_output_line_count: 0, probe_command_output_sequence_count: 0,
@@ -254,7 +254,7 @@ function __r25PtyProcessing(state, stage, values = {}) {
       else if (field === 'regex_shape') Object.assign(state, values.regex_shape);
       else if (field === 'ready' || field === 'done' || field === 'nonce_probe_attempted' || field === 'nonce_probe_write_returned') {
         state[field] = values[field] === true;
-        if (field === 'nonce_probe_write_returned') state.nonce_probe_not_executed_after_write = state.nonce_probe_write_returned && !state.nonce_probe_executed;
+        if (field === 'nonce_probe_write_returned') state.nonce_output_absent_after_write = state.nonce_probe_write_returned && !state.nonce_probe_executed;
       }
       else if (field.endsWith('_length') || field.endsWith('_count')) state[field] = __r25PtyBound(values[field]);
     }
@@ -282,7 +282,7 @@ function __r25PtyProcessing(state, stage, values = {}) {
       nonce_probe_attempted: state.nonce_probe_attempted,
       nonce_probe_write_returned: state.nonce_probe_write_returned,
       nonce_probe_executed: state.nonce_probe_executed,
-      nonce_probe_not_executed_after_write: state.nonce_probe_not_executed_after_write,
+      nonce_output_absent_after_write: state.nonce_output_absent_after_write,
       filter_calls: state.filter_calls, queue_calls: state.queue_calls, write_calls: state.write_calls,
       write_return_count: state.write_return_count, write_callback_count: state.write_callback_count,
       serialize_count: state.serialize_count, regex_count: state.regex_count, normalize_count: state.normalize_count,

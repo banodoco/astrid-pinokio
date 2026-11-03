@@ -470,16 +470,16 @@ test('nonce predicates distinguish echoed command from output without retaining 
       __r25PtyCountNonceLines(outputOnly, '\\nr25_positive\\r\\n');
       __r25PtyProcessing(outputOnly, 'callback');
       globalThis.positive = { command: outputOnly.nonce_command_line_count, output: outputOnly.nonce_output_line_count,
-        observed: outputOnly.nonce_probe_executed, absent: outputOnly.nonce_probe_not_executed_after_write };
+        observed: outputOnly.nonce_probe_executed, absent: outputOnly.nonce_output_absent_after_write };
       const commandOnly = make('r25_negative');
       __r25PtyCountNonceLines(commandOnly, 'PS> echo r25_negative\\r\\n');
       __r25PtyProcessing(commandOnly, 'callback');
       globalThis.negative = { command: commandOnly.nonce_command_line_count, output: commandOnly.nonce_output_line_count,
-        observed: commandOnly.nonce_probe_executed, absent: commandOnly.nonce_probe_not_executed_after_write };
+        observed: commandOnly.nonce_probe_executed, absent: commandOnly.nonce_output_absent_after_write };
       const none = make('r25_none');
       __r25PtyProcessing(none, 'callback');
       globalThis.noData = { command: none.nonce_command_line_count, output: none.nonce_output_line_count,
-        observed: none.nonce_probe_executed, absent: none.nonce_probe_not_executed_after_write };
+        observed: none.nonce_probe_executed, absent: none.nonce_output_absent_after_write };
     `, context);
     assert.deepEqual(JSON.parse(JSON.stringify(context.positive)), { command: 0, output: 1, observed: true, absent: false });
     assert.deepEqual(JSON.parse(JSON.stringify(context.negative)), { command: 1, output: 0, observed: false, absent: true });
@@ -487,7 +487,7 @@ test('nonce predicates distinguish echoed command from output without retaining 
     const output = fs.readFileSync(file, 'utf8');
     assert.doesNotMatch(output, /r25_positive|r25_negative|r25_none|echo /);
     assert.match(output, /"nonce_probe_executed":false/);
-    assert.match(output, /"nonce_probe_not_executed_after_write":true/);
+    assert.match(output, /"nonce_output_absent_after_write":true/);
     assert.ok(Buffer.byteLength(output) <= 4096);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -510,7 +510,7 @@ test('nonce command and output counters handle split chunks and CR/LF line endin
         __r25PtyProcessing(state, 'callback');
       }
       globalThis.result = { command: state.nonce_command_line_count, output: state.nonce_output_line_count,
-        observed: state.nonce_probe_executed, absent: state.nonce_probe_not_executed_after_write };
+        observed: state.nonce_probe_executed, absent: state.nonce_output_absent_after_write };
     `, context);
     assert.deepEqual(JSON.parse(JSON.stringify(context.result)), { command: 1, output: 1, observed: true, absent: false });
     const output = fs.readFileSync(file, 'utf8');
@@ -537,7 +537,7 @@ test('injected prompt correlates a bounded nonce write after the original probe 
     assert.equal(row.nonce_command_line_count, 0);
     assert.equal(row.nonce_output_line_count, 0);
     assert.equal(row.nonce_probe_executed, false);
-    assert.equal(row.nonce_probe_not_executed_after_write, true);
+    assert.equal(row.nonce_output_absent_after_write, true);
     assert.doesNotMatch(fs.readFileSync(harness.file, 'utf8'), /r25_[a-f0-9]{24}|echo /);
     const original = sourceFixture();
     const patched = patchSource(original, { expectedSha256: sha256(Buffer.from(original, 'utf8')) });
