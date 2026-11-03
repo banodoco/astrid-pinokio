@@ -13,6 +13,7 @@ const {
   createBoundedMarkerWriter,
   patchSource,
   sha256,
+  PRESERVED_MARKERS,
 } = require('../.github/venue/r25-pinokiod-pty-instrumentation.cjs');
 
 function sourceFixture() {
@@ -35,7 +36,16 @@ test('patches the exact source anchors and exposes every bounded PTY boundary ma
   assert.equal(result.replacements.length, 9);
   for (const marker of PTY_MARKERS) assert.match(result.source, new RegExp(marker));
   assert.match(result.source, /__r25PromptFirstOutput = true; __r25PtyCapture\('prompt-first-output'\)[\s\S]*else if \(!__r25PromptFollowupOutput\)[\s\S]*prompt-followup-output/);
-  assert.match(result.source, /__r25PtyCapture\('prompt-probe-write'\)\n                term\.write\(`echo pinokio\$\{this\.EOL\}echo pinokio\$\{this\.EOL\}`\)/);
+  const preProbe = result.source.indexOf("__r25PtyCapture('prompt-probe-write')");
+  const write = result.source.indexOf('term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)', preProbe);
+  const returned = result.source.indexOf('__r25PromptProbeWriteReturned = true', write);
+  const returnMarker = result.source.indexOf("__r25PtyCapture('prompt-probe-write-return')", returned);
+  const postCallback = result.source.indexOf("if (__r25PromptProbeWriteReturned && !__r25PromptPostProbeOutput)");
+  const postMarker = result.source.indexOf("__r25PtyCapture('prompt-post-probe-output')", postCallback);
+  assert.ok(preProbe >= 0 && preProbe < write && write < returned && returned < returnMarker);
+  assert.ok(postCallback >= 0 && postMarker > postCallback);
+  assert.match(result.source, /if \(__r25PromptProbeWriteReturned && !__r25PromptPostProbeOutput\) \{ __r25PromptPostProbeOutput = true; __r25PtyCapture\('prompt-post-probe-output'\) \}/);
+  assert.deepEqual(PRESERVED_MARKERS, ['prompt-probe-write-return', 'prompt-post-probe-output']);
   assert.notEqual(result.patchedSha256, result.sourceSha256);
 });
 
@@ -72,11 +82,30 @@ test('redacts arbitrary fields and keeps marker output bounded', () => {
   }
 });
 
+test('the two probe boundary markers survive ring overflow without duplication', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-marker-preservation-'));
+  try {
+    const file = path.join(root, 'markers.jsonl');
+    const writer = createBoundedMarkerWriter(file, { maxRows: 16, maxBytes: 512 });
+    writer.write('prompt-probe-write-return');
+    writer.write('prompt-post-probe-output');
+    for (let index = 0; index < 40; index += 1) writer.write('exec-pty-spawn', { pid: index + 1, ppid: 99 });
+    writer.write('prompt-probe-write-return');
+    const output = fs.readFileSync(file, 'utf8');
+    const rows = output.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    assert.ok(Buffer.byteLength(output, 'utf8') <= 512);
+    assert.ok(rows.length <= 16);
+    for (const marker of PRESERVED_MARKERS) assert.equal(rows.filter(row => row.kind === marker).length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('injected runtime keeps the actual marker file bounded and command-free', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-runtime-'));
   try {
     const file = path.join(root, 'markers.jsonl');
-    vm.runInNewContext(`${RUNTIME}\n__r25PtyCapture('exec-command-write', { command: 'do-not-retain', token: 'secret-value' });\nfor (let i = 0; i < 30; i += 1) __r25PtyCapture('prompt-pty-spawn', { pid: i + 1, ppid: 99 });`, {
+    vm.runInNewContext(`${RUNTIME}\n__r25PtyCapture('prompt-probe-write-return');\n__r25PtyCapture('prompt-post-probe-output');\n__r25PtyCapture('exec-command-write', { command: 'do-not-retain', token: 'secret-value' });\nfor (let i = 0; i < 30; i += 1) __r25PtyCapture('prompt-pty-spawn', { pid: i + 1, ppid: 99 });`, {
       Buffer, Date, JSON, Set,
       process: { env: { ASTRID_R25_SETUP_DIAGNOSTICS: '1', ASTRID_R25_PTY_CAPTURE_FILE: file } },
       require,
@@ -85,6 +114,8 @@ test('injected runtime keeps the actual marker file bounded and command-free', (
     assert.ok(Buffer.byteLength(output, 'utf8') <= 4096);
     assert.ok(output.split('\n').filter(Boolean).length <= 16);
     assert.doesNotMatch(output, /do-not-retain|secret-value|command|token/);
+    const rows = output.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    for (const marker of PRESERVED_MARKERS) assert.equal(rows.filter(row => row.kind === marker).length, 1);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
