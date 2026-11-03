@@ -451,6 +451,36 @@ test('bounded discriminator attributes command loss before filtering, in filteri
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('records when terminal SGR styling splits the literal matcher command without changing match logic', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-sgr-split-'));
+  try {
+    const file = path.join(root, 'markers.jsonl');
+    const context = {
+      Buffer, Date, JSON, Set, require,
+      process: { env: { ASTRID_R25_SETUP_DIAGNOSTICS: '1', ASTRID_R25_PTY_CAPTURE_FILE: file } },
+    };
+    const screen = 'PS> \u001b[93mecho \u001b[0mpinokio\r\npinokio\r\nPS> \u001b[93mecho \u001b[0mpinokio\r\n>> \r\npinokio\r\nPS> ';
+    const matcher = /(.+)echo pinokio[\r\n]+pinokio[\r\n]+(\1)/gs;
+    assert.equal(matcher.test(screen), false);
+    assert.equal(matcher.test(screen.replace(/\u001b\[[0-?]*[ -/]*m/g, '')), true,
+      'the captured continuation marker alone does not prevent the first repeated-prompt match');
+    vm.runInNewContext(`${RUNTIME}
+      __r25PtyLatestPromptOrdinal = 1;
+      const state = __r25PtyNewProcessing(1, 47);
+      __r25PtyProcessing(state, 'regex', { match: false, regex_shape: __r25PtyRegexShape(${JSON.stringify(screen)}) });
+      globalThis.result = state;
+    `, context);
+    const row = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse).find(item => item.kind === 'prompt-processing');
+    assert.equal(context.result.probe_command_count, 0);
+    assert.equal(context.result.probe_command_output_sequence_count, 0);
+    assert.equal(context.result.probe_command_sgr_split_count, 2);
+    assert.equal(context.result.probe_output_line_count, 2);
+    assert.equal(row.probe_command_sgr_split_count, 2);
+    assert.equal(row.match, false);
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /PS>|echo pinokio|pinokio/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('nonce predicates distinguish echoed command from output without retaining nonce text', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-nonce-predicates-'));
   try {

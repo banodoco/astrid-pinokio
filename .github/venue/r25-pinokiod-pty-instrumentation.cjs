@@ -121,6 +121,7 @@ function __r25PtyNewProcessing(promptOrdinal, promptPid) {
     write_callback_count: 0, serialize_count: 0, regex_count: 0, normalize_count: 0,
     match: null, error_stage: null, error_class: null,
     probe_command_count: 0, probe_command_line_count: 0, probe_output_line_count: 0, probe_command_output_sequence_count: 0,
+    probe_command_sgr_split_count: 0,
     probe_command_separator_count: 0, probe_output_separator_count: 0,
     repeated_prefix_equal: false, repeated_prefix_check_count: 0, shape_scan_truncated: false,
     nonce_command_line_count: 0, nonce_output_line_count: 0,
@@ -197,6 +198,7 @@ function __r25PtyCountCmdEchoState(state, value) {
 }
 function __r25PtyRegexShape(value) {
   const shape = { probe_command_count: 0, probe_command_line_count: 0, probe_output_line_count: 0, probe_command_output_sequence_count: 0,
+    probe_command_sgr_split_count: 0,
     probe_command_separator_count: 0, probe_output_separator_count: 0, repeated_prefix_equal: false,
     repeated_prefix_check_count: 0, shape_scan_truncated: false };
   if (typeof value !== 'string') return shape;
@@ -204,6 +206,11 @@ function __r25PtyRegexShape(value) {
   const limit = text.length;
   shape.shape_scan_truncated = limit < value.length;
   const cap = count => Math.min(1000, count);
+  const sgrSplit = /echo (?:(?:\u001b\[[0-?]*[ -/]*m)+)pinokio/g;
+  let split;
+  while (shape.probe_command_sgr_split_count < 1000 && (split = sgrSplit.exec(text)) !== null) {
+    shape.probe_command_sgr_split_count = cap(shape.probe_command_sgr_split_count + 1);
+  }
   let from = 0;
   while (from < limit && shape.probe_command_count < 1000) {
     const index = text.indexOf('echo pinokio', from);
@@ -282,6 +289,7 @@ function __r25PtyProcessing(state, stage, values = {}) {
       probe_command_line_count: state.probe_command_line_count,
       probe_output_line_count: state.probe_output_line_count,
       probe_command_output_sequence_count: state.probe_command_output_sequence_count,
+      probe_command_sgr_split_count: state.probe_command_sgr_split_count,
       probe_command_separator_count: state.probe_command_separator_count,
       probe_output_separator_count: state.probe_output_separator_count,
       repeated_prefix_equal: state.repeated_prefix_equal,
