@@ -11,6 +11,7 @@ const binding = require('../../pinokio/providers/r25-native-collector-binding.cj
 const { createObserverIO } = require('./r21-observer-io.cjs');
 const { ptermExit, createInstallDiagnostics, terminateChild, redactDiagnosticText } = require('./r21-observer-diagnostics.cjs');
 const { captureWindowsProcessTree } = require('./r25-windows-process-snapshot.cjs');
+const { applyPinokiodPtyInstrumentation } = require('./r25-pinokiod-pty-instrumentation.cjs');
 
 const AGENT_REF = binding.AGENT_SOURCE_REF;
 const PINOKIO_SOURCE_REF = '95aafb5a029c3f53cb2268d8596909eab0deb3c4';
@@ -110,6 +111,15 @@ function copyFirstInstallerLog(candidates, destination, limit = DIAGNOSTIC_CAPTU
     if (result.status === 'captured') return result;
   }
   return { status: 'unavailable', bytes: 0, truncated: false };
+}
+
+function copyPreTimeoutCapture(source, destination) {
+  try {
+    fs.copyFileSync(source, destination);
+    return 'captured';
+  } catch {
+    return 'unavailable';
+  }
 }
 
 async function githubJson(url) {
@@ -275,7 +285,11 @@ async function main() {
   if (!ptermRoot || !pinokiodRoot || !cli['agent-root']) throw new Error('runner roots are incomplete');
   await verifyAppCandidate(tuple);
   binding.validateSourceRoots({ agentRoot: path.resolve(cli['agent-root']), pinokioRoot: process.cwd(), agentRef: AGENT_REF });
+  const ptyInstrumentation = setupOnly ? applyPinokiodPtyInstrumentation(pinokiodRoot, {
+    diagnosticFile: path.join(diagnostics, 'r25-pty-diagnostics.jsonl'),
+  }) : { enabled: false, diagnostic_file_bound: false };
   const engineBinding = materializeProduct(productRoot, appRoot);
+  engineBinding.pinokiod_pty = ptyInstrumentation;
   const environment = path.join(appRoot, '_ENVIRONMENT');
   fs.writeFileSync(environment, '# R-25 run-owned candidate pin\nASTRID_APP_REF=lane/M-APP/PINOKIO-APP-BINDING\n', { encoding: 'utf8', flag: 'w', mode: 0o600 });
   fs.writeFileSync(requestPath, `${JSON.stringify(request, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
@@ -294,6 +308,7 @@ async function main() {
     pterm_ref: process.env.PTERM_REF || null,
     pinokiod_ref: process.env.PINOKIOD_REF || null,
     shell_overlay: engineBinding.overlay,
+    pinokiod_pty: engineBinding.pinokiod_pty,
   }, value => {
     const file = path.join(diagnostics, 'r25-install-diagnostics.json');
     fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
@@ -301,7 +316,8 @@ async function main() {
   });
   const daemonEnv = { ...process.env, HOME: userHome, XDG_DATA_HOME: path.join(home, 'data'), PINOKIO_HOME: home,
     PINOKIO_HTTPS_ACTIVE: '0', PINOKIO_NETWORK_ACTIVE: '0',
-    ...(setupOnly ? { ASTRID_R25_SETUP_DIAGNOSTICS: '1' } : {}) };
+    ...(setupOnly ? { ASTRID_R25_SETUP_DIAGNOSTICS: '1' } : {}),
+    ...(setupOnly ? { ASTRID_R25_PTY_CAPTURE_FILE: path.join(diagnostics, 'r25-pty-diagnostics.jsonl') } : {}) };
   const daemonOutput = setupOnly ? {
     stdout: createBoundedCapture(path.join(diagnostics, 'daemon.stdout.log')),
     stderr: createBoundedCapture(path.join(diagnostics, 'daemon.stderr.log')),
@@ -356,6 +372,10 @@ async function main() {
       setupDiagnostics.shell(shellDiagnosticFile);
       const ptermStatus = flushCaptures(ptermOutput);
       const daemonStatus = flushCaptures(daemonOutput);
+      const preTimeoutPtermStdout = copyPreTimeoutCapture(path.join(diagnostics, 'pterm.stdout.log'), path.join(diagnostics, 'pterm.stdout.before-timeout.log'));
+      const preTimeoutPtermStderr = copyPreTimeoutCapture(path.join(diagnostics, 'pterm.stderr.log'), path.join(diagnostics, 'pterm.stderr.before-timeout.log'));
+      const preTimeoutDaemonStdout = copyPreTimeoutCapture(path.join(diagnostics, 'daemon.stdout.log'), path.join(diagnostics, 'daemon.stdout.before-timeout.log'));
+      const preTimeoutDaemonStderr = copyPreTimeoutCapture(path.join(diagnostics, 'daemon.stderr.log'), path.join(diagnostics, 'daemon.stderr.before-timeout.log'));
       const snapshot = await captureWindowsProcessTree({ rootPids: [...new Set([value.pid, daemon.pid].filter(Number.isInteger))] });
       fs.writeFileSync(path.join(diagnostics, 'process-tree-before-timeout.json'), `${JSON.stringify(snapshot, null, 2)}\n`, {
         encoding: 'utf8', flag: 'w', mode: 0o600,
@@ -366,7 +386,9 @@ async function main() {
       setupDiagnostics.beforeTimeout({ at: value.at, pterm_pid: value.pid, pterm_ppid: value.ppid,
         daemon_pid: daemon.pid, daemon_ppid: process.pid, process_snapshot: snapshot.status,
         process_snapshot_error: snapshot.error, installer_output: installerOutput.status,
-        pterm_output: ptermStatus, daemon_output: daemonStatus });
+        pterm_output: ptermStatus, daemon_output: daemonStatus,
+        pre_timeout_pterm_stdout: preTimeoutPtermStdout, pre_timeout_pterm_stderr: preTimeoutPtermStderr,
+        pre_timeout_daemon_stdout: preTimeoutDaemonStdout, pre_timeout_daemon_stderr: preTimeoutDaemonStderr });
     },
   }) : setupDiagnostics;
   let worker;
