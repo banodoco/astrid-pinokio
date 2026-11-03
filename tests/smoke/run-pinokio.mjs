@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import library from '../../pinokio/lib.js';
 import { signalGroup } from '../../pinokio/session.mjs';
+import { createKeepGoingRecorder, diagnosticKeepGoingEnabled } from './keepgoing.mjs';
 import { runTool as executeTool, timedStep } from './process.mjs';
 
 const require = createRequire(import.meta.url);
@@ -21,7 +22,40 @@ function log(message) {
   process.stdout.write(`[pinokio-smoke] ${message}\n`);
 }
 
-const step = (name, action) => timedStep(name, action, log);
+const keepGoing = createKeepGoingRecorder({ enabled: diagnosticKeepGoingEnabled() });
+const stageNeeds = {
+  'hosted install': ['setup'], 'hosted install records': ['hosted install'], 'hosted services after install': ['hosted install'],
+  'hosted Start': ['hosted install'], 'hosted health': ['hosted Start'], 'hosted health assertions': ['hosted health'],
+  'hosted Stop': ['hosted health assertions'], 'hosted Stop ports': ['hosted Stop'], 'hosted Update': ['hosted Stop'],
+  'Update READY: hosted health immediately after Update': ['hosted Update'], 'Update health assertions': ['Update READY: hosted health immediately after Update'],
+  'backend update records': ['hosted Update'], 'hosted services after Update': ['hosted Update'], 'Stop Update session': ['hosted Update'],
+  'Update session port': ['Stop Update session'], 'restart Start': ['Stop Update session'], 'restart daemon ownership': ['restart Start'],
+  'restarted hosted health': ['restart Start'], 'restarted health assertion': ['restarted hosted health'], 'final hosted Stop': ['restarted health assertion'],
+  'final hosted Stop ports': ['final hosted Stop'], 'hosted Uninstall': ['final hosted Stop'], 'hosted uninstall checks': ['hosted Uninstall'],
+  'fully-local install': ['setup'], 'fully-local install records': ['fully-local install'], 'fully-local services after install': ['fully-local install'],
+  'fully-local Start': ['fully-local install'], 'local editor page': ['fully-local Start'], 'local editor page assertions': ['local editor page'],
+  'local Runtime proxy health': ['fully-local Start'], 'local Runtime proxy assertions': ['local Runtime proxy health'],
+  'hosted door is off': ['fully-local Start'], 'fully-local Stop': ['fully-local Start'], 'fully-local Stop checks': ['fully-local Stop'],
+  'fully-local Update': ['fully-local Stop'], 'local editor after Update restart': ['fully-local Update'],
+  'local editor after Update restart assertions': ['local editor after Update restart'], 'final fully-local Stop': ['fully-local Update'],
+  'fully-local final checks': ['final fully-local Stop'],
+};
+const stageProduces = {
+  setup: ['smoke-fixture-ready'], 'hosted install': ['backend-installed'], 'hosted install records': ['backend-install-records-verified'],
+  'hosted Start': ['hosted-start-session'], 'hosted health': ['hosted-door-responded'], 'hosted health assertions': ['hosted-health-qualified'],
+  'hosted Stop': ['hosted-stop-completed'], 'hosted Stop ports': ['hosted-ports-free'], 'hosted Update': ['backend-updated'],
+  'Update READY: hosted health immediately after Update': ['updated-hosted-door-responded'], 'backend update records': ['backend-update-records-verified'],
+  'Stop Update session': ['update-session-stopped'], 'restart Start': ['hosted-restarted'], 'restarted hosted health': ['restarted-health-responded'],
+  'hosted Uninstall': ['backend-uninstalled'], 'fully-local install': ['fully-local-installed'],
+  'fully-local install records': ['fully-local-install-records-verified'], 'fully-local Start': ['fully-local-started'],
+  'local editor page': ['editor-page-responded'], 'local Runtime proxy health': ['runtime-proxy-responded'],
+  'fully-local Stop': ['fully-local-stopped'], 'fully-local Update': ['fully-local-updated'],
+  'local editor after Update restart': ['updated-editor-responded'], 'final fully-local Stop': ['final-fully-local-stop'],
+};
+const step = (name, action, options = {}) => keepGoing.run(name, () => timedStep(name, action, log), {
+  needs: options.needs ?? stageNeeds[name],
+  produces: options.produces ?? stageProduces[name],
+});
 
 function load(file, app, appDirectory) {
   const filename = path.join(appDirectory, file);
@@ -346,25 +380,25 @@ async function invokeAction(name, app, appDirectory, environment, home, getDaemo
   const loaded = load(`pinokio/${name}.js`, app, appDirectory);
   const script = typeof loaded === 'function' ? await loaded({}, {}) : loaded;
   const kernel = kernelFor(app, getDaemon, stopDaemon);
-  for (const [offset, step] of script.run.entries()) {
-    await timedStep(`${name} ${offset + 1}/${script.run.length} ${typeof step.method === 'string' ? step.method : 'callback'}`, async () => {
-      if (step.method === 'shell.run') {
+  for (const [offset, pinokioStep] of script.run.entries()) {
+    await step(`${name} ${offset + 1}/${script.run.length} ${typeof pinokioStep.method === 'string' ? pinokioStep.method : 'callback'}`, async () => {
+      if (pinokioStep.method === 'shell.run') {
         if (name === 'start' && script.daemon) {
-          await launchShell(step, { ...environment, ASTRID_PINOKIO_APP_DIR: appDirectory }, {
+          await launchShell(pinokioStep, { ...environment, ASTRID_PINOKIO_APP_DIR: appDirectory }, {
             background: true, onSpawn: getDaemon.set,
           });
         } else {
-          await launchShell(step, { ...environment, ASTRID_PINOKIO_APP_DIR: appDirectory });
+          await launchShell(pinokioStep, { ...environment, ASTRID_PINOKIO_APP_DIR: appDirectory });
         }
-      } else if (step.method === 'script.start') {
+      } else if (pinokioStep.method === 'script.start') {
         await invokeAction('start', app, appDirectory, environment, home, getDaemon, stopDaemon);
-      } else if (step.method === 'local.set') {
-        log(`Pinokio published ${JSON.stringify(step.params)}`);
-      } else if (typeof step.method === 'function') {
-        const result = await step.method({}, (value) => { if (value?.raw) process.stdout.write(value.raw); }, kernel);
+      } else if (pinokioStep.method === 'local.set') {
+        log(`Pinokio published ${JSON.stringify(pinokioStep.params)}`);
+      } else if (typeof pinokioStep.method === 'function') {
+        const result = await pinokioStep.method({}, (value) => { if (value?.raw) process.stdout.write(value.raw); }, kernel);
         log(`${name}: ${JSON.stringify(result ?? {})}`);
-      } else throw new Error(`Unhandled Pinokio step in ${name}: ${String(step.method)}`);
-    }, log);
+      } else throw new Error(`Unhandled Pinokio step in ${name}: ${String(pinokioStep.method)}`);
+    });
   }
   return script;
 }
@@ -372,6 +406,7 @@ async function invokeAction(name, app, appDirectory, environment, home, getDaemo
 async function stopDaemon(getDaemon) {
   const child = getDaemon();
   if (!child) return;
+  assert.equal(child.pinokioSmokeOwner, getDaemon.owner, 'refusing cleanup of a process not owned by this smoke run');
   await processTreeKill(child);
   await child.exit;
   getDaemon.set(null);
@@ -440,52 +475,69 @@ async function setup() {
 
 async function runHosted() {
   const context = await step('setup', setup);
+  if (!context) {
+    for (const name of ['hosted install', 'hosted install records', 'hosted services after install', 'hosted Start', 'hosted health', 'hosted Stop', 'hosted Update', 'Update health', 'backend update records', 'hosted services after Update', 'Stop Update session', 'restart Start', 'restarted hosted health', 'final hosted Stop', 'hosted Uninstall']) keepGoing.skip(name, ['setup']);
+    keepGoing.write();
+    return;
+  }
   const { pinokioHome, userHome, appDirectory, cacheDirectory, environment, app, servicesBefore } = context;
   let daemon = null;
   const getDaemon = () => daemon;
-  getDaemon.set = (value) => { daemon = value; };
+  getDaemon.owner = Symbol('hosted smoke daemon');
+  getDaemon.set = (value) => { if (value) value.pinokioSmokeOwner = getDaemon.owner; daemon = value; };
   const stop = async () => stopDaemon(getDaemon);
   try {
     log(`platform ${process.platform}; Pinokio home ${pinokioHome}`);
-    await invokeAction('install', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    verifyInstallRecords(app, pinokioHome, 'backend');
-    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
+    await step('hosted install', () => invokeAction('install', app, appDirectory, environment, pinokioHome, getDaemon, stop));
+    await step('hosted install records', () => verifyInstallRecords(app, pinokioHome, 'backend'));
+    await step('hosted services after install', () => assertNoServices(pinokioHome, userHome, environment, servicesBefore));
 
-    await invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    await step('hosted Start', () => invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop));
     let health = await step('hosted health', () => requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment }));
-    assert.equal(health.status, 200, JSON.stringify(health.body));
-    assert.equal(health.body.install?.managed_by, 'pinokio', JSON.stringify(health.body));
-    log(`health confirms install.managed_by=${health.body.install.managed_by}`);
+    await step('hosted health assertions', () => {
+      assert.equal(health?.status, 200, JSON.stringify(health?.body));
+      assert.equal(health?.body.install?.managed_by, 'pinokio', JSON.stringify(health?.body));
+    });
+    if (health?.body?.install?.managed_by) log(`health confirms install.managed_by=${health.body.install.managed_by}`);
 
-    await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    assert.equal(await freePort(17340), true, 'port 17340 remained open after Stop');
-    assert.equal(await freePort(5180), true, 'port 5180 remained open after Stop');
+    await step('hosted Stop', () => invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop));
+    await step('hosted Stop ports', async () => {
+      assert.equal(await freePort(17340), true, 'port 17340 remained open after Stop');
+      assert.equal(await freePort(5180), true, 'port 5180 remained open after Stop');
+    });
 
-    await invokeAction('update', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    await step('hosted Update', () => invokeAction('update', app, appDirectory, environment, pinokioHome, getDaemon, stop));
     health = await step('Update READY: hosted health immediately after Update', () => requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment }));
-    assert.equal(health.status, 200, JSON.stringify(health.body));
-    assert.equal(health.body.install?.managed_by, 'pinokio', JSON.stringify(health.body));
-    verifyInstallRecords(app, pinokioHome, 'backend update');
-    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
+    await step('Update health assertions', () => {
+      assert.equal(health?.status, 200, JSON.stringify(health?.body));
+      assert.equal(health?.body.install?.managed_by, 'pinokio', JSON.stringify(health?.body));
+    });
+    await step('backend update records', () => verifyInstallRecords(app, pinokioHome, 'backend update'));
+    await step('hosted services after Update', () => assertNoServices(pinokioHome, userHome, environment, servicesBefore));
 
-    await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    assert.equal(await freePort(17340), true, 'port 17340 remained open after stopping the Update-launched session');
-    await invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    assert.ok(daemon, 'the separate Start must own a fresh Pinokio Start shell');
+    await step('Stop Update session', () => invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop));
+    await step('Update session port', async () => assert.equal(await freePort(17340), true, 'port 17340 remained open after stopping the Update-launched session'));
+    await step('restart Start', () => invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop));
+    await step('restart daemon ownership', () => assert.ok(daemon, 'the separate Start must own a fresh Pinokio Start shell'));
     health = await step('restarted hosted health', () => requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment }));
-    assert.equal(health.status, 200, JSON.stringify(health.body));
+    await step('restarted health assertion', () => assert.equal(health?.status, 200, JSON.stringify(health?.body)));
 
-    await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    assert.equal(await freePort(17340), true, 'port 17340 remained open after the second Stop');
-    assert.equal(await freePort(5180), true, 'port 5180 remained open after the second Stop');
-    await invokeAction('uninstall', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    assert.equal(fs.existsSync(app.PROGRAMS_DIR), false, `Uninstall left the program root: ${app.PROGRAMS_DIR}`);
-    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
-    assert.deepEqual(cacheAstridPaths(cacheDirectory), [],
-      `Astrid-owned files remain under Pinokio cache: ${cacheAstridPaths(cacheDirectory).join(', ')}`);
+    await step('final hosted Stop', () => invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop));
+    await step('final hosted Stop ports', async () => {
+      assert.equal(await freePort(17340), true, 'port 17340 remained open after the second Stop');
+      assert.equal(await freePort(5180), true, 'port 5180 remained open after the second Stop');
+    });
+    await step('hosted Uninstall', () => invokeAction('uninstall', app, appDirectory, environment, pinokioHome, getDaemon, stop));
+    await step('hosted uninstall checks', async () => {
+      assert.equal(fs.existsSync(app.PROGRAMS_DIR), false, `Uninstall left the program root: ${app.PROGRAMS_DIR}`);
+      await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
+      assert.deepEqual(cacheAstridPaths(cacheDirectory), [],
+        `Astrid-owned files remain under Pinokio cache: ${cacheAstridPaths(cacheDirectory).join(', ')}`);
+    });
     log('PASS: hosted install, Start, health, Stop, Update, restart, health, Stop, and Uninstall');
   } finally {
     if (daemon) await step('cleanup Start process', stop);
+    keepGoing.write();
     fs.rmSync(pinokioHome, { recursive: true, force: true });
     fs.rmSync(userHome, { recursive: true, force: true });
   }
@@ -493,50 +545,65 @@ async function runHosted() {
 
 async function runFullyLocal() {
   const context = await step('setup', setup);
+  if (!context) {
+    for (const name of ['fully-local install', 'fully-local install records', 'fully-local services after install', 'fully-local Start', 'local editor page', 'local editor page assertions', 'local Runtime proxy health', 'local Runtime proxy assertions', 'hosted door is off', 'fully-local Stop', 'fully-local Stop checks', 'fully-local Update', 'local editor after Update restart', 'final fully-local Stop', 'fully-local final checks']) keepGoing.skip(name, ['setup']);
+    keepGoing.write();
+    return;
+  }
   const { pinokioHome, userHome, appDirectory, cacheDirectory, environment, app, servicesBefore } = context;
   let daemon = null;
   const getDaemon = () => daemon;
-  getDaemon.set = (value) => { daemon = value; };
+  getDaemon.owner = Symbol('fully-local smoke daemon');
+  getDaemon.set = (value) => { if (value) value.pinokioSmokeOwner = getDaemon.owner; daemon = value; };
   const stop = async () => stopDaemon(getDaemon);
   try {
     log(`fully local on ${process.platform}; Pinokio home ${pinokioHome}`);
-    await invokeAction('install-local', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    verifyInstallRecords(app, pinokioHome, 'fully local');
-    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
-    await invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    await step('fully-local install', () => invokeAction('install-local', app, appDirectory, environment, pinokioHome, getDaemon, stop));
+    await step('fully-local install records', () => verifyInstallRecords(app, pinokioHome, 'fully local'));
+    await step('fully-local services after install', () => assertNoServices(pinokioHome, userHome, environment, servicesBefore));
+    await step('fully-local Start', () => invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop));
 
     const page = await step('local editor page', () => runTool('curl', ['--max-time', '30', '--silent', '--show-error', '--write-out', '\n%{http_code}',
       'http://127.0.0.1:5180/tools/video-editor'], environment));
-    const pageStatus = Number(page.trim().split(/\r?\n/).at(-1));
-    assert.equal(pageStatus, 200, `editor page did not load (HTTP ${pageStatus})`);
-    assert.match(page, /<html/i, 'editor route did not serve HTML');
+    await step('local editor page assertions', () => {
+      const pageStatus = Number(page?.trim().split(/\r?\n/).at(-1));
+      assert.equal(pageStatus, 200, `editor page did not load (HTTP ${pageStatus})`);
+      assert.match(page || '', /<html/i, 'editor route did not serve HTML');
+    });
 
     const proxyHealth = await step('local Runtime proxy health', () => requestJson('http://127.0.0.1:5180/api/runtime/v1/health', { environment }));
-    assert.equal(proxyHealth.status, 200, JSON.stringify(proxyHealth.body));
-    assert.equal(proxyHealth.body.protocol, 'workspace.v1', JSON.stringify(proxyHealth.body));
+    await step('local Runtime proxy assertions', () => {
+      assert.equal(proxyHealth?.status, 200, JSON.stringify(proxyHealth?.body));
+      assert.equal(proxyHealth?.body.protocol, 'workspace.v1', JSON.stringify(proxyHealth?.body));
+    });
 
     await step('hosted door is off', async () => {
       assert.equal(await freePort(17340), true, 'fully local mode opened the hosted browser door');
     });
     log('fully local editor and Runtime proxy are ready; hosted browser door is off');
 
-    await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    assert.equal(await freePort(17340), true, 'port 17340 remained open after fully local Stop');
-    assert.equal(await freePort(5180), true, 'port 5180 remained open after fully local Stop');
-    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
+    await step('fully-local Stop', () => invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop));
+    await step('fully-local Stop checks', async () => {
+      assert.equal(await freePort(17340), true, 'fully local mode opened the hosted browser door');
+      assert.equal(await freePort(5180), true, 'port 5180 remained open after fully local Stop');
+      await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
+    });
 
-    await invokeAction('update', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    await step('fully-local Update', () => invokeAction('update', app, appDirectory, environment, pinokioHome, getDaemon, stop));
     const restartedPage = await step('local editor after Update restart', () => runTool('curl', ['--max-time', '30', '--silent', '--show-error', '--write-out', '\n%{http_code}',
       'http://127.0.0.1:5180/tools/video-editor'], environment));
-    assert.equal(Number(restartedPage.trim().split(/\r?\n/).at(-1)), 200, 'local editor did not become ready after Start');
-    await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
-    assert.equal(await freePort(5180), true, 'port 5180 remained open after the final local Stop');
-    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
-    assert.deepEqual(cacheAstridPaths(cacheDirectory), [],
-      `Astrid-owned files were created under Pinokio cache: ${cacheAstridPaths(cacheDirectory).join(', ')}`);
+    await step('local editor after Update restart assertions', () => assert.equal(Number(restartedPage?.trim().split(/\r?\n/).at(-1)), 200, 'local editor did not become ready after Start'));
+    await step('final fully-local Stop', () => invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop));
+    await step('fully-local final checks', async () => {
+      assert.equal(await freePort(5180), true, 'port 5180 remained open after the final local Stop');
+      await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
+      assert.deepEqual(cacheAstridPaths(cacheDirectory), [],
+        `Astrid-owned files were created under Pinokio cache: ${cacheAstridPaths(cacheDirectory).join(', ')}`);
+    });
     log('PASS: fully local install, Update restart, hosted door off, and Stop');
   } finally {
     if (daemon) await step('cleanup Start process', stop);
+    keepGoing.write();
     fs.rmSync(pinokioHome, { recursive: true, force: true });
     fs.rmSync(userHome, { recursive: true, force: true });
   }
