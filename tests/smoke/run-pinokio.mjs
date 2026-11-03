@@ -110,7 +110,7 @@ function prepareCheckout(source, appDirectory) {
   execFileSync('git', ['clone', '--branch', branch, '--single-branch', source, appDirectory], { stdio: 'inherit' });
   const environmentFile = path.join(appDirectory, '_ENVIRONMENT');
   let environment = fs.readFileSync(environmentFile, 'utf8');
-  const refSetting = /^\s*ASTRID_APP_REF\s*=.*$/m;
+  const refSetting = /^[ \t]*ASTRID_APP_REF[ \t]*=.*$/m;
   environment = refSetting.test(environment)
     ? environment.replace(refSetting, 'ASTRID_APP_REF=main')
     : `${environment.trimEnd()}\nASTRID_APP_REF=main\n`;
