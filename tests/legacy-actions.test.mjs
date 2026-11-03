@@ -9,6 +9,10 @@ import { test } from 'node:test';
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const agent = path.resolve(repository, '../../../../astrid-agent');
 const revisions = ['bbba620e', 'c3b4cd5', '5e1f256'];
+const paths = process.platform === 'win32' ? path.win32 : path.posix;
+const appDirectory = paths.join('/tmp', 'pinokio', 'Astrid');
+const editorDirectory = paths.join(appDirectory, 'app', 'astrid');
+const editorManifest = paths.join(editorDirectory, 'public', 'install-manifest.json');
 
 function oldModule(revision, file, app) {
   const source = revision === 'working' ? fs.readFileSync(path.join(repository, file), 'utf8')
@@ -27,9 +31,9 @@ function oldModule(revision, file, app) {
 function fixture(mode, editorExists = true) {
   const calls = [];
   const app = {
-    APP_DIR: '/tmp/pinokio/Astrid',
-    EDITOR_DIR: '/tmp/pinokio/Astrid/app/astrid',
-    paths: path.posix,
+    APP_DIR: appDirectory,
+    EDITOR_DIR: editorDirectory,
+    paths,
     readInstallMode: () => mode,
     modeOpenTarget: (selected) => ({ href: `http://127.0.0.1:17340/${selected}` }),
     probeDoor: async () => ({ kind: 'free' }),
@@ -63,7 +67,7 @@ async function buildAction(revision, file, mode, editorExists = true) {
 }
 
 function askCurrentAgentParser(action, manifest) {
-  const args = ['--root', '/tmp/pinokio/Astrid/app/astrid', '--managed-by', 'pinokio'];
+  const args = ['--root', editorDirectory, '--managed-by', 'pinokio'];
   if (action !== 'install') args.push(`--${action}`);
   if (manifest) args.push('--manifest', manifest);
   const code = [
@@ -96,7 +100,7 @@ test('historical backend Update arrays preserve launcher-pull order and reach th
 
 test('historical fully-local Install and Update arrays retain the editor manifest route', async () => {
   const install = await buildAction('bbba620e', 'pinokio/install-local.js', 'local', false);
-  assert.deepEqual(install.calls, [{ action: 'install', manifest: '/tmp/pinokio/Astrid/app/astrid/public/install-manifest.json' }]);
+  assert.deepEqual(install.calls, [{ action: 'install', manifest: editorManifest }]);
   assert.equal(install.steps.findIndex((step) => step.params?.message === 'OLD_EDITOR_CLONE') >= 0, true);
   assert.equal(askCurrentAgentParser(install.calls[0].action, install.calls[0].manifest).mode, 'install');
 
@@ -108,7 +112,7 @@ test('historical fully-local Install and Update arrays retain the editor manifes
     assert.equal(launcherPull, revision !== '5e1f256', `${revision}: actual launcher-pull position`);
     assert.ok(steps.slice(0, installerStep).some((step) => step.params?.message === 'OLD_EDITOR_PULL'),
       `${revision}: editor pull precedes local manifest invocation`);
-    assert.deepEqual(calls, [{ action: 'update', manifest: '/tmp/pinokio/Astrid/app/astrid/public/install-manifest.json' }]);
+    assert.deepEqual(calls, [{ action: 'update', manifest: editorManifest }]);
     const parsed = askCurrentAgentParser(calls[0].action, calls[0].manifest);
     assert.equal(parsed.mode, 'update');
     assert.equal(parsed.managed_by, 'pinokio');
@@ -118,12 +122,12 @@ test('historical fully-local Install and Update arrays retain the editor manifes
 
 test('current fully-local clicks preserve the existing editor-manifest installer route', async () => {
   const installed = await buildAction('working', 'pinokio/install-local.js', 'local', false);
-  assert.deepEqual(installed.calls, [{ action: 'install', manifest: '/tmp/pinokio/Astrid/app/astrid/public/install-manifest.json' }]);
+  assert.deepEqual(installed.calls, [{ action: 'install', manifest: editorManifest }]);
   assert.equal(installed.steps.some((step) => step.params?.message === 'OLD_EDITOR_CLONE'), true);
   assert.equal(installed.steps.some((step) => step.method === 'session' && step.args[0] === 'build'), true);
 
   const updated = await buildAction('working', 'pinokio/update.js', 'local');
-  assert.deepEqual(updated.calls, [{ action: 'update', manifest: '/tmp/pinokio/Astrid/app/astrid/public/install-manifest.json' }]);
+  assert.deepEqual(updated.calls, [{ action: 'update', manifest: editorManifest }]);
   const messages = Array.from(updated.steps, (step) => step.params?.message).filter(Boolean);
   assert.deepEqual(messages, ['OLD_LAUNCHER_PULL', 'OLD_EDITOR_PULL',
     `AGENT_INSTALLER:${JSON.stringify(updated.calls[0])}`]);

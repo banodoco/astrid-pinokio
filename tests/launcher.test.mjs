@@ -267,12 +267,17 @@ test('Update performs only installed-CLI recovery before any new launcher or man
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const appDirectory = path.join(temporary, 'pinokio', 'api', 'Astrid');
   const root = path.join(appDirectory, 'app', 'astrid');
+  const installPath = process.platform === 'win32' ? path.win32 : path.posix;
   const makeVersion = (version, release) => {
     const versionRoot = path.join(root, 'versions', version);
-    const node = path.join(versionRoot, 'node', 'bin', 'node');
+    const node = process.platform === 'win32'
+      ? path.join(versionRoot, 'node', 'node.exe')
+      : path.join(versionRoot, 'node', 'bin', 'node');
     const python = path.join(versionRoot, 'py', 'bin', 'python');
     const profile = path.join(versionRoot, 'profile.json');
-    const npm = path.resolve(path.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    const npm = process.platform === 'win32'
+      ? installPath.join(installPath.dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+      : installPath.resolve(installPath.dirname(node), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
     const npx = path.join(path.dirname(npm), 'npx-cli.js');
     for (const file of [node, python, profile, npm, npx]) fs.mkdirSync(path.dirname(file), { recursive: true });
     for (const file of [node, python, profile, npm, npx]) fs.writeFileSync(file, '');
@@ -288,7 +293,7 @@ test('Update performs only installed-CLI recovery before any new launcher or man
   fs.writeFileSync(path.join(root, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: path.join(temporary, 'data') }));
   fs.writeFileSync(path.join(root, 'update-transaction.json'), JSON.stringify({ format: 'astrid-install-update/v1', step: 'switched', operation_id: 'a'.repeat(32), candidate }));
   let invoked;
-  const app = library.createApp({ platform: 'linux', appDirectory, environment: {}, execute: (command, args, options) => {
+  const app = library.createApp({ platform: process.platform, appDirectory, environment: {}, execute: (command, args, options) => {
     invoked = { command, args, options }; return { status: 0, stdout: 'recovered\n', stderr: '' };
   } });
   const script = await load('pinokio/update.js', app)({}, {});
@@ -315,7 +320,7 @@ test('Update performs only installed-CLI recovery before any new launcher or man
   let releaseChild;
   let childStarted;
   const started = new Promise((resolve) => { childStarted = resolve; });
-  const streamedApp = library.createApp({ platform: 'linux', appDirectory, environment: {},
+  const streamedApp = library.createApp({ platform: process.platform, appDirectory, environment: {},
     spawnProcess: (command, args, options) => {
       assert.equal(command, old.python);
       assert.deepEqual(args, ['-I', '-m', 'astrid', 'install', '--root', root, '--managed-by', 'pinokio']);
@@ -1237,7 +1242,7 @@ test('fully-local Update route stages failure, promotes success, and reports ins
     const target = git(seed, 'rev-parse', 'HEAD');
     const events = [];
     let ready = true;
-    const app = library.createApp({ platform: 'linux', appDirectory, environment: process.env,
+    const app = library.createApp({ platform: process.platform, appDirectory, environment: process.env,
       lifecycle: { preflightStop: async () => { events.push('preflight'); },
         requestGracefulStop: async () => { events.push('stop'); ready = false; }, waitForInstallerLock: async () => {} },
       localUpdateOperations: {
