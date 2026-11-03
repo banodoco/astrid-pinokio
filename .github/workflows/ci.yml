@@ -33,7 +33,7 @@ on:
     - cron: '17 4 * * *'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.r25_slot_id != 'none' && inputs.r25_slot_id || 'default' }}
   cancel-in-progress: true
 
 permissions:
