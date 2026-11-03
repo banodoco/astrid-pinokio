@@ -63,14 +63,15 @@ test('macOS sequence binds and invokes the corrected immutable wrapper', () => {
   assert.match(wrapper, /\[ "\$python_version" = 3\.11 \]/);
 
   const observerPath = path.join(__dirname, '..', '.github', 'venue', 'r21-observer-diagnostics.cjs');
+  const pinnedRunner = childProcess.execFileSync('git', ['show', `${venueRef}:.github/venue/r25-snapshot-runner.cjs`]);
   assert.match(wrapper, /cd "\$venue_root"/);
   assert.match(wrapper, /node \.github\/venue\/r25-snapshot-runner\.cjs/);
   assert.match(runner, /require\('\.\/r21-observer-diagnostics\.cjs'\)/);
   assert.ok(sequence.indexOf('verify_inner_source .github/venue/r21-observer-diagnostics.cjs')
     < sequence.indexOf('bash "$wrapper_path"'));
-  assert.equal(crypto.createHash('sha256').update(fs.readFileSync(runnerPath)).digest('hex'), runnerSha256);
+  assert.equal(crypto.createHash('sha256').update(pinnedRunner).digest('hex'), runnerSha256);
   assert.equal(crypto.createHash('sha256').update(fs.readFileSync(observerPath)).digest('hex'), observerSha256);
-  assert.equal(childProcess.execFileSync('git', ['rev-parse', `HEAD:${path.relative(path.join(__dirname, '..'), runnerPath)}`], { encoding: 'utf8' }).trim(), runnerBlob);
+  assert.equal(childProcess.execFileSync('git', ['rev-parse', `${venueRef}:${path.relative(path.join(__dirname, '..'), runnerPath)}`], { encoding: 'utf8' }).trim(), runnerBlob);
   assert.equal(childProcess.execFileSync('git', ['rev-parse', `HEAD:${path.relative(path.join(__dirname, '..'), observerPath)}`], { encoding: 'utf8' }).trim(), observerBlob);
 });
 
