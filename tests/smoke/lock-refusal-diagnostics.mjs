@@ -2,6 +2,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const UNKNOWN = 'unknown';
+const PROC_LOCKS_BYTES = 128 * 1024;
+const CMDLINE_BYTES = 8 * 1024;
+const FD_SCAN_LIMIT = 64;
+
+function readBoundedText(filename, maximumBytes) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(filename, 'r');
+    const buffer = Buffer.alloc(maximumBytes);
+    let bytesRead = 0;
+    while (bytesRead < maximumBytes) {
+      const count = fs.readSync(descriptor, buffer, bytesRead, maximumBytes - bytesRead, null);
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    return { text: buffer.subarray(0, bytesRead).toString('utf8'), truncated: bytesRead === maximumBytes };
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
 
 function linuxDeviceParts(device) {
   const major = ((device >> 8n) & 0xfffn) | ((device >> 32n) & 0xfffff000n);
@@ -11,11 +31,13 @@ function linuxDeviceParts(device) {
 
 function safeArgv(procRoot, pid) {
   try {
-    const values = fs.readFileSync(path.join(procRoot, String(pid), 'cmdline'), 'utf8')
-      .split('\0').filter(Boolean).slice(0, 6);
-    if (!values.length) return UNKNOWN;
+    const { text, truncated: bytesTruncated } = readBoundedText(path.join(procRoot, String(pid), 'cmdline'), CMDLINE_BYTES);
+    const allValues = text.split('\0').filter(Boolean);
+    const values = allValues.slice(0, 6);
+    const truncated = bytesTruncated || allValues.length > values.length;
+    if (!values.length) return { value: UNKNOWN, truncated };
     let redactNext = false;
-    return values.map((value, index) => {
+    const argumentsText = values.map((value, index) => {
       if (index === 0) return path.basename(value).slice(0, 80) || UNKNOWN;
       const sensitive = /password|passwd|token|secret|credential|authorization|api[-_]?key/i.test(value);
       if (redactNext) {
@@ -29,8 +51,9 @@ function safeArgv(procRoot, pid) {
       if (value.startsWith('/') || value.includes('://') || value.length > 80) return '<redacted>';
       return value.replace(/[\r\n\t]/g, ' ').slice(0, 80);
     }).join(' ');
+    return { value: argumentsText, truncated };
   } catch {
-    return UNKNOWN;
+    return { value: UNKNOWN, truncated: false };
   }
 }
 
@@ -47,15 +70,28 @@ function processIdentity(procRoot, pid, lockStat, lockPathLabel) {
   let parent = UNKNOWN;
   if (typeof ppid === 'number' && ppid > 0) {
     let parentComm = UNKNOWN;
+    const parentArgv = safeArgv(procRoot, ppid);
     try { parentComm = fs.readFileSync(path.join(procRoot, String(ppid), 'comm'), 'utf8').trim().slice(0, 80) || UNKNOWN; } catch { /* parent exited or procfs is restricted */ }
-    parent = { pid: ppid, comm: parentComm, argv: safeArgv(procRoot, ppid) };
+    parent = { pid: ppid, comm: parentComm, argv: parentArgv.value, argv_truncated: parentArgv.truncated };
   }
 
   let fdLink = { status: UNKNOWN };
   try {
     const fdRoot = path.join(procRoot, String(pid), 'fd');
-    const names = fs.readdirSync(fdRoot).slice(0, 64);
-    fdLink = { status: 'not-found' };
+    const directory = fs.opendirSync(fdRoot);
+    const names = [];
+    let scanTruncated = false;
+    try {
+      while (names.length < FD_SCAN_LIMIT) {
+        const entry = directory.readSync();
+        if (!entry) break;
+        names.push(entry.name);
+      }
+      if (names.length === FD_SCAN_LIMIT && directory.readSync()) scanTruncated = true;
+    } finally {
+      directory.closeSync();
+    }
+    fdLink = { status: scanTruncated ? 'not-found-in-bounded-scan' : 'not-found', scan_limit: FD_SCAN_LIMIT };
     for (const name of names) {
       try {
         const stat = fs.statSync(path.join(fdRoot, name), { bigint: true });
@@ -71,7 +107,8 @@ function processIdentity(procRoot, pid, lockStat, lockPathLabel) {
       } catch { /* descriptor closed during bounded scan */ }
     }
   } catch { /* procfs is restricted or process exited */ }
-  return { pid, ppid, comm, argv: safeArgv(procRoot, pid), fd_symlink: fdLink, parent };
+  const argv = safeArgv(procRoot, pid);
+  return { pid, ppid, comm, argv: argv.value, argv_truncated: argv.truncated, fd_symlink: fdLink, parent };
 }
 
 /** Read-only snapshot for a Linux flock refusal. No lock is opened or probed. */
@@ -100,8 +137,11 @@ export function captureLockRefusal({ lockPath, lockPathLabel = '$LOCK_ROOT/astri
   }
 
   let lockLines;
+  let locksTruncated = false;
   try {
-    lockLines = fs.readFileSync(path.join(procRoot, 'locks'), 'utf8').slice(0, 128 * 1024).split('\n');
+    const locks = readBoundedText(path.join(procRoot, 'locks'), PROC_LOCKS_BYTES);
+    lockLines = locks.text.split('\n');
+    locksTruncated = locks.truncated;
   } catch {
     record.limitations.push('proc-locks-unavailable');
     return record;
@@ -119,6 +159,7 @@ export function captureLockRefusal({ lockPath, lockPathLabel = '$LOCK_ROOT/astri
       pids.push(Number(match[1]));
   }
   const uniquePids = [...new Set(pids)];
+  if (locksTruncated) record.limitations.push('proc-locks-scan-truncated');
   if (uniquePids.length === 1) record.holder_pid = uniquePids[0];
   else if (uniquePids.length > 1) record.holder_pid = 'multiple';
   else record.limitations.push('matching-kernel-flock-holder-not-visible');
