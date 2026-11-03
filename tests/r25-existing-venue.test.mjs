@@ -30,6 +30,7 @@ test('PTY integration push selects the changed setup-only route', () => {
   assert.match(workflow, /- lane\/M-PIN\/R-PIN-WINDOWS-PTY-INTEGRATE/);
   assert.match(workflow, /github\.ref_name == 'lane\/M-PIN\/R-PIN-WINDOWS-PTY-INTEGRATE'/);
   assert.match(workflow, /SETUP_ONLY:.*R-PIN-WINDOWS-PTY-INTEGRATE/);
+  assert.match(workflow, /if:.*R-PIN-WINDOWS-PTY-INTEGRATE/);
   assert.doesNotMatch(workflow, /R-PIN-WINDOWS-PTY-INTEGRATE.*six-action/);
 });
 

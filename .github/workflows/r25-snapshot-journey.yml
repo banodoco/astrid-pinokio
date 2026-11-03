@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   windows-six-action:
-    if: (github.event_name == 'push' && (github.ref_name == 'lane/M-PIN/R-25-WINDOWS-LF-ROUTE-R1' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-EXISTING-VENUE' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-BOUNDED' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-CAPTURE')) || (github.event_name == 'workflow_dispatch' && inputs.slot_id == 'pinokio-fully-local-windows')
+    if: (github.event_name == 'push' && (github.ref_name == 'lane/M-PIN/R-25-WINDOWS-LF-ROUTE-R1' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-EXISTING-VENUE' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-BOUNDED' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-CAPTURE' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-PTY-INTEGRATE')) || (github.event_name == 'workflow_dispatch' && inputs.slot_id == 'pinokio-fully-local-windows')
     runs-on: windows-2022
     timeout-minutes: 90
     env:
