@@ -1,0 +1,113 @@
+{
+  "schema": "astrid.pinokio.task-receipt.v1",
+  "task": "R-PIN-MAC-ORIGIN-RESOLVE",
+  "classification": "diagnostic-progress-not-authentic-R-25-acceptance",
+  "result": "root-cause-established-and-tested-correction-pushed",
+  "repository": {
+    "name": "banodoco/astrid-pinokio",
+    "lane": "lane/M-PIN/R-PIN-MAC-ORIGIN-RESOLVE",
+    "wip_lane": "lane/M-PIN/R-PIN-MAC-ORIGIN-RESOLVE-wip",
+    "head": "ec6ec4b8aebf350ed1eb4639cc9dd5d6bc322156",
+    "base": "70275524f4b1c9501ed1ceda98d2c6f42064a89b",
+    "parents": [
+      "57bcc589ea334bedd5136e5980250e392eb2c027"
+    ],
+    "push_verified": true,
+    "working_tree_clean": true
+  },
+  "failure": {
+    "actions_run_id": 41562449901,
+    "run_attempt": 1,
+    "failed_at": "2026-11-03T01:55:59Z",
+    "first_error": "producer job id was not independently resolved",
+    "runner_process_exit": 1,
+    "engine_actions_started": false,
+    "evidence": [
+      {
+        "path": "/home/user/repo/docs/merge-plan/evidence/actions/41562449901/logs/R-25_hosted_macOS_pinokio-fully-local-macos_macos-six-action-125675981941.log",
+        "sha256": "b50abd2d190de1b4ddc2927c080497b3f05c4b935879af14630c844049469ca7",
+        "source_lines": "317-320"
+      },
+      {
+        "path": "/home/user/repo/docs/merge-plan/evidence/actions/41562449901/r25-snapshot-diagnostics-pinokio-fully-local-macos-41562449901-1/r25-failure.json",
+        "sha256": "8edba417e63c3c2be94f7b18e7743bc4256525e423d1710c33dd3163e2ec9d9c",
+        "content": "first_error=producer job id was not independently resolved; run_id=41562449901; run_attempt=1"
+      }
+    ]
+  },
+  "cause": {
+    "api": {
+      "request": "GET https://api.github.com/repos/banodoco/astrid-pinokio/actions/runs/41562449901/jobs?per_page=100",
+      "http_status": 200,
+      "accepted_permissions_header": "actions=read",
+      "workflow_declared_permissions": {
+        "actions": "read",
+        "contents": "read"
+      },
+      "repository_id": 1433716441,
+      "repository_full_name": "banodoco/astrid-pinokio",
+      "run_id": 41562449901,
+      "run_attempt": 1,
+      "run_head_sha": "70275524f4b1c9501ed1ceda98d2c6f42064a89b",
+      "run_workflow_id": 396908890,
+      "called_workflow_id": 404905156,
+      "called_workflow_path": ".github/workflows/r25-snapshot-journey.yml",
+      "job_id": 125675981941,
+      "job_name": "R-25 hosted macOS (pinokio-fully-local-macos) / macos-six-action",
+      "job_run_id": 41562449901,
+      "job_run_attempt": 1,
+      "job_head_sha": "70275524f4b1c9501ed1ceda98d2c6f42064a89b"
+    },
+    "predicate": "GITHUB_JOB is macos-six-action (the workflow job key); the old lookup accepted only API job.name === GITHUB_JOB or a name beginning with `${GITHUB_JOB} `. The actual reusable-workflow API name has a caller/slot prefix and ends in ` / macos-six-action`, so it could never match. API access succeeded and returned the independently addressable job ID; this was a job-name matching defect, not an API permission failure.",
+    "source": ".github/venue/r25-snapshot-runner.cjs resolveOrigin around lines 575-605; .github/workflows/r25-snapshot-journey.yml job key macos-six-action and permissions block"
+  },
+  "correction": {
+    "files": [
+      ".github/venue/r25-snapshot-runner.cjs",
+      ".github/workflows/r25-snapshot-journey.yml",
+      "tests/r25-origin-resolution.test.cjs",
+      "tests/r25-macos-sequence-binding.test.cjs"
+    ],
+    "behavior": "Match the exact terminal job-ID component in GitHub's reusable-workflow name; require the selected slot marker, exact run ID, attempt, and head SHA; require a positive safe-integer API job ID; reject zero or multiple matches. The hosted workflow now displays its selected slot in the job name for both called and direct workflow routes. API failures still throw and unavailable or mismatched job metadata still retries then fails closed.",
+    "protected_assertions_weakened": false,
+    "source_sha256": {
+      ".github/venue/r25-snapshot-runner.cjs": "7a54e56b91bb19f4ea9c28f291e0caf3013a8f6866ba95e7abe2a91459ded832",
+      ".github/workflows/r25-snapshot-journey.yml": "3e74f3f0644a3a2c106585b561e61bc2a184b6911fcb260f19170f084737713c",
+      "tests/r25-origin-resolution.test.cjs": "3e397a5a0cf75b2ee19ca5776e8bc69180751f0984f3173439535b6b4c94c059",
+      "tests/r25-macos-sequence-binding.test.cjs": "9d67f136e04d48b901a8fd374344a30af3022de160010e792e043ddee1c19b29"
+    }
+  },
+  "verification": {
+    "passed": [
+      {
+        "command": "node --test tests/r25-origin-resolution.test.cjs tests/r25-macos-sequence-binding.test.cjs",
+        "result": "7 passed, 0 failed (combined focused suites)"
+      },
+      {
+        "command": "node --check .github/venue/r25-snapshot-runner.cjs",
+        "result": "passed"
+      },
+      {
+        "command": "git diff --check",
+        "result": "passed"
+      }
+    ],
+    "broader_test_attempt": {
+      "result": "No outstanding focused-suite failure",
+      "note": "The legacy exact-source check continues to assert the original expected SHA256 and blob, now reading them from the immutable venue_ref commit instead of comparing that historical pin to the changed worktree runner."
+    },
+    "authentic_session_41538027902_touched": false,
+    "hosted_rerun_dispatched": false
+  },
+  "next_hosted_request": {
+    "workflow": "CI",
+    "event": "workflow_dispatch",
+    "ref": "lane/M-PIN/R-PIN-MAC-ORIGIN-RESOLVE",
+    "inputs": {
+      "r25_slot_id": "pinokio-fully-local-macos",
+      "r25_agent_ref": "a6b68d5b5478326a4db1971966d33a2cfe61d091",
+      "r25_candidate_tuple": "{\"app\":\"79f7e5397c044c4c97dc7e97b20ad96f787e5247\",\"agent\":\"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61\",\"runtime\":\"2776ba973b6c8f3555b5629b0840d9691a98d3c2\",\"pinokio\":\"3a6a98ae251ca126505245286e2d3e760f4348e9\",\"manifest_sha256\":\"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f\",\"artifacts\":{\"public/install\":\"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d\",\"public/install.sh\":\"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285\",\"public/install.ps1\":\"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258\"},\"published_at\":\"2026-11-02T17:55:27Z\"}"
+    },
+    "submitted_or_dispatched": false
+  }
+}
