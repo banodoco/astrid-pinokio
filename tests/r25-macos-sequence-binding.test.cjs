@@ -15,9 +15,9 @@ const sequence = fs.readFileSync(sequencePath, 'utf8');
 const wrapper = fs.readFileSync(wrapperPath, 'utf8');
 const runner = fs.readFileSync(runnerPath, 'utf8');
 
-const venueRef = '09c44a8fe8cb901960f50fa1e49e150d09e19501';
-const runnerSha256 = '23acce3851f5cd563dde6e49505dc0bc376bb8fed5d2c7db49f20c5fc203615a';
-const runnerBlob = 'fc66785caf6562b45b6ec27e89fbf2ca64b5f021';
+const venueRef = '6c159e87ebb4f8965f93f6de7a9cfa25778b01d4';
+const runnerSha256 = '0139869dbfcba0e18613e35c732916f197e7d5a623726509070de5f2d87bf1c8';
+const runnerBlob = '54829e23741a8fd26efe538b48e4afc9f0459620';
 const observerSha256 = 'b3eb6d0943efaf8aaae268f6ffd94ab8826a7053aff4df142238cc74b73fc94f';
 const observerBlob = 'd7eb13d3716528d95f8c24bd4b02033adb03faaa';
 const wrapperRef = '37e2337271cffe275374fe9a2eda73e8948ef17a';
