@@ -28,6 +28,7 @@ jobs:
           if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
             throw 'R0 capture requires a non-administrator Windows session.'
           }
+          "R0_CAPTURE_USER_SID=$($identity.User.Value)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Capture installed R0 source bytes without invoking Stop
         shell: pwsh
         env:

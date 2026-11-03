@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +10,30 @@ export const R0 = Object.freeze({
   bootstrapSha256: '2308de857ea58022c589ac44de988572faf3445ed348a01fd8ab7964c306f0eb',
   lifecycleSha256: '8395ffc23d2664f08dcf212d35e97787e7228b44f6610509713bbfde0fdf73ed',
 });
+
+export function probeBootstrapExport(python, bootstrapPath, { runPython = spawnSync } = {}) {
+  const result = runPython(python, ['-I', '-B', '-c',
+    'import importlib,json; m=importlib.import_module("astrid_runtime.bootstrap"); print(json.dumps({"module":m.__file__,"preflight_stop":hasattr(m,"preflight_stop")}))'],
+  { encoding: 'utf8', timeout: 10000, windowsHide: true });
+  if (result.error || result.status !== 0) {
+    throw new Error(`Installed Python import probe failed (exit ${result.status ?? 'unavailable'}): ${(result.stderr || result.error?.message || '').trim()}`);
+  }
+  let report;
+  try { report = JSON.parse(result.stdout.trim()); }
+  catch { throw new Error('Installed Python import probe returned invalid JSON.'); }
+  if (path.win32.resolve(report.module).toLowerCase() !== path.win32.resolve(bootstrapPath).toLowerCase()) {
+    throw new Error('Installed Python imported bootstrap.py from bytes outside the authenticated installed source path.');
+  }
+  if (typeof report.preflight_stop !== 'boolean') throw new Error('Installed Python import probe omitted the preflight_stop export result.');
+  return {
+    interpreter: python,
+    args: ['-I', '-B'],
+    exitCode: result.status,
+    stdout: result.stdout.trim(),
+    module: report.module,
+    preflightStopExport: report.preflight_stop,
+  };
+}
 
 function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -47,8 +72,16 @@ function commitClaims(value, prefix = '$') {
   return [];
 }
 
-export function captureInstalledR0(root, { platform = process.platform, tempDirectory = os.tmpdir() } = {}) {
+export function captureInstalledR0(root, {
+  platform = process.platform,
+  tempDirectory = os.tmpdir(),
+  userSid = process.env.R0_CAPTURE_USER_SID,
+  elevated = false,
+  runPython = spawnSync,
+} = {}) {
   if (platform !== 'win32') throw new Error('Native R0 artifact capture requires Windows.');
+  if (elevated) throw new Error('R0 capture requires a non-administrator Windows session.');
+  if (!/^S-1-[0-9-]+$/.test(userSid || '')) throw new Error('Refusing capture: Windows user SID was not verified.');
   const absoluteRoot = path.win32.resolve(root);
   const tempRoot = path.win32.resolve(tempDirectory);
   const relativeToTemp = path.win32.relative(tempRoot, absoluteRoot);
@@ -60,7 +93,8 @@ export function captureInstalledR0(root, { platform = process.platform, tempDire
   }
   const markerPath = path.win32.join(disposableRoot, '.astrid-r0-disposable.json');
   const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
-  if (path.win32.resolve(marker.programRoot) !== absoluteRoot || marker.runtimeCommit !== R0.commit) {
+  if (marker.schema !== 'astrid-pinokio-r0-disposable.v1' || marker.isolated !== true
+    || path.win32.resolve(marker.programRoot) !== absoluteRoot || marker.runtimeCommit !== R0.commit) {
     throw new Error('Refusing capture: disposable marker does not bind this exact R0 program root.');
   }
 
@@ -90,9 +124,11 @@ export function captureInstalledR0(root, { platform = process.platform, tempDire
     lifecycle: { path: lifecycleFiles[0], sha256: sha256(lifecycleFiles[0]) },
   };
   source.matchesAuthenticatedR0 = source.bootstrap.sha256 === R0.bootstrapSha256 && source.lifecycle.sha256 === R0.lifecycleSha256;
+  if (!source.matchesAuthenticatedR0) throw new Error('Refusing import probe: installed R0 source bytes do not match the authenticated tuple.');
+  const importProbe = probeBootstrapExport(versionRecord.python, bootstrapFiles[0], { runPython });
   return {
     schema: 'astrid-pinokio-r0-installed-capture.v1',
-    host: { platform, elevated: null },
+    host: { platform, elevated: false, userSid },
     tuple: { pinokio: '7979e023874c98057f441ee8e525e0cb6c562e90', runtime: R0.commit,
       actionsRun: '41600499394', actionsJob: '125797843152' },
     installed: {
@@ -102,13 +138,16 @@ export function captureInstalledR0(root, { platform = process.platform, tempDire
       installRecordSha256: sha256(path.win32.join(absoluteRoot, 'install.json')),
       sourceIdentityClaims: [...commitClaims(versionRecord), ...commitClaims(installRecord)],
       source,
+      importProbe: {
+        ...importProbe,
+      },
     },
     predicates: {
-      artifactIdentity: source.matchesAuthenticatedR0 ? 'verified-by-byte-hash' : 'mismatch',
+      artifactIdentity: 'verified-by-byte-hash',
       clearStop: 'not-run', blockedRefusal: 'not-run', retryAfterReconciliation: 'not-run',
       processAndLockSurvival: 'not-observed',
     },
-    limitation: 'This read-only capture does not invoke Pinokio Stop or Runtime down; it cannot establish clear, blocked, or retry behavior.',
+    limitation: 'This read-only identity/import capture does not invoke Pinokio Stop or Runtime down; it cannot establish clear, blocked, or retry behavior.',
   };
 }
 
