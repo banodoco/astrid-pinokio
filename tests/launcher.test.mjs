@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import library from '../pinokio/lib.js';
@@ -263,7 +264,7 @@ test('hosted Update refuses at read-only preflight before the launcher pull', as
 });
 
 test('Update performs only installed-CLI recovery before any new launcher or manifest fetch', async (t) => {
-  const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'astrid-pinokio-recovery-'));
+  const temporary = fs.mkdtempSync(path.join(tmpdir(), 'astrid-pinokio-recovery-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const appDirectory = path.join(temporary, 'pinokio', 'api', 'Astrid');
   const root = path.join(appDirectory, 'app', 'astrid');
