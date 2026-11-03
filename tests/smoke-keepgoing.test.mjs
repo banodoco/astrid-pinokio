@@ -9,6 +9,8 @@ test('diagnostic keep-going is opt-in and preserves fail-fast by default', async
   assert.equal(diagnosticKeepGoingEnabled({}), false);
   assert.equal(diagnosticKeepGoingEnabled({ PINOKIO_DIAGNOSTIC_KEEP_GOING: '0' }), false);
   assert.equal(diagnosticKeepGoingEnabled({ PINOKIO_DIAGNOSTIC_KEEP_GOING: '1' }), true);
+  assert.equal(diagnosticKeepGoingEnabled({ INPUT_DIAGNOSTIC_KEEP_GOING: 'true' }), true);
+  assert.equal(diagnosticKeepGoingEnabled({ DIAGNOSTIC_KEEP_GOING: 'false' }), false);
   const recorder = createKeepGoingRecorder();
   await assert.rejects(recorder.run('fails fast', async () => { throw new Error('original failure'); }), /original failure/);
   assert.deepEqual(recorder.report().stages, []);

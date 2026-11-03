@@ -5,7 +5,9 @@ export const DIAGNOSTIC_KEEP_GOING_ENV = 'PINOKIO_DIAGNOSTIC_KEEP_GOING';
 export const KEEP_GOING_REPORT_ENV = 'PINOKIO_KEEPGOING_REPORT';
 
 export function diagnosticKeepGoingEnabled(environment = process.env) {
-  return environment[DIAGNOSTIC_KEEP_GOING_ENV] === '1';
+  return environment[DIAGNOSTIC_KEEP_GOING_ENV] === '1'
+    || ['1', 'true'].includes(String(environment.INPUT_DIAGNOSTIC_KEEP_GOING || '').toLowerCase())
+    || ['1', 'true'].includes(String(environment.DIAGNOSTIC_KEEP_GOING || '').toLowerCase());
 }
 
 function errorMessage(error) {
