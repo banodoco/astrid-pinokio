@@ -322,7 +322,7 @@ test('Update performs only installed-CLI recovery before any new launcher or man
   let releaseChild;
   let childStarted;
   const started = new Promise((resolve) => { childStarted = resolve; });
-  const streamedApp = library.createApp({ platform: 'linux', appDirectory, environment: {},
+  const streamedApp = library.createApp({ platform: process.platform, appDirectory, environment: {},
     spawnProcess: (command, args, options) => {
       assert.equal(command, old.python);
       assert.deepEqual(args, ['-I', '-m', 'astrid', 'install', '--root', root, '--managed-by', 'pinokio']);
