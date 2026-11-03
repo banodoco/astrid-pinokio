@@ -10,7 +10,9 @@ const { publish } = createRequire(import.meta.url)('../.github/venue/r21-publish
 const runner = path.resolve('.github/venue/r21-real-engine.sh');
 
 for (const phase of ['setup', 'journey']) {
-  test(`watchdog publishes a bounded ${phase} timeout`, () => {
+  test(`watchdog publishes a bounded ${phase} timeout`, {
+    skip: process.platform !== 'linux' && 'requires Linux Bash wait -n -p and setsid',
+  }, () => {
     const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'r21-watchdog-test-'));
     try {
       const bin = path.join(root, 'bin');

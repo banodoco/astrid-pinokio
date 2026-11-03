@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 test('R-21 always uploads only the named bounded diagnostic evidence', () => {
-  const workflow = fs.readFileSync('.github/workflows/r21-real-engine.yml', 'utf8');
+  const workflow = fs.readFileSync('.github/workflows/r21-real-engine.yml', 'utf8').replace(/\r\n/g, '\n');
   const uploads = [...workflow.matchAll(/^      - name: Upload bounded R-21 diagnostic evidence\n(?:(?!      - ).*\n?)*/gm)];
   assert.equal(uploads.length, 1);
   assert.equal((workflow.match(/uses:\s*actions\/upload-artifact@/g) || []).length, 1);
