@@ -11,7 +11,7 @@ const binding = require('../../pinokio/providers/r25-native-collector-binding.cj
 const { createObserverIO } = require('./r21-observer-io.cjs');
 const { ptermExit, createInstallDiagnostics, terminateChild, redactDiagnosticText } = require('./r21-observer-diagnostics.cjs');
 const { captureWindowsProcessTree } = require('./r25-windows-process-snapshot.cjs');
-const { applyPinokiodPtyInstrumentation } = require('./r25-pinokiod-pty-instrumentation.cjs');
+const { MAX_BYTES: PTY_CAPTURE_MAX_BYTES, MAX_ROWS: PTY_CAPTURE_MAX_ROWS, PTY_MARKERS, applyPinokiodPtyInstrumentation } = require('./r25-pinokiod-pty-instrumentation.cjs');
 
 const AGENT_REF = binding.AGENT_SOURCE_REF;
 const PINOKIO_SOURCE_REF = '95aafb5a029c3f53cb2268d8596909eab0deb3c4';
@@ -40,6 +40,27 @@ function args(argv) {
 }
 function canonical(value) { return binding.canonical(value); }
 function digest(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
+function ptyCaptureStatus(file) {
+  let contents;
+  try { contents = fs.readFileSync(file); }
+  catch (error) {
+    return { status: error?.code === 'ENOENT' ? 'missing' : 'invalid', bytes: 0, sha256: null, runtime_ready: false };
+  }
+  const base = { bytes: contents.length, sha256: digest(contents), runtime_ready: false };
+  if (contents.length === 0) return { status: 'empty', ...base };
+  if (contents.length > PTY_CAPTURE_MAX_BYTES) return { status: 'invalid', ...base };
+  let rows;
+  try {
+    const text = contents.toString('utf8');
+    if (!text.endsWith('\n')) throw new Error('incomplete JSONL row');
+    rows = text.trimEnd().split('\n').map(line => JSON.parse(line));
+    if (rows.length > PTY_CAPTURE_MAX_ROWS || rows.some(row => !row || typeof row !== 'object'
+        || !PTY_MARKERS.includes(row.kind) || typeof row.at !== 'string'
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.at)
+        || Number.isNaN(Date.parse(row.at)) || new Date(row.at).toISOString() !== row.at)) throw new Error('invalid marker row');
+  } catch { return { status: 'invalid', ...base }; }
+  return { status: 'present', ...base, runtime_ready: rows.some(row => row.kind === 'runtime-ready') };
+}
 function jsonDigest(value) { return digest(Buffer.from(`${canonical(value)}\n`, 'ascii')); }
 function writeCanonical(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -288,6 +309,8 @@ async function main() {
   const ptyInstrumentation = setupOnly ? applyPinokiodPtyInstrumentation(pinokiodRoot, {
     diagnosticFile: path.join(diagnostics, 'r25-pty-diagnostics.jsonl'),
   }) : { enabled: false, diagnostic_file_bound: false };
+  const ptyCaptureFile = path.join(diagnostics, 'r25-pty-diagnostics.jsonl');
+  const refreshPtyCaptureStatus = () => { if (setupOnly) ptyInstrumentation.capture_status = ptyCaptureStatus(ptyCaptureFile); };
   const engineBinding = materializeProduct(productRoot, appRoot);
   engineBinding.pinokiod_pty = ptyInstrumentation;
   const environment = path.join(appRoot, '_ENVIRONMENT');
@@ -355,6 +378,7 @@ async function main() {
     throw new Error('native pinokiod did not reach readiness');
   }
   setupDiagnostics.stage('daemon-ready', { pid: daemon.pid, ppid: process.pid });
+  refreshPtyCaptureStatus();
   const { WebSocket } = require(path.join(ptermRoot, 'node_modules', 'unws'));
   const trace = createObserverIO({ WebSocket, fetch, spawn, record: () => {}, appRoot, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', pollMs: 120000 });
   const ptermOutput = setupOnly ? {
@@ -369,6 +393,7 @@ async function main() {
   const setupDiagnosticView = setupOnly ? Object.assign({}, setupDiagnostics, {
     stdio: ptermOutput,
     async beforeTimeout(value) {
+      refreshPtyCaptureStatus();
       setupDiagnostics.shell(shellDiagnosticFile);
       const ptermStatus = flushCaptures(ptermOutput);
       const daemonStatus = flushCaptures(daemonOutput);
@@ -406,6 +431,7 @@ async function main() {
     let preparation;
     try {
       preparation = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: 'pinokio/install.js', action: 'setup-install', timeoutMs: setupTimeoutMs, diagnostic: setupDiagnosticView });
+      refreshPtyCaptureStatus();
     } finally {
       if (priorDiagnosticFlag === undefined) delete process.env.ASTRID_R25_SETUP_DIAGNOSTICS;
       else process.env.ASTRID_R25_SETUP_DIAGNOSTICS = priorDiagnosticFlag;
@@ -462,7 +488,7 @@ async function main() {
   }
 }
 
-module.exports = { actionPlan, createBoundedCapture, copyBoundedTail, copyFirstInstallerLog };
+module.exports = { actionPlan, createBoundedCapture, copyBoundedTail, copyFirstInstallerLog, ptyCaptureStatus };
 if (require.main === module) {
   main().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });
 }

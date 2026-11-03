@@ -101,6 +101,65 @@ test('the two probe boundary markers survive ring overflow without duplication',
   }
 });
 
+test('startup return is not attributed to setup and setup return/output keep their prompt ordinal and PID', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-latest-prompt-'));
+  try {
+    const file = path.join(root, 'markers.jsonl');
+    vm.runInNewContext(`${RUNTIME}
+      __r25PtyBeginPrompt(); __r25PtySetPromptPid(101); __r25PtyCapture('prompt-pty-spawn', { pid: 101, ppid: 99 });
+      __r25PtyCapture('prompt-probe-write'); __r25PromptProbeWriteReturned = true; __r25PtyCapture('prompt-probe-write-return');
+      __r25PtyBeginPrompt(); __r25PtySetPromptPid(202); __r25PtyCapture('prompt-pty-spawn', { pid: 202, ppid: 99 });
+      __r25PtyCapture('prompt-probe-write');
+      for (let i = 0; i < 40; i += 1) __r25PtyCapture('exec-pty-spawn', { pid: i + 1, ppid: 99 });
+      __r25PromptProbeWriteReturned = true; __r25PtyCapture('prompt-probe-write-return'); __r25PtyCapture('prompt-post-probe-output');`, {
+      Buffer, Date, JSON, Set,
+      process: { pid: 99, env: { ASTRID_R25_SETUP_DIAGNOSTICS: '1', ASTRID_R25_PTY_CAPTURE_FILE: file } },
+      require,
+    });
+    const output = fs.readFileSync(file, 'utf8');
+    const rows = output.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    assert.ok(Buffer.byteLength(output, 'utf8') <= 4096);
+    assert.ok(rows.length <= 16);
+    assert.equal(rows.some(row => row.kind === 'prompt-probe-write-return' && row.prompt_ordinal === 1), false);
+    assert.equal(rows.find(row => row.kind === 'prompt-probe-write' && row.prompt_ordinal === 2).prompt_pid, 202);
+    assert.equal(rows.find(row => row.kind === 'prompt-probe-write-return').prompt_ordinal, 2);
+    assert.equal(rows.find(row => row.kind === 'prompt-post-probe-output').prompt_pid, 202);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('setup call remains attributed when its return is absent and overflow follows', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-setup-no-return-'));
+  try {
+    const file = path.join(root, 'markers.jsonl');
+    vm.runInNewContext(`${RUNTIME}
+      __r25PtyBeginPrompt(); __r25PtySetPromptPid(101); __r25PtyCapture('prompt-pty-spawn', { pid: 101, ppid: 99 });
+      __r25PtyCapture('prompt-probe-write'); __r25PromptProbeWriteReturned = true; __r25PtyCapture('prompt-probe-write-return');
+      __r25PtyBeginPrompt(); __r25PtySetPromptPid(202); __r25PtyCapture('prompt-pty-spawn', { pid: 202, ppid: 99 });
+      __r25PtyCapture('prompt-probe-write');
+      for (let i = 0; i < 40; i += 1) __r25PtyCapture('exec-pty-spawn', { pid: i + 1, ppid: 99 });`, {
+      Buffer, Date, JSON, Set,
+      process: { pid: 99, env: { ASTRID_R25_SETUP_DIAGNOSTICS: '1', ASTRID_R25_PTY_CAPTURE_FILE: file } },
+      require,
+    });
+    const output = fs.readFileSync(file, 'utf8');
+    const rows = output.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    assert.ok(Buffer.byteLength(output, 'utf8') <= 4096);
+    assert.ok(rows.length <= 16);
+    assert.equal(rows.some(row => row.kind === 'prompt-probe-write-return' && row.prompt_ordinal === 1), false);
+    for (const kind of ['prompt-pty-spawn-start', 'prompt-pty-spawn', 'prompt-probe-write']) {
+      const row = rows.find(item => item.kind === kind);
+      assert.equal(row.prompt_ordinal, 2);
+      if (kind !== 'prompt-pty-spawn-start') assert.equal(row.prompt_pid, 202);
+    }
+    assert.equal(rows.some(row => row.kind === 'prompt-probe-write-return' && row.prompt_ordinal === 2), false);
+    assert.equal(rows.some(row => row.kind === 'prompt-post-probe-output' && row.prompt_ordinal === 2), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('injected runtime keeps the actual marker file bounded and command-free', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-runtime-'));
   try {

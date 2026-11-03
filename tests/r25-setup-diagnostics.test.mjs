@@ -8,7 +8,7 @@ import { instrumentWindowsBootstrap } from '../pinokio/shell.mjs';
 
 const require = createRequire(import.meta.url);
 const { createInstallDiagnostics } = require('../.github/venue/r21-observer-diagnostics.cjs');
-const { createBoundedCapture, copyBoundedTail } = require('../.github/venue/r25-snapshot-runner.cjs');
+const { createBoundedCapture, copyBoundedTail, ptyCaptureStatus } = require('../.github/venue/r25-snapshot-runner.cjs');
 const runner = fs.readFileSync(new URL('../.github/venue/r25-snapshot-runner.cjs', import.meta.url), 'utf8');
 
 const bootstrap = [
@@ -99,5 +99,27 @@ test('installer output copy keeps only a bounded redacted tail', () => {
     assert.ok(Buffer.byteLength(output, 'utf8') <= 128);
     assert.doesNotMatch(output, /password=private/);
     assert.match(output, /installer frame 42/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('projects PTY sidecar health as present, empty, missing, or invalid with byte count and hash', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-capture-status-'));
+  try {
+    const file = path.join(root, 'r25-pty-diagnostics.jsonl');
+    assert.deepEqual(ptyCaptureStatus(file), { status: 'missing', bytes: 0, sha256: null, runtime_ready: false });
+    fs.writeFileSync(file, '');
+    const empty = ptyCaptureStatus(file);
+    assert.equal(empty.status, 'empty');
+    assert.equal(empty.bytes, 0);
+    assert.match(empty.sha256, /^[a-f0-9]{64}$/);
+    const row = `${JSON.stringify({ at: '2026-11-03T00:00:00.000Z', kind: 'runtime-ready' })}\n`;
+    fs.writeFileSync(file, row);
+    const present = ptyCaptureStatus(file);
+    assert.equal(present.status, 'present');
+    assert.equal(present.bytes, Buffer.byteLength(row));
+    assert.equal(present.runtime_ready, true);
+    assert.match(present.sha256, /^[a-f0-9]{64}$/);
+    fs.writeFileSync(file, '{invalid}\n');
+    assert.equal(ptyCaptureStatus(file).status, 'invalid');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
