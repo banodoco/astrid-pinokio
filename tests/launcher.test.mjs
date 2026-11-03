@@ -23,6 +23,10 @@ function shellMessage(step, platform) {
   assert.ok(payload, 'Windows shell step must carry its encoded Pinokio payload');
   return JSON.parse(Buffer.from(payload, 'base64').toString('utf8')).message;
 }
+function installSelectionFile(app, home) {
+  const parent = app.isWindows ? app.paths.join(home, 'AppData', 'Local') : app.paths.join(home, '.local', 'share');
+  return app.paths.join(parent, 'astrid-install.json');
+}
 function fakeApp(platform, ref = '', mode = 'backend') {
   const base = platform === 'win32'
     ? "C:\\Users\\Test Home\\pinokio\\api\\Astrid O'Malley"
@@ -263,7 +267,7 @@ test('hosted Update refuses at read-only preflight before the launcher pull', as
 });
 
 test('Update performs only installed-CLI recovery before any new launcher or manifest fetch', async (t) => {
-  const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'astrid-pinokio-recovery-'));
+  const temporary = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'astrid-pinokio-recovery-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const appDirectory = path.join(temporary, 'pinokio', 'api', 'Astrid');
   const root = path.join(appDirectory, 'app', 'astrid');
@@ -967,13 +971,13 @@ test('owned partial install reaches the installer, while unowned, live and resid
   try {
     const appDirectory = path.join(temp, 'pinokio', 'api', 'Astrid');
     const home = path.join(temp, 'home');
-    const app = library.createApp({ appDirectory, environment: { HOME: home }, lifecycle: {
+    const app = library.createApp({ appDirectory, environment: { HOME: home, USERPROFILE: home, LOCALAPPDATA: path.join(home, 'AppData', 'Local') }, lifecycle: {
       preflightStop: async () => { throw new Error('preflight unavailable'); },
       waitForInstallerLock: async () => assert.fail('partial defers the lock to installer'),
     } });
     fs.mkdirSync(app.BACKEND_ROOT, { recursive: true });
     const marker = path.join(app.BACKEND_ROOT, 'install.json');
-    const selectionFile = path.join(home, '.local', 'share', 'astrid-install.json');
+    const selectionFile = installSelectionFile(app, home);
     const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); };
     const idle = { api: { running: {}, stop: () => assert.fail('no session') } };
     await assert.rejects(app.stopForUninstall({}, () => {}, idle), /unowned or incomplete/);
@@ -1002,7 +1006,8 @@ test('owned partial install reaches the installer, while unowned, live and resid
 test('failed owned installation can finish through the installer uninstall route', async () => {
   const temp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'astrid-recovery-'));
   try {
-    const app = library.createApp({ appDirectory: path.join(temp, 'pinokio', 'api', 'Astrid'), environment: { HOME: path.join(temp, 'home') }, probe: async () => ({ kind: 'free' }) });
+    const home = path.join(temp, 'home');
+    const app = library.createApp({ appDirectory: path.join(temp, 'pinokio', 'api', 'Astrid'), environment: { HOME: home, USERPROFILE: home, LOCALAPPDATA: path.join(home, 'AppData', 'Local') }, probe: async () => ({ kind: 'free' }) });
     fs.mkdirSync(app.BACKEND_ROOT, { recursive: true });
     fs.writeFileSync(path.join(app.BACKEND_ROOT, 'install.json'), JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: path.join(temp, 'data') }));
     fs.writeFileSync(path.join(app.BACKEND_ROOT, 'staged-file'), 'failed before Runtime staging');
@@ -1011,7 +1016,7 @@ test('failed owned installation can finish through the installer uninstall route
     for (const step of script.run) {
       if (typeof step.method === 'function') await step.method({}, () => {}, { api: { running: {} } });
       else if (step.method === 'shell.run') {
-        assert.match(step.params.message, /--uninstall/);
+        assert.match(shellMessage(step, process.platform === 'win32' ? 'win32' : 'linux'), /--uninstall/);
         calls.push('installer');
         // Simulate a successful installer-owned removal, including its lock and stop checks.
         fs.rmSync(app.BACKEND_ROOT, { recursive: true });
@@ -1026,7 +1031,7 @@ test('uninstall rechecks captured roots and current selection and preserves unre
   const temp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'astrid-recheck-'));
   try {
     const home = path.join(temp, 'home');
-    const app = library.createApp({ appDirectory: path.join(temp, 'pinokio', 'api', 'Astrid'), environment: { HOME: home } });
+    const app = library.createApp({ appDirectory: path.join(temp, 'pinokio', 'api', 'Astrid'), environment: { HOME: home, USERPROFILE: home, LOCALAPPDATA: path.join(home, 'AppData', 'Local') } });
     const safe = path.join(temp, 'safe');
     const data = path.join(temp, 'data-link');
     fs.mkdirSync(app.BACKEND_ROOT, { recursive: true });
@@ -1042,7 +1047,7 @@ test('uninstall rechecks captured roots and current selection and preserves unre
     assert.ok(fs.existsSync(app.EDITOR_DIR));
     fs.unlinkSync(data);
     fs.symlinkSync(safe, data);
-    const selection = path.join(home, '.local', 'share', 'astrid-install.json');
+    const selection = installSelectionFile(app, home);
     fs.mkdirSync(path.dirname(selection), { recursive: true });
     fs.writeFileSync(selection, JSON.stringify({ realm_root: app.EDITOR_DIR }));
     assert.throws(() => app.finishUninstall(roots), /workspace roots overlap/);
