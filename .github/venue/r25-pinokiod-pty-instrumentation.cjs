@@ -13,7 +13,7 @@ const PTY_MARKERS = Object.freeze([
   'prompt-probe-write-return', 'prompt-post-probe-output', 'prompt-recognized',
   'prompt-kill-start', 'prompt-kill-end', 'prompt-native-exit',
   'exec-pty-spawn', 'exec-first-output', 'exec-prompt-recognized',
-  'exec-command-write', 'exec-native-exit',
+  'exec-input-write', 'exec-native-exit',
 ]);
 const PRESERVED_MARKERS = Object.freeze(['prompt-probe-write-return', 'prompt-post-probe-output']);
 const RETAINED_PROMPT_MARKERS = Object.freeze(['prompt-pty-spawn-start', 'prompt-pty-spawn', 'prompt-probe-write', ...PRESERVED_MARKERS]);
@@ -170,9 +170,9 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
       replacement: '            __r25PtyCapture(\'exec-prompt-recognized\')\n            this.ready = true\n',
     },
     {
-      name: 'exec-command-write',
+      name: 'exec-input-write',
       needle: '              this.ptyProcess.write(`${this.exec_cmd || this.cmd}${this.EOL}`)\n',
-      replacement: '              __r25PtyCapture(\'exec-command-write\')\n              this.ptyProcess.write(`${this.exec_cmd || this.cmd}${this.EOL}`)\n',
+      replacement: '              __r25PtyCapture(\'exec-input-write\')\n              this.ptyProcess.write(`${this.exec_cmd || this.cmd}${this.EOL}`)\n',
     },
   ];
   let patched = source;

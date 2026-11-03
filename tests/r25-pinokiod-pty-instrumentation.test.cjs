@@ -70,7 +70,7 @@ test('redacts arbitrary fields and keeps marker output bounded', () => {
   try {
     const file = path.join(root, 'markers.jsonl');
     const writer = createBoundedMarkerWriter(file, { maxRows: 16, maxBytes: 512 });
-    writer.write('exec-command-write', { command: 'do-not-retain', token: 'secret-value' });
+    writer.write('exec-input-write', { command: 'do-not-retain', token: 'secret-value' });
     for (let index = 0; index < 30; index += 1) writer.write('prompt-pty-spawn', { pid: index + 1, ppid: 99 });
     const output = fs.readFileSync(file, 'utf8');
     assert.ok(Buffer.byteLength(output, 'utf8') <= 512);
@@ -164,7 +164,7 @@ test('injected runtime keeps the actual marker file bounded and command-free', (
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-runtime-'));
   try {
     const file = path.join(root, 'markers.jsonl');
-    vm.runInNewContext(`${RUNTIME}\n__r25PtyCapture('prompt-probe-write-return');\n__r25PtyCapture('prompt-post-probe-output');\n__r25PtyCapture('exec-command-write', { command: 'do-not-retain', token: 'secret-value' });\nfor (let i = 0; i < 30; i += 1) __r25PtyCapture('prompt-pty-spawn', { pid: i + 1, ppid: 99 });`, {
+    vm.runInNewContext(`${RUNTIME}\n__r25PtyCapture('prompt-probe-write-return');\n__r25PtyCapture('prompt-post-probe-output');\n__r25PtyCapture('exec-input-write', { command: 'do-not-retain', token: 'secret-value' });\nfor (let i = 0; i < 30; i += 1) __r25PtyCapture('prompt-pty-spawn', { pid: i + 1, ppid: 99 });`, {
       Buffer, Date, JSON, Set,
       process: { env: { ASTRID_R25_SETUP_DIAGNOSTICS: '1', ASTRID_R25_PTY_CAPTURE_FILE: file } },
       require,
