@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - lane/M-PIN/R-PIN-CROSS-OS-DIAGNOSTIC
+      - lane/M-PIN/R-PIN-41609304921-RESULT
   workflow_dispatch:
 
 permissions:
