@@ -248,10 +248,11 @@ function promptHarness(root, scenarios = []) {
       const term = {
         pid: ++pid,
         writes: [],
+        killCount: 0,
         onData(callback) { this.dataCallback = callback; },
         onExit(callback) { this.exitCallback = callback; },
         write(data) { this.writes.push(data); },
-        kill() {},
+        kill() { this.killCount += 1; },
         emit(data) { return this.dataCallback(data); },
         exit(event) { return this.exitCallback(event); },
       };
@@ -520,7 +521,33 @@ test('nonce command and output counters handle split chunks and CR/LF line endin
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('injected prompt correlates a bounded nonce write after the original probe and records no output', async () => {
+test('bare echo state is captured across native cmd output chunks without retaining terminal text', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-cmd-echo-state-'));
+  try {
+    const file = path.join(root, 'markers.jsonl');
+    const context = {
+      Buffer, Date, JSON, Set, require,
+      process: { env: { ASTRID_R25_SETUP_DIAGNOSTICS: '1', ASTRID_R25_PTY_CAPTURE_FILE: file } },
+    };
+    vm.runInNewContext(`${RUNTIME}
+      __r25PtyLatestPromptOrdinal = 1;
+      const state = __r25PtyNewProcessing(1, 46);
+      __r25PtyProcessing(state, 'callback', { cmd_echo_state_probe_attempted: true });
+      __r25PtyCountCmdEchoState(state, 'ECHO is o');
+      __r25PtyCountCmdEchoState(state, 'ff.\\r');
+      __r25PtyCountCmdEchoState(state, '\\n');
+      __r25PtyProcessing(state, 'callback');
+      globalThis.result = state.cmd_echo_state;
+    `, context);
+    assert.equal(context.result, 'off');
+    const output = fs.readFileSync(file, 'utf8');
+    assert.match(output, /"cmd_echo_state":"off"/);
+    assert.doesNotMatch(output, /ECHO is off/);
+    assert.ok(Buffer.byteLength(output) <= 4096);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('injected prompt adds a bare echo discriminator and keeps state or nonce output from settling', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-nonce-write-'));
   try {
     const harness = promptHarness(root);
@@ -528,9 +555,10 @@ test('injected prompt correlates a bounded nonce write after the original probe 
     run.shell.prompt_ready = false;
     run.term.emit('initial prompt output');
     await new Promise(resolve => setTimeout(resolve, 550));
-    assert.equal(run.term.writes.length, 2);
+    assert.equal(run.term.writes.length, 3);
     assert.equal(run.term.writes[0], 'echo pinokio\necho pinokio\n');
-    assert.match(run.term.writes[1], /^echo r25_[a-f0-9]{24}\n$/);
+    assert.equal(run.term.writes[1], 'echo\n');
+    assert.match(run.term.writes[2], /^echo r25_[a-f0-9]{24}\n$/);
     const row = harness.rows().find(item => item.kind === 'prompt-processing');
     assert.equal(row.nonce_probe_attempted, true);
     assert.equal(row.nonce_probe_write_returned, true);
@@ -538,9 +566,27 @@ test('injected prompt correlates a bounded nonce write after the original probe 
     assert.equal(row.nonce_output_line_count, 0);
     assert.equal(row.nonce_probe_executed, false);
     assert.equal(row.nonce_output_absent_after_write, true);
+    assert.equal(row.cmd_echo_state_probe_attempted, true);
     assert.doesNotMatch(fs.readFileSync(harness.file, 'utf8'), /r25_[a-f0-9]{24}|echo /);
     const original = sourceFixture();
     const patched = patchSource(original, { expectedSha256: sha256(Buffer.from(original, 'utf8')) });
     assert.equal((patched.source.match(/let re = \/\(\.\+\)echo pinokio/g) || []).length, 1);
+
+    run.shell.prompt_ready = true;
+    run.shell.prompt_done = false;
+    harness.sandbox.__scenario.serialized = 'ECHO is off.\r\nr25_probe_output\r\n';
+    run.term.emit('ECHO is off.\r\nr25_probe_output\r\n');
+    const processing = harness.rows().find(item => item.kind === 'prompt-processing');
+    assert.equal(processing.cmd_echo_state, 'off');
+    assert.equal(processing.match, false);
+    assert.equal(processing.done, false);
+    assert.equal(run.term.killCount, 0);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('native cmd.exe bare echo emits its state line on Windows', { skip: process.platform !== 'win32' }, () => {
+  const { spawnSync } = require('node:child_process');
+  const result = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'echo'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^ECHO is on\.?\r?\n?$/i);
 });
