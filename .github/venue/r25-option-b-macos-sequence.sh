@@ -113,7 +113,7 @@ test -x "$python_actual_executable"
 # Bind the disposable inner venue to the immutable observability input. Keep
 # this distinct from the outer sequence commit so the binding cannot become
 # self-referential when this candidate is committed.
-venue_ref=4dd993439fea508aaafbad0e1f4794f97a99e7bf
+venue_ref=d3a270fb5d1e40fb73f870d7febe92e820cc34e4
 inner_snapshot_runner_sha256=edbcc507cfb1627b2eaa614cece3716cd8ac1cf532378d5e0a9b418e8e8c94f4
 inner_snapshot_runner_blob=8abfb57227b07f7ac812ff4ae09e99174b9928b9
 inner_observer_diagnostics_sha256=b3eb6d0943efaf8aaae268f6ffd94ab8826a7053aff4df142238cc74b73fc94f
