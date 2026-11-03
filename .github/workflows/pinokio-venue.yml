@@ -58,6 +58,8 @@ jobs:
           git clone https://github.com/pinokiocomputer/pterm.git "$RUNNER_TEMP/pterm"
           git -C "$RUNNER_TEMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb
           npm ci --omit=dev --prefix "$RUNNER_TEMP/pterm" --silent
+      - name: Apply Linux seed environment compatibility fix
+        run: node .github/venue/r20-linux-seed-fix.cjs "$RUNNER_TEMP/pinokiod"
       - name: Build pinned daemon image
         run: docker build -t r20-pinokiod "$RUNNER_TEMP/pinokiod"
       - name: Run real Reset action and verify settlement
