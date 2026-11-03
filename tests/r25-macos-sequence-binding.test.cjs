@@ -12,10 +12,12 @@ const sequencePath = path.join(__dirname, '..', '.github', 'venue', 'r25-option-
 const wrapperPath = path.join(__dirname, '..', '.github', 'venue', 'r25-local-macos-option-b.sh');
 const runnerPath = path.join(__dirname, '..', '.github', 'venue', 'r25-snapshot-runner.cjs');
 const hostedWorkflowPath = path.join(__dirname, '..', '.github', 'workflows', 'r25-snapshot-journey.yml');
+const defaultRegisteredWorkflowPath = path.join(__dirname, '..', '.github', 'workflows', 'ci.yml');
 const sequence = fs.readFileSync(sequencePath, 'utf8');
 const wrapper = fs.readFileSync(wrapperPath, 'utf8');
 const runner = fs.readFileSync(runnerPath, 'utf8');
 const hostedWorkflow = fs.readFileSync(hostedWorkflowPath, 'utf8');
+const defaultRegisteredWorkflow = fs.readFileSync(defaultRegisteredWorkflowPath, 'utf8');
 
 const venueRef = '6c159e87ebb4f8965f93f6de7a9cfa25778b01d4';
 const runnerSha256 = '0139869dbfcba0e18613e35c732916f197e7d5a623726509070de5f2d87bf1c8';
@@ -73,6 +75,13 @@ test('macOS sequence binds and invokes the corrected immutable wrapper', () => {
 });
 
 test('hosted macOS workflow independently dispatches both modes with the exact published tuple', () => {
+  assert.match(hostedWorkflow, /workflow_call:/);
+  assert.match(defaultRegisteredWorkflow, /workflow_dispatch:/);
+  assert.match(defaultRegisteredWorkflow, /options: \[none, pinokio-backend-macos, pinokio-fully-local-macos\]/);
+  assert.match(defaultRegisteredWorkflow, /uses: \.\/\.github\/workflows\/r25-snapshot-journey\.yml/);
+  assert.match(defaultRegisteredWorkflow, /inputs\.r25_slot_id != 'none'/);
+  assert.match(defaultRegisteredWorkflow, /r25_candidate_tuple:/);
+  assert.match(defaultRegisteredWorkflow, /actions: read/);
   assert.match(hostedWorkflow, /runs-on: macos-15/);
   assert.match(hostedWorkflow, /options: \[pinokio-backend-macos, pinokio-fully-local-macos\]/);
   assert.match(hostedWorkflow, /candidate_tuple:/);
