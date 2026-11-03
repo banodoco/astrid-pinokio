@@ -1,0 +1,41 @@
+name: R0 native artifact capture
+
+on:
+  workflow_dispatch:
+    inputs:
+      program_root:
+        description: Absolute Runtime program root under an isolated astrid-pinokio-r0-disposable-* temp home
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: [self-hosted, windows, x64]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Refuse elevated Windows sessions
+        shell: pwsh
+        run: |
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'R0 capture requires a non-administrator Windows session.'
+          }
+      - name: Capture installed R0 source bytes without invoking Stop
+        shell: pwsh
+        env:
+          PROGRAM_ROOT: ${{ inputs.program_root }}
+        run: node tests/smoke/r0-installed-capture.mjs "$env:PROGRAM_ROOT" r0-installed-capture.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r0-native-capture-${{ github.run_id }}
+          path: r0-installed-capture.json
+          if-no-files-found: warn
