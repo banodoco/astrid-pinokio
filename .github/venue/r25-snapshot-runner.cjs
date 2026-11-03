@@ -79,6 +79,33 @@ function fail(message, extra = {}) {
   fs.writeFileSync(file, `${JSON.stringify(diagnostics, null, 2)}\n`, { encoding: 'utf8', flag: 'w', mode: 0o600 });
 }
 
+function createActionEventCapture(file, actionIndex = 0, action = 'setup-install') {
+  const allowedKinds = new Set(['start', 'stream', 'result', 'error', 'stop', 'disconnect']);
+  const allowedMethods = new Set(['shell.run', 'local.set', 'script.start', 'input']);
+  const rows = [];
+  return packet => {
+    if (!packet || rows.length >= 40) return;
+    const kind = packet.type === 'event' && ['stop', 'disconnect'].includes(packet.data) ? packet.data : packet.type;
+    if (!allowedKinds.has(kind)) return;
+    const rpc = kind === 'start' ? packet.data : packet.rpc;
+    const category = kind === 'result' ? 'result' : kind === 'error' ? 'error'
+      : kind === 'stream' ? 'stream' : 'control';
+    const row = {
+      schema: 'astrid.r25.setup-action-event.v1', at: new Date().toISOString(),
+      action, action_index: Number.isInteger(actionIndex) && actionIndex >= 0 && actionIndex <= 10000 ? actionIndex : null,
+      kind, category,
+      index: Number.isInteger(packet.index ?? rpc?.current) && (packet.index ?? rpc?.current) >= 0 && (packet.index ?? rpc?.current) <= 10000 ? packet.index ?? rpc.current : null,
+      total: Number.isInteger(packet.total ?? rpc?.total) && (packet.total ?? rpc?.total) >= 0 && (packet.total ?? rpc?.total) <= 10000 ? packet.total ?? rpc.total : null,
+      method: allowedMethods.has(rpc?.method) ? rpc.method : null,
+    };
+    rows.push(row);
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${rows.map(item => JSON.stringify(item)).join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
+    } catch { /* The action capture is diagnostic-only. */ }
+  };
+}
+
 const DIAGNOSTIC_CAPTURE_LIMIT = 64 * 1024;
 function createBoundedCapture(file, limit = DIAGNOSTIC_CAPTURE_LIMIT) {
   if (!Number.isSafeInteger(limit) || limit < 64 || limit > DIAGNOSTIC_CAPTURE_LIMIT) throw new Error('diagnostic capture limit is invalid');
@@ -240,6 +267,7 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
     try {
       const packet = JSON.parse(String(event.data));
       try { diagnostic?.packet(packet); } catch {}
+      try { diagnostic?.actionPacket?.(packet); } catch {}
       settlement?.packet(packet);
       if (packet?.type === 'event' && packet.data === 'stop') terminal.stop = true;
       if (packet?.type === 'event' && packet.data === 'disconnect') terminal.disconnect = true;
@@ -350,6 +378,7 @@ async function main() {
     run_id: process.env.GITHUB_RUN_ID || null,
     run_attempt: process.env.GITHUB_RUN_ATTEMPT || null,
     phase: 'setup-install',
+    action: 'setup-install', action_index: 0,
     pinokio_engine_ref: engineBinding.engine_ref,
     pterm_ref: process.env.PTERM_REF || null,
     pinokiod_ref: process.env.PINOKIOD_REF || null,
@@ -375,6 +404,7 @@ async function main() {
     stdout: createBoundedCapture(path.join(diagnostics, 'daemon.stdout.log')),
     stderr: createBoundedCapture(path.join(diagnostics, 'daemon.stderr.log')),
   } : null;
+  let setupPtermPid = null;
   setupDiagnostics.stage('daemon-spawn-start', { pid: process.pid, ppid: process.ppid });
   let daemonSpawnFailed = false;
   const daemon = spawn(process.execPath, [path.join(pinokiodRoot, 'script', 'index.js')], {
@@ -421,6 +451,11 @@ async function main() {
   ];
   const shellDiagnosticFile = path.join(appRoot, '_r25-setup-shell-diagnostics.jsonl');
   const setupDiagnosticView = setupOnly ? Object.assign({}, setupDiagnostics, {
+    actionPacket: createActionEventCapture(path.join(diagnostics, 'r25-setup-action-events.jsonl'), 0, 'setup-install'),
+    stage(name, fields = {}) {
+      if (name === 'pterm-spawn' && Number.isSafeInteger(fields.pid) && fields.pid > 0) setupPtermPid = fields.pid;
+      setupDiagnostics.stage(name, fields);
+    },
     stdio: ptermOutput,
     settlement_file: path.join(diagnostics, 'setup-install-settlement.json'),
     windows_pty_capture_file: process.platform === 'win32' ? (crossPty ? path.join(diagnostics, 'cross-os-pty.json') : ptyCaptureFile) : null,
@@ -511,9 +546,23 @@ async function main() {
   } finally {
     refreshPtyCaptureStatus();
     setupDiagnostics.stage('cleanup-start');
+    if (setupOnly && process.platform === 'win32') {
+      const roots = [...new Set([setupPtermPid, daemon.pid].filter(pid => Number.isSafeInteger(pid) && pid > 0))];
+      try {
+        const census = await captureWindowsProcessTree({ rootPids: roots });
+        fs.writeFileSync(path.join(diagnostics, 'process-tree-before-cleanup.json'), `${JSON.stringify(census, null, 2)}\n`, { encoding: 'utf8', flag: 'w', mode: 0o600 });
+      } catch {}
+    }
     await trace.cleanup();
     if (worker && worker.exitCode === null) worker.kill();
     await terminateChild(daemon);
+    if (setupOnly && process.platform === 'win32') {
+      const roots = [...new Set([setupPtermPid, daemon.pid].filter(pid => Number.isSafeInteger(pid) && pid > 0))];
+      try {
+        const census = await captureWindowsProcessTree({ rootPids: roots });
+        fs.writeFileSync(path.join(diagnostics, 'process-tree-after-cleanup.json'), `${JSON.stringify(census, null, 2)}\n`, { encoding: 'utf8', flag: 'w', mode: 0o600 });
+      } catch {}
+    }
     ptermOutput?.stdout.close();
     ptermOutput?.stderr.close();
     daemonOutput?.stdout.close();
@@ -521,7 +570,7 @@ async function main() {
   }
 }
 
-module.exports = { actionPlan, createBoundedCapture, copyBoundedTail, copyFirstInstallerLog, ptyCaptureStatus };
+module.exports = { actionPlan, createActionEventCapture, createBoundedCapture, copyBoundedTail, copyFirstInstallerLog, ptyCaptureStatus };
 if (require.main === module) {
   (process.env.R25_TARGET_OS === 'macos' ? require('./r25-macos-snapshot-runner.cjs').main : main)().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });
 }

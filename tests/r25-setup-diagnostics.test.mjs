@@ -10,6 +10,7 @@ import { instrumentWindowsBootstrap } from '../pinokio/shell.mjs';
 const require = createRequire(import.meta.url);
 const { RUNTIME } = require('../.github/venue/r25-pinokiod-pty-instrumentation.cjs');
 const { createInstallDiagnostics } = require('../.github/venue/r21-observer-diagnostics.cjs');
+const { createActionEventCapture } = require('../.github/venue/r25-snapshot-runner.cjs');
 const { createBoundedCapture, copyBoundedTail, ptyCaptureStatus } = require('../.github/venue/r25-snapshot-runner.cjs');
 const runner = fs.readFileSync(new URL('../.github/venue/r25-snapshot-runner.cjs', import.meta.url), 'utf8');
 
@@ -66,6 +67,29 @@ test('retains bounded shell child lifecycle and bootstrap stage evidence', () =>
   assert.equal(saved.shell_events[3].signal, 'SIGTERM');
   assert.equal(saved.shell_events[2].stage, 'bootstrap.invoke-installer');
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('action events retain only the bounded setup action index and event category', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-action-events-'));
+  try {
+    const file = path.join(root, 'events.jsonl');
+    const capture = createActionEventCapture(file, 0, 'setup-install');
+    capture({ type: 'start', index: 2, total: 4, data: { method: 'shell.run', current: 2, total: 4 } });
+    capture({ type: 'error', index: 2, total: 4, rpc: { method: 'shell.run' }, data: { message: 'token=private-value' } });
+    capture({ type: 'event', data: 'stop', index: 3, total: 4 });
+    const rows = fs.readFileSync(file, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line));
+    assert.equal(rows[0].action_index, 0);
+    assert.equal(rows[0].action, 'setup-install');
+    assert.equal(rows[0].category, 'control');
+    assert.equal(rows[1].category, 'error');
+    assert.equal(rows[1].index, 2);
+    assert.equal(rows[1].method, 'shell.run');
+    assert.equal(rows[2].kind, 'stop');
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /private-value/);
+    for (let index = 0; index < 45; index += 1) capture({ type: 'stream', index, data: { raw: 'sensitive terminal payload' } });
+    assert.equal(fs.readFileSync(file, 'utf8').trimEnd().split('\n').length, 40);
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /sensitive terminal payload/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test('daemon and PTerm output capture is byte-bounded and redacts secrets split across chunks', () => {
