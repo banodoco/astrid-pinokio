@@ -241,6 +241,39 @@ test('cleanup fails closed and leaves the daemon untouched when identity changes
   }
 });
 
+test('cleanup refuses to signal when a required daemon identity field is missing', async () => {
+  const root = tempRoot();
+  const script = writeDaemonFixture(root);
+  const childPidFile = path.join(root, 'child.pid');
+  const termFile = path.join(root, 'term.log');
+  const daemon = spawn(process.execPath, [script], {
+    cwd: root, env: { ...process.env, CHILD_PID_FILE: childPidFile, TERM_FILE: termFile }, stdio: 'ignore',
+  });
+  let descendantPid = null;
+  try {
+    await waitForFile(childPidFile);
+    descendantPid = Number(fs.readFileSync(childPidFile, 'utf8'));
+    const unavailable = {
+      available: false, reason: 'identity-read-failed:macos-identity-fields-unavailable',
+      missing_fields: ['cwd'], field_errors: { cwd: 'unavailable' },
+    };
+    const cleanup = await cleanupOwnedDaemon(daemon, { identity: unavailable, killMs: 100 });
+    assert.equal(cleanup.failure, 'daemon-identity-unavailable');
+    assert.equal(cleanup.direct_signal_attempted, false);
+    assert.equal(cleanup.signal, null);
+    assert.equal(isAlive(daemon.pid), true, 'daemon was signalled despite a missing identity field');
+    assert.equal(isAlive(descendantPid), true, 'descendant was signalled without a complete ownership proof');
+    assert.equal(fs.existsSync(termFile), false);
+    assert.deepEqual(cleanup.identity.missing_fields, ['cwd']);
+  } finally {
+    if (daemon.exitCode === null && daemon.signalCode === null) daemon.kill('SIGKILL');
+    if (descendantPid && isAlive(descendantPid)) process.kill(descendantPid, 'SIGKILL');
+    const deadline = Date.now() + 1000;
+    while (isAlive(daemon.pid) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('bounded captures redact credentials and never exceed their byte limit', () => {
   const root = tempRoot();
   try {

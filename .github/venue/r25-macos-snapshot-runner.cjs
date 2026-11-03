@@ -327,14 +327,29 @@ function readProcessIdentity(pid) {
       const ps = format => execFileSync('ps', ['-p', String(pid), '-o', format], {
         encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 2000,
       }).trim();
-      const ppid = Number(ps('ppid='));
-      const uid = Number(ps('uid='));
-      const commandLine = ps('command=');
-      const start = ps('lstart=');
-      const executable = readLsofPath(pid, 'txt');
-      const cwd = readLsofPath(pid, 'cwd');
-      if (!Number.isSafeInteger(ppid) || !Number.isSafeInteger(uid) || !commandLine || !start || !executable || !cwd) {
-        throw new Error('macos-identity-fields-unavailable');
+      const fieldErrors = {};
+      const readField = (name, reader, valid = value => Boolean(value)) => {
+        try {
+          const value = reader();
+          if (!valid(value)) fieldErrors[name] = 'unavailable';
+          return value;
+        } catch (error) {
+          const code = typeof error?.code === 'string' && /^[A-Z0-9_]+$/.test(error.code) ? error.code : 'read-failed';
+          fieldErrors[name] = code;
+          return null;
+        }
+      };
+      const ppid = readField('ppid', () => Number(ps('ppid=')), Number.isSafeInteger);
+      const uid = readField('uid', () => Number(ps('uid=')), Number.isSafeInteger);
+      const commandLine = readField('command_line', () => ps('command='));
+      const start = readField('start_identity', () => ps('lstart='));
+      const executable = readField('executable', () => readLsofPath(pid, 'txt'));
+      const cwd = readField('cwd', () => readLsofPath(pid, 'cwd'));
+      if (Object.keys(fieldErrors).length) {
+        return {
+          available: false, pid, reason: 'identity-read-failed:macos-identity-fields-unavailable',
+          missing_fields: Object.keys(fieldErrors), field_errors: fieldErrors,
+        };
       }
       return {
         available: true, pid, ppid, uid, executable, cwd, command_line: commandLine,
