@@ -14,9 +14,9 @@ function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
-function inside(candidate, parent) {
-  const relative = path.relative(parent, candidate);
-  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+function inside(candidate, parent, paths = path) {
+  const relative = paths.relative(parent, candidate);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${paths.sep}`) && !paths.isAbsolute(relative));
 }
 
 function findFiles(directory, basename) {
@@ -40,6 +40,13 @@ function containsCommit(value) {
   return false;
 }
 
+function commitClaims(value, prefix = '$') {
+  if (typeof value === 'string') return value.toLowerCase().includes(R0.commit) ? [{ field: prefix, value }] : [];
+  if (Array.isArray(value)) return value.flatMap((item, index) => commitClaims(item, `${prefix}[${index}]`));
+  if (value && typeof value === 'object') return Object.entries(value).flatMap(([key, item]) => commitClaims(item, `${prefix}.${key}`));
+  return [];
+}
+
 export function captureInstalledR0(root, { platform = process.platform, tempDirectory = os.tmpdir() } = {}) {
   if (platform !== 'win32') throw new Error('Native R0 artifact capture requires Windows.');
   const absoluteRoot = path.win32.resolve(root);
@@ -47,8 +54,8 @@ export function captureInstalledR0(root, { platform = process.platform, tempDire
   const relativeToTemp = path.win32.relative(tempRoot, absoluteRoot);
   const homeName = relativeToTemp.split(path.win32.sep)[0];
   const disposableRoot = path.win32.join(tempRoot, homeName);
-  if (!inside(absoluteRoot, tempRoot) || !/^astrid-pinokio-r0-disposable-[A-Za-z0-9-]+$/i.test(homeName)
-    || !inside(absoluteRoot, disposableRoot)) {
+  if (!inside(absoluteRoot, tempRoot, path.win32) || !/^astrid-pinokio-r0-disposable-[A-Za-z0-9-]+$/i.test(homeName)
+    || !inside(absoluteRoot, disposableRoot, path.win32)) {
     throw new Error('Refusing capture: the Runtime root is outside a named disposable Pinokio temp home.');
   }
   const markerPath = path.win32.join(disposableRoot, '.astrid-r0-disposable.json');
@@ -68,10 +75,13 @@ export function captureInstalledR0(root, { platform = process.platform, tempDire
   if (!containsCommit(versionRecord) && !containsCommit(installRecord)) {
     throw new Error('Installed version records do not identify the requested R0 commit.');
   }
-  if (!inside(path.win32.resolve(installRecord.data_root), disposableRoot)) {
+  if (!inside(path.win32.resolve(installRecord.data_root), disposableRoot, path.win32)) {
     throw new Error('Refusing capture: Runtime data root is outside the disposable Pinokio home.');
   }
-  const pythonRoot = path.win32.join(versionRoot, 'Lib', 'site-packages');
+  if (!inside(path.win32.resolve(versionRecord.python), versionRoot, path.win32)) {
+    throw new Error('Refusing capture: recorded Python is outside the installed version directory.');
+  }
+  const pythonRoot = path.win32.join(path.win32.dirname(versionRecord.python), 'Lib', 'site-packages');
   const bootstrapFiles = findFiles(pythonRoot, 'bootstrap.py').filter((file) => file.toLowerCase().endsWith('astrid_runtime\\bootstrap.py'));
   const lifecycleFiles = findFiles(pythonRoot, 'lifecycle.py').filter((file) => file.toLowerCase().endsWith('runtime_protocol\\lifecycle.py'));
   if (bootstrapFiles.length !== 1 || lifecycleFiles.length !== 1) throw new Error('Expected exactly one installed R0 bootstrap and lifecycle module.');
@@ -85,7 +95,14 @@ export function captureInstalledR0(root, { platform = process.platform, tempDire
     host: { platform, elevated: null },
     tuple: { pinokio: '7979e023874c98057f441ee8e525e0cb6c562e90', runtime: R0.commit,
       actionsRun: '41600499394', actionsJob: '125797843152' },
-    installed: { programRoot: absoluteRoot, version, versionRecord, source },
+    installed: {
+      programRoot: absoluteRoot,
+      version,
+      versionRecordSha256: sha256(path.win32.join(versionRoot, 'version.json')),
+      installRecordSha256: sha256(path.win32.join(absoluteRoot, 'install.json')),
+      sourceIdentityClaims: [...commitClaims(versionRecord), ...commitClaims(installRecord)],
+      source,
+    },
     predicates: {
       artifactIdentity: source.matchesAuthenticatedR0 ? 'verified-by-byte-hash' : 'mismatch',
       clearStop: 'not-run', blockedRefusal: 'not-run', retryAfterReconciliation: 'not-run',
