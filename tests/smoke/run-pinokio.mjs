@@ -385,16 +385,19 @@ function createLockRefusalCapture({ environment, pinokioHome, userHome }) {
       captured = true;
       const dataRoot = environment.XDG_DATA_HOME || path.join(environment.HOME, '.local', 'share');
       const lockPath = path.join(dataRoot, 'astrid-install.lock');
+      const lockPathLabel = environment.XDG_DATA_HOME
+        ? '$XDG_DATA_HOME/astrid-install.lock'
+        : '$HOME/.local/share/astrid-install.lock';
       const inDisposableState = isWithin(lockPath, pinokioHome) || isWithin(lockPath, userHome);
       let record;
       if (inDisposableState) {
-        try { record = captureLockRefusal({ lockPath }); } catch { record = null; }
+        try { record = captureLockRefusal({ lockPath, lockPathLabel }); } catch { record = null; }
       }
       if (!record) {
         record = {
           kind: 'pinokio-lock-refusal-diagnostic', schema: 1, observed_at: new Date().toISOString(),
           platform: process.platform,
-          lock_path: '$XDG_DATA_HOME/astrid-install.lock or $HOME/.local/share/astrid-install.lock',
+          lock_path: lockPathLabel,
           device: 'unknown', inode: 'unknown', holder_pid: 'unknown', holders: [],
           limitations: [inDisposableState ? 'diagnostic-snapshot-failed' : 'lock-path-outside-disposable-state'],
         };

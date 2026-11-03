@@ -44,6 +44,13 @@ function processIdentity(procRoot, pid, lockStat) {
     if (/^\d+$/.test(fields[1] || '')) ppid = Number(fields[1]);
   } catch { /* process exited or procfs is restricted */ }
 
+  let parent = UNKNOWN;
+  if (typeof ppid === 'number' && ppid > 0) {
+    let parentComm = UNKNOWN;
+    try { parentComm = fs.readFileSync(path.join(procRoot, String(ppid), 'comm'), 'utf8').trim().slice(0, 80) || UNKNOWN; } catch { /* parent exited or procfs is restricted */ }
+    parent = { pid: ppid, comm: parentComm, argv: safeArgv(procRoot, ppid) };
+  }
+
   let fdLink = UNKNOWN;
   try {
     const fdRoot = path.join(procRoot, String(pid), 'fd');
@@ -51,7 +58,7 @@ function processIdentity(procRoot, pid, lockStat) {
     fdLink = 'not-found';
     for (const name of names) {
       try {
-        const stat = fs.statSync(path.join(fdRoot, name));
+        const stat = fs.statSync(path.join(fdRoot, name), { bigint: true });
         if (stat.dev === lockStat.dev && stat.ino === lockStat.ino) {
           fdLink = 'matched-lock-inode';
           break;
@@ -59,17 +66,17 @@ function processIdentity(procRoot, pid, lockStat) {
       } catch { /* descriptor closed during bounded scan */ }
     }
   } catch { /* procfs is restricted or process exited */ }
-  return { pid, ppid, comm, argv: safeArgv(procRoot, pid), fd_link: fdLink };
+  return { pid, ppid, comm, argv: safeArgv(procRoot, pid), fd_link: fdLink, parent };
 }
 
 /** Read-only snapshot for a Linux flock refusal. No lock is opened or probed. */
-export function captureLockRefusal({ lockPath, procRoot = '/proc' }) {
+export function captureLockRefusal({ lockPath, lockPathLabel = '$LOCK_ROOT/astrid-install.lock', procRoot = '/proc' }) {
   const record = {
     kind: 'pinokio-lock-refusal-diagnostic',
     schema: 1,
     observed_at: new Date().toISOString(),
     platform: process.platform,
-    lock_path: '$XDG_DATA_HOME/astrid-install.lock or $HOME/.local/share/astrid-install.lock',
+    lock_path: lockPathLabel,
     device: UNKNOWN,
     inode: UNKNOWN,
     holder_pid: UNKNOWN,
@@ -79,8 +86,8 @@ export function captureLockRefusal({ lockPath, procRoot = '/proc' }) {
 
   let lockStat;
   try {
-    lockStat = fs.statSync(lockPath);
-    record.device = linuxDeviceParts(BigInt(lockStat.dev));
+    lockStat = fs.statSync(lockPath, { bigint: true });
+    record.device = linuxDeviceParts(lockStat.dev);
     record.inode = String(lockStat.ino);
   } catch (error) {
     record.limitations.push(error?.code === 'ENOENT' ? 'lock-path-not-present-at-capture' : 'lock-path-stat-unavailable');

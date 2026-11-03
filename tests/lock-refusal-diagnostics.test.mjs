@@ -52,15 +52,24 @@ test('Linux lock refusal capture records a present disposable flock holder', { s
 test('Linux lock refusal capture reports explicit unknowns when lock data is unavailable', { skip: !linux }, () => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'pinokio-lock-diag-'));
   try {
-    const record = captureLockRefusal({
+    const missing = captureLockRefusal({
       lockPath: path.join(scratch, 'missing.lock'),
       procRoot: path.join(scratch, 'missing-proc'),
     });
-    assert.equal(record.device, 'unknown');
-    assert.equal(record.inode, 'unknown');
-    assert.equal(record.holder_pid, 'unknown');
-    assert.deepEqual(record.holders, []);
-    assert.deepEqual(record.limitations, ['lock-path-not-present-at-capture']);
+    assert.equal(missing.device, 'unknown');
+    assert.equal(missing.inode, 'unknown');
+    assert.equal(missing.holder_pid, 'unknown');
+    assert.deepEqual(missing.holders, []);
+    assert.deepEqual(missing.limitations, ['lock-path-not-present-at-capture']);
+
+    const lockPath = path.join(scratch, 'present.lock');
+    fs.writeFileSync(lockPath, '');
+    const inaccessible = captureLockRefusal({ lockPath, procRoot: path.join(scratch, 'missing-proc') });
+    assert.equal(inaccessible.inode, String(fs.statSync(lockPath).ino));
+    assert.equal(inaccessible.holder_pid, 'unknown');
+    assert.deepEqual(inaccessible.holders, []);
+    assert.deepEqual(inaccessible.limitations, ['proc-locks-unavailable']);
+    assert.equal(JSON.stringify(inaccessible).includes(scratch), false, 'diagnostic must redact disposable absolute paths');
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
