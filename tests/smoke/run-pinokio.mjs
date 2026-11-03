@@ -6,6 +6,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { captureLockRefusal } from './lock-refusal-diagnostics.mjs';
 import library from '../../pinokio/lib.js';
 import { signalGroup } from '../../pinokio/session.mjs';
 import { runTool as executeTool, timedStep } from './process.mjs';
@@ -128,7 +129,7 @@ async function processTreeKill(child) {
   }
 }
 
-function launchShell(step, environment, { background = false, onSpawn } = {}) {
+function launchShell(step, environment, { background = false, onSpawn, captureLockRefusal: lockCapture } = {}) {
   assert.equal(step.method, 'shell.run');
   assert.equal(step.params.shell, shell);
   assert.equal(path.resolve(step.params.path), path.resolve(environment.ASTRID_PINOKIO_APP_DIR),
@@ -153,10 +154,12 @@ function launchShell(step, environment, { background = false, onSpawn } = {}) {
   child.stdout.on('data', (chunk) => {
     child.output += chunk;
     process.stdout.write(chunk);
+    lockCapture?.observe(chunk);
   });
   child.stderr.on('data', (chunk) => {
     child.output += chunk;
     process.stderr.write(chunk);
+    lockCapture?.observe(chunk);
   });
   child.exit = new Promise((resolve) => child.once('close', (code, signal) => {
     child.closed = true;
@@ -342,7 +345,7 @@ function kernelFor(app, getDaemon, onStop) {
   } };
 }
 
-async function invokeAction(name, app, appDirectory, environment, home, getDaemon, stopDaemon) {
+async function invokeAction(name, app, appDirectory, environment, home, getDaemon, stopDaemon, options = {}) {
   const loaded = load(`pinokio/${name}.js`, app, appDirectory);
   const script = typeof loaded === 'function' ? await loaded({}, {}) : loaded;
   const kernel = kernelFor(app, getDaemon, stopDaemon);
@@ -354,7 +357,9 @@ async function invokeAction(name, app, appDirectory, environment, home, getDaemo
             background: true, onSpawn: getDaemon.set,
           });
         } else {
-          await launchShell(step, { ...environment, ASTRID_PINOKIO_APP_DIR: appDirectory });
+          await launchShell(step, { ...environment, ASTRID_PINOKIO_APP_DIR: appDirectory }, {
+            captureLockRefusal: options.captureLockRefusal,
+          });
         }
       } else if (step.method === 'script.start') {
         await invokeAction('start', app, appDirectory, environment, home, getDaemon, stopDaemon);
@@ -367,6 +372,36 @@ async function invokeAction(name, app, appDirectory, environment, home, getDaemo
     }, log);
   }
   return script;
+}
+
+function createLockRefusalCapture({ environment, pinokioHome, userHome }) {
+  let captured = false;
+  let recent = '';
+  return {
+    observe(chunk) {
+      if (captured) return;
+      recent = `${recent}${String(chunk)}`.slice(-160);
+      if (!/another installer owns the installation lifetime lock/i.test(recent)) return;
+      captured = true;
+      const dataRoot = environment.XDG_DATA_HOME || path.join(environment.HOME, '.local', 'share');
+      const lockPath = path.join(dataRoot, 'astrid-install.lock');
+      const inDisposableState = isWithin(lockPath, pinokioHome) || isWithin(lockPath, userHome);
+      let record;
+      if (inDisposableState) {
+        try { record = captureLockRefusal({ lockPath }); } catch { record = null; }
+      }
+      if (!record) {
+        record = {
+          kind: 'pinokio-lock-refusal-diagnostic', schema: 1, observed_at: new Date().toISOString(),
+          platform: process.platform,
+          lock_path: '$XDG_DATA_HOME/astrid-install.lock or $HOME/.local/share/astrid-install.lock',
+          device: 'unknown', inode: 'unknown', holder_pid: 'unknown', holders: [],
+          limitations: [inDisposableState ? 'diagnostic-snapshot-failed' : 'lock-path-outside-disposable-state'],
+        };
+      }
+      process.stdout.write(`[pinokio-lock-refusal] ${JSON.stringify(record)}\n`);
+    },
+  };
 }
 
 async function stopDaemon(getDaemon) {
@@ -525,7 +560,11 @@ async function runFullyLocal() {
     assert.equal(await freePort(5180), true, 'port 5180 remained open after fully local Stop');
     await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
 
-    await invokeAction('update', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    const lockRefusalCapture = process.platform === 'linux'
+      ? createLockRefusalCapture({ environment, pinokioHome, userHome })
+      : undefined;
+    await invokeAction('update', app, appDirectory, environment, pinokioHome, getDaemon, stop,
+      { captureLockRefusal: lockRefusalCapture });
     const restartedPage = await step('local editor after Update restart', () => runTool('curl', ['--max-time', '30', '--silent', '--show-error', '--write-out', '\n%{http_code}',
       'http://127.0.0.1:5180/tools/video-editor'], environment));
     assert.equal(Number(restartedPage.trim().split(/\r?\n/).at(-1)), 200, 'local editor did not become ready after Start');
