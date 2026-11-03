@@ -72,6 +72,14 @@ function commitClaims(value, prefix = '$') {
   return [];
 }
 
+export function installedSitePackagesForPython(pythonPath) {
+  const pythonDirectory = path.win32.dirname(path.win32.resolve(pythonPath));
+  const pythonHome = path.win32.basename(pythonDirectory).toLowerCase() === 'scripts'
+    ? path.win32.dirname(pythonDirectory)
+    : pythonDirectory;
+  return path.win32.join(pythonHome, 'Lib', 'site-packages');
+}
+
 export function captureInstalledR0(root, {
   platform = process.platform,
   tempDirectory = os.tmpdir(),
@@ -115,7 +123,7 @@ export function captureInstalledR0(root, {
   if (!inside(path.win32.resolve(versionRecord.python), versionRoot, path.win32)) {
     throw new Error('Refusing capture: recorded Python is outside the installed version directory.');
   }
-  const pythonRoot = path.win32.join(path.win32.dirname(versionRecord.python), 'Lib', 'site-packages');
+  const pythonRoot = installedSitePackagesForPython(versionRecord.python);
   const bootstrapFiles = findFiles(pythonRoot, 'bootstrap.py').filter((file) => file.toLowerCase().endsWith('astrid_runtime\\bootstrap.py'));
   const lifecycleFiles = findFiles(pythonRoot, 'lifecycle.py').filter((file) => file.toLowerCase().endsWith('runtime_protocol\\lifecycle.py'));
   if (bootstrapFiles.length !== 1 || lifecycleFiles.length !== 1) throw new Error('Expected exactly one installed R0 bootstrap and lifecycle module.');
