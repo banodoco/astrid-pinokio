@@ -6,7 +6,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const repo = path.resolve(import.meta.dirname, '..');
-for (const failObserver of [false, true]) test(`native Linux uses its own action path and cleans up when observer ${failObserver ? 'fails' : 'succeeds'}`, () => {
+const linuxOnly = { skip: process.platform !== 'linux' && 'requires Linux bash and core utilities' };
+for (const failObserver of [false, true]) test(`native Linux uses its own action path and cleans up when observer ${failObserver ? 'fails' : 'succeeds'}`, linuxOnly, () => {
   const root = mkdtempSync(path.join(tmpdir(), 'r20-native-test-'));
   try {
     const bin = path.join(root, 'bin');
@@ -30,7 +31,7 @@ exit ${failObserver ? 1 : 0}`);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('native Linux refuses stale evidence or a reused Pinokio home', () => {
+test('native Linux refuses stale evidence or a reused Pinokio home', linuxOnly, () => {
   for (const name of ['r20-evidence', 'r20-home']) {
     const root = mkdtempSync(path.join(tmpdir(), 'r20-native-stale-'));
     try {
