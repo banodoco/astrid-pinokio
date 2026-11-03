@@ -1,0 +1,3 @@
+# R-21 source and workflow text are inspected byte-for-byte by focused tests.
+.github/venue/r21-real-engine.sh text eol=lf
+.github/workflows/r21-real-engine.yml text eol=lf
