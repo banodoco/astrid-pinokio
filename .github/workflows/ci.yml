@@ -14,14 +14,14 @@ on:
   workflow_dispatch:
     inputs:
       diagnostic_keep_going:
-        description: Continue diagnostic smoke stages after failures and retain a non-proof report
+        description: Continue native Pinokiod/PTerm diagnostic stages and retain a non-proof report
         required: false
         default: false
         type: boolean
       pinokio_ref:
-        description: Exact Pinokio source commit to check out
-        required: true
-        default: 3a6a98ae251ca126505245286e2d3e760f4348e9
+        description: Exact Pinokio harness source commit; blank uses dispatch SHA
+        required: false
+        default: ''
         type: string
       agent_ref:
         description: Frozen Agent tuple commit
@@ -50,6 +50,7 @@ permissions:
 
 jobs:
   unit:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.diagnostic_keep_going != true }}
     name: Unit (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 5
@@ -95,9 +96,9 @@ jobs:
 
   keepgoing-diagnostic:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_keep_going == true }}
-    name: Keep-going diagnostic (${{ matrix.channel }} / ${{ matrix.os }})
+    name: Keep-going native diagnostic (${{ matrix.channel }} / ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 15 }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -115,27 +116,33 @@ jobs:
           - os: windows-latest
             channel: fully-local
     env:
-      PINOKIO_REF: ${{ inputs.pinokio_ref }}
+      PINOKIO_REF: ${{ inputs.pinokio_ref || github.sha }}
       AGENT_REF: ${{ inputs.agent_ref }}
       APP_REF: ${{ inputs.app_ref }}
       RUNTIME_REF: ${{ inputs.runtime_ref }}
+      PINOKIO_DIAGNOSTIC_KEEP_GOING: '1'
+      PINOKIO_KEEPGOING_REPORT: ${{ runner.temp }}/keepgoing-report.json
+      PINOKIO_KEEPGOING_ROOT: ${{ runner.temp }}/pinokio-keepgoing
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.pinokio_ref }}
+          ref: ${{ inputs.pinokio_ref || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
+      - name: Preserve exact fixture bytes
+        run: git config --global core.autocrlf false
       - name: Run one diagnostic channel
         env:
           PINOKIO_DIAGNOSTIC_KEEP_GOING: ${{ inputs.diagnostic_keep_going && '1' || '0' }}
           PINOKIO_KEEPGOING_REPORT: ${{ runner.temp }}/keepgoing-report.json
-        run: node tests/smoke/run-pinokio.mjs ${{ matrix.channel == 'backend' && 'hosted' || matrix.channel }}
+          PINOKIO_KEEPGOING_SLOT: pinokio-${{ matrix.channel }}-${{ runner.os == 'Linux' && 'linux' || runner.os == 'macOS' && 'macos' || 'windows' }}
+        run: node .github/venue/keepgoing-native.mjs ${{ matrix.channel }}
       - name: Retain diagnostic-only report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: keepgoing-diagnostic-${{ matrix.channel }}-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/keepgoing-report.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7

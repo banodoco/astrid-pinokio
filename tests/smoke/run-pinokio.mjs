@@ -8,6 +8,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import library from '../../pinokio/lib.js';
 import { signalGroup } from '../../pinokio/session.mjs';
+import { prepareDiagnosticFixture, frozenAppBranch, verifyInstalledEditor, verifyAppBranch } from './diagnostic-fixture.mjs';
+import { trackDisposableChild, terminateDisposableChild, boundOwnedOperation } from './owned-process.mjs';
 import { createKeepGoingRecorder, diagnosticKeepGoingEnabled } from './keepgoing.mjs';
 import { runTool as executeTool, timedStep } from './process.mjs';
 
@@ -22,7 +24,13 @@ function log(message) {
   process.stdout.write(`[pinokio-smoke] ${message}\n`);
 }
 
-const keepGoing = createKeepGoingRecorder({ enabled: diagnosticKeepGoingEnabled() });
+const keepGoing = createKeepGoingRecorder({ enabled: diagnosticKeepGoingEnabled(), metadata: {
+  slot: process.env.PINOKIO_KEEPGOING_SLOT || null,
+  workflow_sha: process.env.GITHUB_SHA || null,
+  run_id: process.env.GITHUB_RUN_ID || null,
+} });
+let forcedCleanup = false;
+const diagnosticTimeout = Number(process.env.PINOKIO_DIAGNOSTIC_TIMEOUT_MS || 120000);
 const stageNeeds = {
   'hosted install': ['setup'], 'hosted install records': ['hosted install'], 'hosted services after install': ['hosted install'],
   'hosted Start': ['hosted install'], 'hosted health': ['hosted Start'], 'hosted health assertions': ['hosted health'],
@@ -145,6 +153,12 @@ function prepareCheckout(source, appDirectory) {
 }
 
 async function processTreeKill(child) {
+  if (keepGoing.enabled) {
+    forcedCleanup = true;
+    const cleanup = await terminateDisposableChild(child);
+    (keepGoing.metadata.cleanup ??= []).push(cleanup);
+    return;
+  }
   if (!child?.pid || child.closed) return;
   if (windows) {
     const systemRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
@@ -162,7 +176,21 @@ async function processTreeKill(child) {
   }
 }
 
-function launchShell(step, environment, { background = false, onSpawn } = {}) {
+function launchShell(step, environment, options = {}) {
+  if (!keepGoing.enabled) return launchShellUnbounded(step, environment, options);
+  let child;
+  const operation = launchShellUnbounded(step, environment, { ...options, onSpawn(value) {
+    child = trackDisposableChild(value, { cwd: step.params.path, root: environment.ASTRID_PINOKIO_APP_DIR });
+    options.onSpawn?.(value);
+  } });
+  return boundOwnedOperation(child, operation, diagnosticTimeout, cleanup => {
+    forcedCleanup = true;
+    (keepGoing.metadata.cleanup ??= []).push(cleanup);
+    keepGoing.write();
+  });
+}
+
+function launchShellUnbounded(step, environment, { background = false, onSpawn } = {}) {
   assert.equal(step.method, 'shell.run');
   assert.equal(step.params.shell, shell);
   assert.equal(path.resolve(step.params.path), path.resolve(environment.ASTRID_PINOKIO_APP_DIR),
@@ -208,7 +236,8 @@ function launchShell(step, environment, { background = false, onSpawn } = {}) {
     const installLog = fs.existsSync(installLogPath)
       ? `\nAstrid install log (${installLogPath}):\n${fs.readFileSync(installLogPath, 'utf8')}`
       : '';
-    assert.equal(code, 0, `${step.params.shell} step failed (${signal || code}):\n${child.output}${installLog}`);
+    if (!keepGoing.enabled) assert.equal(code, 0, `${step.params.shell} step failed (${signal || code}):\n${child.output}${installLog}`);
+    if (code !== 0) throw Object.assign(new Error(`${step.params.shell} step failed (${signal || code}):\n${child.output}${installLog}`), { inner_exit: code });
     return child;
   });
 
@@ -377,12 +406,15 @@ function kernelFor(app, getDaemon, onStop) {
 }
 
 async function invokeAction(name, app, appDirectory, environment, home, getDaemon, stopDaemon) {
+  if (keepGoing.enabled) { verifyAppBranch(); verifyInstalledEditor(app); }
   const loaded = load(`pinokio/${name}.js`, app, appDirectory);
   const script = typeof loaded === 'function' ? await loaded({}, {}) : loaded;
   const kernel = kernelFor(app, getDaemon, stopDaemon);
   const stepErrors = [];
+  const stepNames = [];
   for (const [offset, pinokioStep] of script.run.entries()) {
-    await step(`${name} ${offset + 1}/${script.run.length} ${typeof pinokioStep.method === 'string' ? pinokioStep.method : 'callback'}`, async () => {
+    const stepName = `${name} ${offset + 1}/${script.run.length} ${typeof pinokioStep.method === 'string' ? pinokioStep.method : 'callback'}`;
+    await step(stepName, async () => {
       if (pinokioStep.method === 'shell.run') {
         if (name === 'start' && script.daemon) {
           await launchShell(pinokioStep, { ...environment, ASTRID_PINOKIO_APP_DIR: appDirectory }, {
@@ -399,8 +431,12 @@ async function invokeAction(name, app, appDirectory, environment, home, getDaemo
         const result = await pinokioStep.method({}, (value) => { if (value?.raw) process.stdout.write(value.raw); }, kernel);
         log(`${name}: ${JSON.stringify(result ?? {})}`);
       } else throw new Error(`Unhandled Pinokio step in ${name}: ${String(pinokioStep.method)}`);
-    }, { onError: (error) => stepErrors.push(error) });
+    }, { onError: (error) => stepErrors.push(error),
+      needs: stepNames.length ? [stepNames.at(-1)] : ['setup'],
+      produces: [`${name} step ${offset + 1} returned`] });
+    stepNames.push(stepName);
   }
+  if (keepGoing.enabled) { verifyAppBranch(); verifyInstalledEditor(app); }
   if (stepErrors.length) throw new AggregateError(stepErrors, `Pinokio ${name} action had ${stepErrors.length} failed step(s).`);
   return script;
 }
@@ -410,7 +446,7 @@ async function stopDaemon(getDaemon) {
   if (!child) return;
   assert.equal(child.pinokioSmokeOwner, getDaemon.owner, 'refusing cleanup of a process not owned by this smoke run');
   await processTreeKill(child);
-  await child.exit;
+  if (!keepGoing.enabled) await child.exit;
   getDaemon.set(null);
 }
 
@@ -469,8 +505,9 @@ async function setup() {
   assert.equal(environment.ASTRID_APP_REF, undefined, 'the ref must come from the launcher _ENVIRONMENT file');
   environment.ASTRID_PINOKIO_APP_DIR = appDirectory;
   environment.ASTRID_RUNTIME_DOOR_PORT = '17340';
+  if (keepGoing.enabled) Object.assign(keepGoing.metadata, await prepareDiagnosticFixture(appDirectory, process.env, repository));
   const app = library.createApp({ platform: process.platform, appDirectory, environment });
-  assert.equal(app.appRef(), 'feat/pinokio', 'Install must select the manifest ref from _ENVIRONMENT');
+  assert.equal(app.appRef(), keepGoing.enabled ? frozenAppBranch : 'feat/pinokio', 'Install must select the manifest ref from _ENVIRONMENT');
   const servicesBefore = await fakeServices(pinokioHome, userHome, environment);
   return { pinokioHome, userHome, appDirectory, cacheDirectory, binDirectory, environment, app, servicesBefore };
 }
@@ -536,12 +573,17 @@ async function runHosted() {
       assert.deepEqual(cacheAstridPaths(cacheDirectory), [],
         `Astrid-owned files remain under Pinokio cache: ${cacheAstridPaths(cacheDirectory).join(', ')}`);
     });
-    log('PASS: hosted install, Start, health, Stop, Update, restart, health, Stop, and Uninstall');
+    log(keepGoing.enabled ? 'DIAGNOSTIC sequence completed; consult non-proof report' : 'PASS: hosted install, Start, health, Stop, Update, restart, health, Stop, and Uninstall');
   } finally {
     if (daemon) await step('cleanup Start process', stop);
     keepGoing.write();
-    fs.rmSync(pinokioHome, { recursive: true, force: true });
-    fs.rmSync(userHome, { recursive: true, force: true });
+    if (keepGoing.enabled && forcedCleanup) {
+      keepGoing.metadata.residuals = 'unknown descendants; fixture retained for hosted runner disposal';
+      keepGoing.write();
+    } else {
+      fs.rmSync(pinokioHome, { recursive: true, force: true });
+      fs.rmSync(userHome, { recursive: true, force: true });
+    }
   }
 }
 
@@ -602,16 +644,29 @@ async function runFullyLocal() {
       assert.deepEqual(cacheAstridPaths(cacheDirectory), [],
         `Astrid-owned files were created under Pinokio cache: ${cacheAstridPaths(cacheDirectory).join(', ')}`);
     });
-    log('PASS: fully local install, Update restart, hosted door off, and Stop');
+    log(keepGoing.enabled ? 'DIAGNOSTIC sequence completed; consult non-proof report' : 'PASS: fully local install, Update restart, hosted door off, and Stop');
   } finally {
     if (daemon) await step('cleanup Start process', stop);
     keepGoing.write();
-    fs.rmSync(pinokioHome, { recursive: true, force: true });
-    fs.rmSync(userHome, { recursive: true, force: true });
+    if (keepGoing.enabled && forcedCleanup) {
+      keepGoing.metadata.residuals = 'unknown descendants; fixture retained for hosted runner disposal';
+      keepGoing.write();
+    } else {
+      fs.rmSync(pinokioHome, { recursive: true, force: true });
+      fs.rmSync(userHome, { recursive: true, force: true });
+    }
   }
 }
 
 const flow = process.argv[2] || 'hosted';
-if (flow === 'hosted') await runHosted();
-else if (flow === 'fully-local') await runFullyLocal();
-else throw new Error(`Unknown smoke flow: ${flow}`);
+try {
+  if (flow === 'hosted') await runHosted();
+  else if (flow === 'fully-local') await runFullyLocal();
+  else throw new Error(`Unknown smoke flow: ${flow}`);
+} finally {
+  if (keepGoing.enabled) {
+    const report = keepGoing.report();
+    keepGoing.write();
+    if (report.first_error) process.exitCode = 1;
+  }
+}

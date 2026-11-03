@@ -34,7 +34,7 @@ test('diagnostic stages record first errors, explicit continuation, dependency s
     assert.equal(report.stages[1].class, 'real');
     assert.equal(report.stages[2].class, 'suspect:failed operation');
     assert.equal(report.stages[2].forced, 'continue-after:downstream check');
-    assert.equal(report.stages[3].class, 'suspect');
+    assert.equal(report.stages[3].class, 'suspect:failed operation');
     assert.equal(report.stages[3].forced, 'continue-after:failed operation');
     assert.equal(report.stages[4].result, 'skipped');
     assert.deepEqual(report.failures.map(({ stage }) => stage), ['failed operation', 'downstream check']);
@@ -43,4 +43,24 @@ test('diagnostic stages record first errors, explicit continuation, dependency s
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test('passing continuation never launders transitive dependencies and each stage is durable', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keepgoing-transitive-'));
+  try {
+    const reportPath = path.join(root, 'keepgoing-report.json');
+    const recorder = createKeepGoingRecorder({ enabled: true, reportPath });
+    await recorder.run('upstream', async () => { throw new Error('original first error'); }, { needs: [] });
+    assert.equal(JSON.parse(fs.readFileSync(reportPath)).first_error.stage, 'upstream');
+    await recorder.run('apparently successful continuation', async () => 0, { needs: ['upstream'] });
+    await recorder.run('later failure', async () => { throw new Error('later'); }, { needs: ['apparently successful continuation'] });
+    await recorder.run('missing precondition', async () => 0, { needs: ['never produced'] });
+    const report = JSON.parse(fs.readFileSync(reportPath));
+    assert.equal(report.stages[2].class, 'suspect:upstream');
+    assert.equal(report.stages[3].needs[0].available, false);
+    assert.equal(report.stages[3].class, 'suspect:never produced');
+    assert.equal(report.first_error.message, 'Error: original first error');
+    assert.equal(report.qualification_eligible, false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
