@@ -47,6 +47,7 @@ function fixture(mode, editorExists = true) {
     shellStep: (message) => ({ method: 'shell.run', params: { message } }),
     gitShellStep: (message) => ({ method: 'shell.run', params: { message } }),
     customStep: (method) => ({ method }),
+    updateLocal: () => {},
     sessionStep: (...args) => ({ method: 'session', args }),
     ensureDoorPortFree: () => {},
     ensureProgramDirectory: () => {},
@@ -59,7 +60,7 @@ function fixture(mode, editorExists = true) {
 async function buildAction(revision, file, mode, editorExists = true) {
   const { app, calls } = fixture(mode, editorExists);
   const action = oldModule(revision, file, app);
-  return { steps: (await action({}, {})).run, calls };
+  return { steps: (await action({}, {})).run, calls, app };
 }
 
 function askCurrentAgentParser(action, manifest) {
@@ -116,17 +117,15 @@ test('historical fully-local Install and Update arrays retain the editor manifes
   }
 });
 
-test('current fully-local clicks preserve the existing editor-manifest installer route', async () => {
+test('current fully-local Update delegates to the staged update routine', async () => {
   const installed = await buildAction('working', 'pinokio/install-local.js', 'local', false);
   assert.deepEqual(installed.calls, [{ action: 'install', manifest: '/tmp/pinokio/Astrid/app/astrid/public/install-manifest.json' }]);
   assert.equal(installed.steps.some((step) => step.params?.message === 'OLD_EDITOR_CLONE'), true);
   assert.equal(installed.steps.some((step) => step.method === 'session' && step.args[0] === 'build'), true);
 
   const updated = await buildAction('working', 'pinokio/update.js', 'local');
-  assert.deepEqual(updated.calls, [{ action: 'update', manifest: '/tmp/pinokio/Astrid/app/astrid/public/install-manifest.json' }]);
+  assert.equal(updated.steps[0].method, updated.app.updateLocal);
   const messages = Array.from(updated.steps, (step) => step.params?.message).filter(Boolean);
-  assert.deepEqual(messages, ['OLD_LAUNCHER_PULL', 'OLD_EDITOR_PULL',
-    `AGENT_INSTALLER:${JSON.stringify(updated.calls[0])}`]);
-  assert.equal(updated.steps.some((step) => step.method === 'session' && step.args[0] === 'build'), true);
-  assert.equal(messages.some((message) => message.includes('npm run update')), false);
+  assert.deepEqual(messages, []);
+  assert.equal(updated.steps[1].method, 'script.start');
 });
