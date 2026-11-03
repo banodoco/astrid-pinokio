@@ -358,7 +358,7 @@ function sameArray(left, right) {
   return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-function identityMismatches(observed, expected) {
+function identityMismatches(observed, expected, platform = process.platform) {
   const reasons = [];
   if (!observed?.available) return [observed?.reason || 'current-identity-unavailable'];
   if (observed.pid !== expected.pid) reasons.push('pid-changed');
@@ -367,8 +367,18 @@ function identityMismatches(observed, expected) {
   if (observed.executable !== expected.executable) reasons.push('executable-changed');
   if (observed.cwd !== expected.cwd) reasons.push('cwd-changed');
   if (observed.start_identity !== expected.start_identity) reasons.push('birth-identity-changed');
-  if (process.platform === 'linux' && !sameArray(observed.argv, expected.argv)) reasons.push('argv-changed');
-  if (process.platform === 'darwin' && (!observed.command_line.includes(expected.script) || !observed.command_line.includes(path.basename(expected.executable)))) reasons.push('command-changed');
+  if (platform === 'linux' && !sameArray(observed.argv, expected.argv)) reasons.push('argv-changed');
+  if (platform === 'darwin') {
+    const commandAvailable = typeof observed.command_line === 'string' && observed.command_line.length > 0;
+    if (!commandAvailable || typeof expected.command_line !== 'string' || expected.command_line.length === 0) {
+      reasons.push('command-identity-unavailable');
+    } else if (observed.command_line !== expected.command_line) {
+      reasons.push('command-changed');
+    }
+    if (commandAvailable && expected.script && !observed.command_line.includes(expected.script)) reasons.push('script-changed');
+    if (commandAvailable && typeof expected.executable === 'string' && expected.executable.length > 0
+      && !observed.command_line.includes(path.basename(expected.executable))) reasons.push('executable-command-changed');
+  }
   if (!pathWithin(expected.run_root, observed.cwd)) reasons.push('cwd-outside-run-root');
   return reasons;
 }
@@ -384,7 +394,7 @@ function captureOwnedDaemonIdentity(daemon, { cwd, runRoot, args }) {
   const expected = {
     pid, ppid: process.pid, uid, executable, cwd: expectedCwd, run_root: root,
     script, argv: executable && script ? [executable, script, ...(args.slice(1))] : null,
-    start_identity: observed.start_identity,
+    command_line: observed.command_line, start_identity: observed.start_identity,
   };
   const reasons = [];
   if (!root) reasons.push('run-root-identity-unavailable');
@@ -409,7 +419,7 @@ function validatedSignal(expected, runRoot, signal) {
     pid: expected.pid, ppid: expected.ppid, uid: expected.uid,
     executable: expected.executable, cwd: expected.cwd,
     start_identity: expected.start_identity, run_root: runRoot,
-    argv: expected.argv, script: expected.argv?.[0] || null,
+    argv: expected.argv, script: expected.script, command_line: expected.command_line,
   });
   if (mismatches.length) return { ok: false, pid: expected.pid, mismatches, observed: current };
   try {
@@ -941,7 +951,8 @@ async function main() {
 
 module.exports = {
   actionPlan, routeConfig, createBoundedCapture, copyBoundedTail, captureProcessSnapshot,
-  readProcessIdentity, captureOwnedDaemonIdentity, ownedProcessCensus, finalOwnedProcessCensus, cleanupOwnedDaemon,
+  readProcessIdentity, identityMismatches, captureOwnedDaemonIdentity,
+  ownedProcessCensus, finalOwnedProcessCensus, cleanupOwnedDaemon,
 };
 if (require.main === module) {
   main().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });

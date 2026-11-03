@@ -10,7 +10,7 @@ const test = require('node:test');
 
 const {
   createBoundedCapture, copyBoundedTail, captureProcessSnapshot,
-  captureOwnedDaemonIdentity, cleanupOwnedDaemon,
+  identityMismatches, captureOwnedDaemonIdentity, cleanupOwnedDaemon,
 } = require('../.github/venue/r25-snapshot-runner.cjs');
 const { ptermExit } = require('../.github/venue/r21-observer-diagnostics.cjs');
 
@@ -52,6 +52,43 @@ else {
 function isAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
+
+test('Darwin signal identity requires the exact captured command line and every fresh identity field', () => {
+  const observed = {
+    available: true, pid: 420, ppid: 42, uid: 501,
+    executable: '/usr/local/bin/node', cwd: '/private/run',
+    command_line: '/usr/local/bin/node /private/run/child.cjs --role child',
+    start_identity: 'macos:Mon Nov 02 18:00:02 2026',
+  };
+  const expected = {
+    pid: 420, ppid: 42, uid: 501,
+    executable: '/usr/local/bin/node', cwd: '/private/run', run_root: '/private/run',
+    command_line: observed.command_line, start_identity: observed.start_identity,
+  };
+
+  assert.deepEqual(identityMismatches(observed, expected, 'darwin'), []);
+
+  for (const [label, mutation, reason] of [
+    ['missing expected command identity', value => { delete value.command_line; }, 'command-identity-unavailable'],
+    ['changed expected command identity', value => { value.command_line += ' --changed'; }, 'command-changed'],
+    ['changed fresh command identity', value => { value.command_line += ' --changed'; }, 'command-changed'],
+    ['changed PID', value => { value.pid += 1; }, 'pid-changed'],
+    ['changed PPID', value => { value.ppid += 1; }, 'ppid-changed'],
+    ['changed UID', value => { value.uid += 1; }, 'uid-changed'],
+    ['changed executable', value => { value.executable = '/tmp/node'; }, 'executable-changed'],
+    ['changed cwd', value => { value.cwd = '/private/other'; }, 'cwd-changed'],
+    ['changed start identity', value => { value.start_identity += '-changed'; }, 'birth-identity-changed'],
+  ]) {
+    const candidate = { ...expected };
+    const fresh = { ...observed };
+    if (label === 'changed fresh command identity') mutation(fresh);
+    else mutation(candidate);
+    assert.ok(identityMismatches(fresh, candidate, 'darwin').includes(reason), label);
+  }
+  const missingFreshCommand = { ...observed };
+  delete missingFreshCommand.command_line;
+  assert.ok(identityMismatches(missingFreshCommand, expected, 'darwin').includes('command-identity-unavailable'));
+});
 
 test('setup failure preserves the inner exit, sends no daemon TERM, and verifies owned descendants are gone', async () => {
   const root = tempRoot();
