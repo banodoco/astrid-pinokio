@@ -16,15 +16,15 @@ no duplicate keys or non-finite values. The provider checkout must be clean at
 recorded tuple. The recorded tuple and manifest are an export candidate, not a
 new qualification.
 
-The bound execution candidate is provisional and is not the published
-Release-1 tuple. It uses App
-`a10b36b3ecf1365c7e122643b2e3cae5cb5c1c8a`, Agent
-`ab43bad818ef65ca1e929b973a2f61cd9fc4bf61`, Runtime
+The bound execution candidate uses the accepted proof-only App manifest at
+App `bfb15570d72c39fbdc32f6209ecec7c929b71d5c`, Agent
+`69dda026212ca16c37cc8239d06ccd159603aa24`, Runtime
 `2776ba973b6c8f3555b5629b0840d9691a98d3c2`, and Pinokio
-`3a6a98ae251ca126505245286e2d3e760f4348e9`. The App manifest SHA-256 is
-`751bb2fcb489c1194c7a158f5d79d3532a594344ae93cc2da4902947382df3d7`;
-those exact bytes carry VibeComfy
-`e2905d068d5851b9c32856d32b8251852a01d6dd` derived from the Agent pin.
+`7955800419fc92b11e553d6f7acb7613090617e6`. The exact manifest SHA-256 is
+`09707100ad238cf206085aa5b267ca4108e482ac50e06068a3475932180b65bd`.
+This proof-only manifest is a provisional candidate, not the published
+Release-1 tuple, and it retains the pinned FFmpeg archive digest. The strict
+checksum comparison and bounded response-fact capture remain enabled.
 
 `CONFIG` has exactly these fields:
 
