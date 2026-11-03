@@ -42,7 +42,13 @@ exit 0
       assert.ok(Date.now() - started < 11000, 'deadline and escalation must remain bounded');
       const pid = fs.readFileSync(env.R21_CHILD_PID, 'utf8').trim();
       let state = null;
-      try { state = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(' ')[2]; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (process.platform === 'linux' || process.platform === 'win32') {
+        try { state = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(' ')[2]; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      } else {
+        const probe = spawnSync('ps', ['-o', 'stat=', '-p', pid], { encoding: 'utf8' });
+        assert.equal(probe.status, 0, probe.stderr);
+        state = probe.stdout.trim().slice(0, 1) || null;
+      }
       assert.ok(state === null || state === 'Z', `resistant descendant still running: ${state}`);
       const outputs = Object.fromEntries(fs.readFileSync(output, 'utf8').trim().split('\n').map(line => line.split('=')));
       assert.equal(outputs.watchdog_exit, '124');

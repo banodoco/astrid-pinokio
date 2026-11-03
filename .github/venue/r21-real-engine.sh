@@ -28,9 +28,23 @@ if [[ "${1:-}" == --execute || "${1:-}" == --watchdog ]]; then
   timer=$!
   set +e
   finished=''
-  wait -n -p finished "$worker" "$timer"
-  status=$?
-  if [[ "$finished" == "$timer" ]]; then
+  # `wait -n -p` is only available in newer Bash releases (not macOS's
+  # system Bash). Poll Bash's portable job table so both jobs remain
+  # supervised on the macOS and Git Bash runners too.
+  while :; do
+    running=$(jobs -pr)
+    case " $running " in
+      *" $timer "*) ;;
+      *) finished=timer; break ;;
+    esac
+    case " $running " in
+      *" $worker "*) ;;
+      *) finished=worker; break ;;
+    esac
+    sleep 0.1
+  done
+  if [[ "$finished" == timer ]]; then
+    wait "$timer" 2>/dev/null || true
     # Always escalate, even if the leader exits on TERM: descendants may not.
     kill -TERM -- "-$worker" 2>/dev/null || true
     sleep 5
@@ -44,6 +58,8 @@ if [[ "${1:-}" == --execute || "${1:-}" == --watchdog ]]; then
     status=124
     timed_out=true
   else
+    wait "$worker"
+    status=$?
     kill "$timer" 2>/dev/null || true
     wait "$timer" 2>/dev/null || true
     # A completed leader can still have live clients in its process group.
