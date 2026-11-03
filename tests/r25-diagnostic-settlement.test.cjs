@@ -70,6 +70,20 @@ test('PTerm close alone cannot pass; diagnostic error rejects the child-exit wai
   watch.stop();
 });
 
+test('cross-OS diagnostic refusal signals PTerm synchronously before it can submit another setup step', async () => {
+ const { EventEmitter }=require('node:events');
+ const { ptermExit }=require('../.github/venue/r21-observer-diagnostics.cjs');
+ const child=new EventEmitter();const calls=[];child.kill=signal=>{calls.push(signal);};
+ const watch=createDiagnosticSettlement();
+ const pending=ptermExit(child,'R-25 setup-install',45*60*1000,null,
+  {signal:watch.signal,terminateOnAbort:true});
+ watch.packet({type:'stream',data:{raw:'Terminated Shell'}});
+ assert.deepEqual(calls,['SIGTERM']);
+ await assert.rejects(pending,/R-25 diagnostic terminated-shell/);
+ assert.equal(watch.snapshot().failure.reason,'terminated-shell');
+ watch.stop();
+});
+
 test('probe journal retains an earlier resolution when prompt-2 replaces the legacy ring', () => {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'r25-probe-journal-'));
  const captureFile=path.join(root,'journal.json');

@@ -784,7 +784,8 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
       child.stderr.on('close', () => bounded.stderr.close());
     }
     let innerExit;
-    try { innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs, diagnostic ? { pterm: diagnostic.pterm, beforeTimeout: diagnostic.beforeTimeout } : null, { signal: settlement?.signal || abort.signal }); }
+    try { innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs, diagnostic ? { pterm: diagnostic.pterm, beforeTimeout: diagnostic.beforeTimeout } : null,
+      { signal: settlement?.signal || abort.signal, terminateOnAbort: Boolean(diagnostic?.cross_os) }); }
     finally { if (bounded) { bounded.stdout.close(); bounded.stderr.close(); } else { fs.closeSync(stdout); fs.closeSync(stderr); } }
     await new Promise(resolve => setTimeout(resolve, 500));
     return { script, inner_exit: innerExit, terminal, first_error: firstError,

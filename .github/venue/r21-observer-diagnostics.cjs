@@ -34,7 +34,7 @@ function createActionTracker() {
     failure() { return failure; },
   };
 }
-function ptermExit(child, label, timeoutMs, diagnostic = null, { signal = null } = {}) {
+function ptermExit(child, label, timeoutMs, diagnostic = null, { signal = null, terminateOnAbort = false } = {}) {
   const note = (event, value) => { try { (typeof diagnostic === 'function' ? diagnostic : diagnostic?.pterm)?.(event, value); } catch {} };
   const beforeTimeout = async value => { try { await diagnostic?.beforeTimeout?.(value); } catch {} };
   const started = Date.now();
@@ -44,6 +44,10 @@ function ptermExit(child, label, timeoutMs, diagnostic = null, { signal = null }
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // The diagnostic observer is a separate WebSocket client. Stop PTerm
+      // synchronously on refusal so its script cannot submit the next setup
+      // step while the caller unwinds into its normal cleanup path.
+      if (terminateOnAbort) { try { child.kill('SIGTERM'); } catch {} }
       reject(signal.reason instanceof Error && signal.reason.name !== 'AbortError' ? signal.reason : new Error(`${label} installer failure marker`));
     };
     const timer = setTimeout(async () => {
