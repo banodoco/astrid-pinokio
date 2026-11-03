@@ -24,7 +24,7 @@ test('smoke failure capture is bounded, redacted, and preserves the inner shell 
     assert.equal(metadata.innerExit.signal, null);
     assert.equal(metadata.installLog.originalBytes, Buffer.byteLength(source));
     assert.equal(metadata.installLog.redacted, true);
-    assert.match(metadata.installLog.capturedSha256BeforeRedaction, /^[a-f0-9]{64}$/);
+    assert.match(metadata.installLog.capturedSha256AfterRedaction, /^[a-f0-9]{64}$/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

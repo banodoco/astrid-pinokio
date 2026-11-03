@@ -186,7 +186,7 @@ function launchShell(step, environment, { background = false, onSpawn } = {}) {
       writeSmokeFailureCapture({
         directory: path.join(process.env.RUNNER_TEMP, 'astrid-pinokio-smoke-diagnostics'),
         logPath: installLogPath,
-        step: step.params.message,
+        step: 'install shell.run',
         code,
         signal,
       });

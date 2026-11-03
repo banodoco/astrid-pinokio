@@ -16,7 +16,6 @@ export function writeSmokeFailureCapture({ directory, logPath, step, code, signa
   fs.mkdirSync(directory, { recursive: true });
   let source = '';
   let logBytes = 0;
-  let capturedSha256 = null;
   if (fs.existsSync(logPath)) {
     const descriptor = fs.openSync(logPath, 'r');
     try {
@@ -24,7 +23,6 @@ export function writeSmokeFailureCapture({ directory, logPath, step, code, signa
       const length = Math.min(logBytes, MAX_LOG_BYTES);
       const bytes = Buffer.alloc(length);
       fs.readSync(descriptor, bytes, 0, length, logBytes - length);
-      capturedSha256 = crypto.createHash('sha256').update(bytes).digest('hex');
       source = bytes.toString('utf8');
     } finally {
       fs.closeSync(descriptor);
@@ -33,6 +31,7 @@ export function writeSmokeFailureCapture({ directory, logPath, step, code, signa
 
   const redacted = Buffer.from(redact(source));
   const capturedLog = redacted.subarray(Math.max(0, redacted.length - MAX_LOG_BYTES)).toString('utf8');
+  const capturedSha256 = crypto.createHash('sha256').update(capturedLog).digest('hex');
   fs.writeFileSync(path.join(directory, 'install.log'), capturedLog);
   fs.writeFileSync(path.join(directory, 'failure.json'), `${JSON.stringify({
     step,
@@ -42,7 +41,7 @@ export function writeSmokeFailureCapture({ directory, logPath, step, code, signa
       originalBytes: logBytes,
       capturedBytes: Buffer.byteLength(capturedLog),
       truncatedToLastBytes: logBytes > MAX_LOG_BYTES ? MAX_LOG_BYTES : null,
-      capturedSha256BeforeRedaction: capturedSha256,
+      capturedSha256AfterRedaction: capturedSha256,
       redacted: true,
     },
   }, null, 2)}\n`);
