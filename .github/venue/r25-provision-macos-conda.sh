@@ -8,7 +8,14 @@ set -euo pipefail
 
 runner_temp="$(cd -P "$RUNNER_TEMP" && pwd)"
 expected_home="$runner_temp/pinokio-home"
-if [ "$PINOKIO_HOME" != "$expected_home" ]; then
+home_parent_input="${PINOKIO_HOME%/*}"
+home_name="${PINOKIO_HOME##*/}"
+if [ "$home_parent_input" = "$PINOKIO_HOME" ] || ! home_parent="$(cd -P "$home_parent_input" 2>/dev/null && pwd)"; then
+  printf 'refusing unexpected PINOKIO_HOME: %s\n' "$PINOKIO_HOME" >&2
+  exit 64
+fi
+canonical_home="$home_parent/$home_name"
+if [ "$canonical_home" != "$expected_home" ]; then
   printf 'refusing unexpected PINOKIO_HOME: %s\n' "$PINOKIO_HOME" >&2
   exit 64
 fi
@@ -16,7 +23,7 @@ if [ "$(uname -s)" != Darwin ]; then
   printf 'macOS runner required\n' >&2
   exit 65
 fi
-if [ -e "$PINOKIO_HOME" ]; then
+if [ -e "$PINOKIO_HOME" ] || [ -L "$PINOKIO_HOME" ]; then
   printf 'refusing existing run home: %s\n' "$PINOKIO_HOME" >&2
   exit 66
 fi

@@ -3,7 +3,7 @@ name: R-25 macOS Conda provisioning route
 on:
   push:
     branches:
-      - lane/M-PIN/R-PIN-MAC-DISPATCH-ROUTE
+      - lane/M-PIN/R-PIN-MAC-ROUTE-FIX
 
 permissions:
   actions: read

@@ -36,6 +36,22 @@ test('macOS preprovisioning seeds only the runner-owned Pinokio prefix with the 
   assert.ok(fs.existsSync(path.join(f.home, 'bin', 'miniforge', 'bin', 'conda')));
 });
 
+test('canonicalizes a symlinked runner temp before provisioning its exact child', t => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.temp, { recursive: true, force: true }));
+  const realTemp = path.join(f.temp, 'real-temp');
+  const tempAlias = path.join(f.temp, 'temp-alias');
+  fs.mkdirSync(realTemp);
+  fs.symlinkSync(realTemp, tempAlias, 'dir');
+  const home = path.join(tempAlias, 'pinokio-home');
+  const result = spawnSync('/bin/bash', [script], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: tempAlias, PINOKIO_HOME: home, CONDA_TEST_LOG: f.log },
+  });
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.ok(fs.existsSync(path.join(realTemp, 'pinokio-home', 'bin', 'miniforge', 'bin', 'conda')));
+});
+
 test('provisioning refuses an existing home and an unbound home path before download', t => {
   const f = fixture();
   t.after(() => fs.rmSync(f.temp, { recursive: true, force: true }));
@@ -60,4 +76,13 @@ test('provisioning refuses an existing home and an unbound home path before down
 test('R-25 invokes the preprovisioner before starting the real daemon action', () => {
   assert.match(workflow, /PINOKIO_HOME:\s*\$\{\{ runner\.temp \}\}\/pinokio-home/);
   assert.match(workflow, /bash \.github\/venue\/r25-provision-macos-conda\.sh[\s\S]*?node \.github\/venue\/r25-snapshot-runner\.cjs/);
+});
+
+test('push-triggered workflow_call keeps its requested backend slot', () => {
+  const route = fs.readFileSync(path.join(root, '.github', 'workflows', 'r25-mac-conda-route.yml'), 'utf8');
+  assert.match(route, /on:\s*push:[\s\S]*?lane\/M-PIN\/R-PIN-MAC-ROUTE-FIX[\s\S]*?uses: \.\/\.github\/workflows\/r25-snapshot-journey\.yml[\s\S]*?slot_id: pinokio-backend-macos/);
+  assert.match(workflow, /SLOT_ID:\s*\$\{\{ inputs\.slot_id \|\| 'pinokio-fully-local-macos' \}\}/);
+  assert.match(workflow, /R25_SLOT_ID:\s*\$\{\{ inputs\.slot_id \|\| 'pinokio-fully-local-macos' \}\}/);
+  assert.match(workflow, /name: R-25 macOS \(\$\{\{ inputs\.slot_id \|\| 'pinokio-fully-local-macos' \}\}\) \/ macos-six-action/);
+  assert.doesNotMatch(workflow, /github\.event_name\s*==\s*'push'[\s\S]{0,100}pinokio-fully-local-macos/);
 });
