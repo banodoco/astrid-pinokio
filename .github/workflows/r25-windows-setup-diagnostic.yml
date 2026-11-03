@@ -7,8 +7,13 @@ on:
       - lane/M-PIN/R-PIN-C2-BACKEND-START
   workflow_dispatch:
     inputs:
+      backend_start_only:
+        description: Run only the isolated backend macOS Start diagnostic
+        required: false
+        default: false
+        type: boolean
       mac_isolation_evidence:
-        description: Published M-VENUE evidence that the prior Mac residual hold is clear and this run has disposable isolation
+        description: M-VENUE 2026-11-03T08:22:46Z response confirming a unique ephemeral runner and isolated run-owned home; prior residual remains untouched
         required: false
         type: string
 
@@ -18,7 +23,7 @@ permissions:
 
 jobs:
   windows-setup-diagnostic:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[C2-CROSS-OS-ONCE]')
+    if: (github.event_name == 'workflow_dispatch' && inputs.backend_start_only != true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[C2-CROSS-OS-ONCE]'))
     runs-on: windows-2022
     timeout-minutes: 20
     env:
@@ -126,7 +131,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
   macos-setup-diagnostic:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[C2-CROSS-OS-ONCE]')
+    if: (github.event_name == 'workflow_dispatch' && inputs.backend_start_only != true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[C2-CROSS-OS-ONCE]'))
     name: R-25 macOS (pinokio-fully-local-macos) / macos-setup-diagnostic
     runs-on: macos-15
     timeout-minutes: 20
@@ -244,7 +249,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
   macos-backend-start-diagnostic:
-    if: github.event_name == 'workflow_dispatch' && inputs.mac_isolation_evidence != ''
+    if: github.event_name == 'workflow_dispatch' && inputs.backend_start_only == true && inputs.mac_isolation_evidence == 'ORCHESTRATOR.md#2026-11-03T08:22:46Z M-VENUE'
     name: R-25 macOS (pinokio-backend-macos) / backend-start-diagnostic
     runs-on: macos-15
     timeout-minutes: 20
@@ -317,9 +322,10 @@ jobs:
           node pinokio/providers/r25-native-collector-binding.cjs \
             --validate-source-only true --agent-ref "$AGENT_REF" \
             --agent-root "$AGENT_ROOT" --pinokio-root "$GITHUB_WORKSPACE"
-          node --test tests/r25-native-collector-binding.test.cjs tests/r25-start-lifecycle.test.cjs tests/r21-observer-bounded.test.mjs tests/r25-mac-observability.test.cjs
+          node --test tests/r25-native-collector-binding.test.cjs tests/r25-start-lifecycle.test.cjs tests/r25-macos-isolation-guard.test.cjs tests/r21-observer-bounded.test.mjs tests/r25-mac-observability.test.cjs
           node --check .github/venue/r25-snapshot-runner.cjs
           node --check .github/venue/r25-macos-snapshot-runner.cjs
+          node --check .github/venue/r25-macos-isolation.cjs
           node --check .github/venue/r21-observer-io.cjs
           git diff --check
       - name: Run one isolated backend Start diagnostic

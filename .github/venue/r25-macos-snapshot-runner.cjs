@@ -16,6 +16,7 @@ const { createDiagnosticSettlement } = require('./r25-diagnostic-settlement.cjs'
 const { applyPinokiodPtyInstrumentation } = require('./r25-pinokiod-pty-instrumentation.cjs');
 const { applyCrossOsPtyDiagnostics } = require('./r25-cross-os-pty.cjs');
 const { writeCondaPresence } = require('./r25-macos-diagnostic.cjs');
+const isolation = require('./r25-macos-isolation.cjs');
 
 const AGENT_REF = binding.AGENT_SOURCE_REF;
 const PINOKIO_SOURCE_REF = '95aafb5a029c3f53cb2268d8596909eab0deb3c4';
@@ -976,19 +977,55 @@ async function main() {
             : terminal.malformed ? 'terminal-packet-observation-malformed'
             : !readiness || Object.values(readiness).some(value => value !== true) ? 'independent-readiness-incomplete'
               : !client || client.exited || !client.still_owned ? 'start-client-not-live-and-owned' : null;
+        const runIdentity = await isolation.hostedRunIdentity({ ...process.env,
+          PINOKIO_HOME: home, R25_ISOLATED_USER_HOME: isolatedUserHome });
+        const serviceDefinition = isolation.captureServiceDefinition(isolatedUserHome, {
+          uid: process.getuid(), session: `gui/${process.getuid()}`,
+        });
+        writeCanonical(path.join(diagnostics, 'hosted-run-identity.json'), runIdentity);
+        writeCanonical(path.join(diagnostics, 'launchd-service-definition.json'), serviceDefinition);
+        const serviceCensusBeforeStop = captureMacCensus(path.resolve(cli['agent-root']), TARGETS.launchd_targets[0]);
+        writeCanonical(path.join(diagnostics, 'census', 'before-stop.json'), serviceCensusBeforeStop);
+        const stopGuard = isolation.validateStopOwner({
+          census: serviceCensusBeforeStop, target: TARGETS.launchd_targets[0],
+          definition: serviceDefinition, uid: process.getuid(),
+        });
+        let stopAction = null;
+        let stopPerformed = false;
+        let stopActionError = null;
+        if (stopGuard.allowed) {
+          stopPerformed = true;
+          try {
+            stopAction = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid',
+              appRoot, script: 'pinokio/stop.js', action: 'diagnostic-stop', logRoot, timeoutMs: 120000 });
+          } catch (error) { stopActionError = String(error.message || error).slice(0, 240); }
+        } else if (!stopGuard.no_owner_verified) {
+          throw new Error(`backend stop refused: ${stopGuard.reason}`);
+        }
+        const serviceCensusAfterStop = captureMacCensus(path.resolve(cli['agent-root']), TARGETS.launchd_targets[0]);
+        writeCanonical(path.join(diagnostics, 'census', 'after-stop.json'), serviceCensusAfterStop);
+        const stopSettlement = isolation.verifyStopped({ census: serviceCensusAfterStop,
+          target: TARGETS.launchd_targets[0], definition: serviceDefinition, ownerPid: stopGuard.owner_pid });
         const result = {
           schema: 'astrid.r25.backend-start-diagnostic.v1', diagnostic_only: true,
           slot_id: SLOT, isolation_evidence_ref: process.env.R25_ISOLATION_EVIDENCE_REF,
+          hosted_run_identity: runIdentity, service_definition: serviceDefinition,
+          service_census_before_stop: serviceCensusBeforeStop,
+          stop_guard: stopGuard, stop_performed: stopPerformed, stop_action: stopAction,
+          stop_action_error: stopActionError,
+          service_census_after_stop: serviceCensusAfterStop, stop_settlement: stopSettlement,
           readiness, ready_sentinel_observed: readySentinel, terminal_observation_window_ms: 2000,
           terminal_packets: terminal, client_lifecycle: {
             pid: pterm.pid || null, exited: client?.exited || null,
             alive_after_readiness: Boolean(client && !client.exited && client.still_owned),
             settlement: 'long-lived-client-observed; no exit result claimed',
           },
-          observer_events: observerEvents, refusal,
+          observer_events: observerEvents,
+          refusal: refusal || (stopPerformed && (stopActionError || !stopAction || stopAction.first_error || stopAction.inner_exit?.code !== 0)
+            ? 'stop-action-failed' : stopPerformed && !stopSettlement.verified ? 'service-owner-remains-after-stop' : null),
         };
         writeCanonical(path.join(diagnostics, 'backend-start-diagnostic.json'), result);
-        if (refusal) throw new Error(`backend Start diagnostic refused: ${refusal}`);
+        if (result.refusal) throw new Error(`backend Start diagnostic refused: ${result.refusal}`);
       } finally {
         for (const capture of Object.values(startOutput)) capture.close();
       }
@@ -1076,6 +1113,7 @@ module.exports = {
   main, actionPlan, routeConfig, createBoundedCapture, copyBoundedTail, captureProcessSnapshot,
   readProcessIdentity, identityMismatches, captureOwnedDaemonIdentity,
   ownedProcessCensus, finalOwnedProcessCensus, cleanupOwnedDaemon, resolveProducerJob, observeAction,
+  captureMacCensus,
 };
 if (require.main === module) {
   main().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });
