@@ -94,7 +94,7 @@ function __r25PtyCapture(kind, fields = {}) {
   while (__r25PtyRows.length >= ${MAX_ROWS} || __r25PtyBytes + bytes > ${MAX_BYTES}) {
     const index = __r25PtyRows.findIndex(old => {
       const item = JSON.parse(old);
-      return !(__r25PtyRetainedPromptMarkers.has(item.kind) && item.prompt_ordinal === __r25PtyLatestPromptOrdinal);
+      return !__r25PtyIsRetainedPromptRow(item);
     });
     if (index < 0) return;
     const [old] = __r25PtyRows.splice(index, 1);
@@ -124,6 +124,10 @@ function __r25PtyErrorClass(error) {
   const name = error?.constructor?.name;
   return name === 'TypeError' || name === 'RangeError' || name === 'SyntaxError' || name === 'ReferenceError' ? name : 'Error';
 }
+function __r25PtyIsRetainedPromptRow(item) {
+  return item.prompt_ordinal === __r25PtyLatestPromptOrdinal
+    && (__r25PtyRetainedPromptMarkers.has(item.kind) || item.kind === 'prompt-processing');
+}
 function __r25PtyProbeCount(value) {
   if (typeof value !== 'string') return 0;
   let found = 0;
@@ -141,16 +145,19 @@ function __r25PtyProcessing(state, stage, values = {}) {
     if (!state || !__r25PtyStageNames.has(stage) || state.ordinal !== __r25PtyLatestPromptOrdinal) return;
     for (const field of Object.keys(values)) {
       if (field === 'error') {
-        state.error_stage = stage;
-        state.error_class = __r25PtyErrorClass(values.error);
+        if (!state.error_stage) {
+          state.error_stage = stage;
+          state.error_class = __r25PtyErrorClass(values.error);
+        }
       } else if (field === 'match') state.match = values.match === true;
       else if (field === 'ready' || field === 'done') state[field] = values[field] === true;
       else if (field.endsWith('_length') || field.endsWith('_count')) state[field] = __r25PtyBound(values[field]);
     }
-    state.stage = stage;
+    if (!((stage === 'vt-write' && values.write_return === true && state.write_callback_count > 0)
+        || (values.error && state.error_stage))) state.stage = stage;
     const row = {
       at: new Date().toISOString(), kind: 'prompt-processing', prompt_ordinal: __r25PtyPid(state.ordinal), prompt_pid: __r25PtyPid(state.pid),
-      stage, callback_count: state.callback_count, ready: state.ready, done: state.done,
+      stage: state.stage, callback_count: state.callback_count, ready: state.ready, done: state.done,
       input_length: state.input_length, input_probe_count: state.input_probe_count,
       output_length: state.output_length, output_probe_count: state.output_probe_count,
       serialize_length: state.serialize_length, serialized_probe_count: state.serialized_probe_count,
@@ -169,8 +176,7 @@ function __r25PtyProcessing(state, stage, values = {}) {
     while (__r25PtyRows.length >= ${MAX_ROWS} || __r25PtyBytes + size > ${MAX_BYTES}) {
       index = __r25PtyRows.findIndex(old => {
         const item = JSON.parse(old);
-        return !(item.kind === 'prompt-processing' && item.prompt_ordinal === __r25PtyLatestPromptOrdinal)
-          && !(__r25PtyRetainedPromptMarkers.has(item.kind) && item.prompt_ordinal === __r25PtyLatestPromptOrdinal);
+        return !__r25PtyIsRetainedPromptRow(item);
       });
       if (index < 0) return;
       const [old] = __r25PtyRows.splice(index, 1);
@@ -192,9 +198,11 @@ function __r25PtyBeginPrompt() {
   __r25PtyCapture('prompt-pty-spawn-start', { prompt_ordinal: __r25PtyPromptOrdinal, ppid: process.pid });
 }
 function __r25PtySetPromptPid(value) { __r25PtyPromptPid = __r25PtyPid(value); }
-function __r25PtyAttachExit(term, kind) {
+function __r25PtyAttachExit(term, kind, promptOrdinal = __r25PtyPromptOrdinal, promptPid = __r25PtyPromptPid) {
   if (typeof term?.onExit !== 'function') return;
   term.onExit((event = {}) => __r25PtyCapture(kind, {
+    prompt_ordinal: promptOrdinal,
+    prompt_pid: promptPid,
     requested_pid: term?.pid,
     code: event.exitCode,
     signal: event.signal,
@@ -216,7 +224,7 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
     {
       name: 'prompt-pty-spawn',
       needle: '      let term = pty.spawn(this.shell, this.args, config)\n',
-      replacement: '      __r25PtyBeginPrompt()\n      const __r25PromptOrdinal = __r25PtyPromptOrdinal\n      let term = pty.spawn(this.shell, this.args, config)\n      __r25PtySetPromptPid(term?.pid)\n      const __r25PromptState = __r25PtyNewProcessing(__r25PromptOrdinal, term?.pid)\n      __r25PtyCapture(\'prompt-pty-spawn\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid, pid: term?.pid, ppid: process.pid })\n      __r25PtyAttachExit(term, \'prompt-native-exit\')\n      let __r25PromptFirstOutput = false\n      let __r25PromptFollowupOutput = false\n      let __r25PromptProbeWriteReturned = false\n      let __r25PromptPostProbeOutput = false\n',
+      replacement: '      __r25PtyBeginPrompt()\n      const __r25PromptOrdinal = __r25PtyPromptOrdinal\n      let term = pty.spawn(this.shell, this.args, config)\n      __r25PtySetPromptPid(term?.pid)\n      const __r25PromptState = __r25PtyNewProcessing(__r25PromptOrdinal, term?.pid)\n      __r25PtyProcessing(__r25PromptState, \'callback\', { ready: this.prompt_ready, done: this.prompt_done })\n      __r25PtyCapture(\'prompt-pty-spawn\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid, pid: term?.pid, ppid: process.pid })\n      __r25PtyAttachExit(term, \'prompt-native-exit\', __r25PromptOrdinal, term?.pid)\n      let __r25PromptFirstOutput = false\n      let __r25PromptFollowupOutput = false\n      let __r25PromptProbeWriteReturned = false\n      let __r25PromptPostProbeOutput = false\n',
     },
     {
       name: 'prompt-first-output',
@@ -226,7 +234,7 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
     {
       name: 'prompt-probe-write',
       needle: '                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)\n',
-      replacement: '                __r25PtyCapture(\'prompt-probe-write\')\n                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)\n                __r25PromptProbeWriteReturned = true\n                __r25PtyCapture(\'prompt-probe-write-return\')\n',
+      replacement: '                __r25PtyCapture(\'prompt-probe-write\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })\n                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)\n                __r25PromptProbeWriteReturned = true\n                __r25PtyCapture(\'prompt-probe-write-return\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })\n',
     },
     {
       name: 'prompt-filter-and-queue',
@@ -235,8 +243,8 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
     },
     {
       name: 'prompt-normalize-resolve',
-      needle: '              let stripped = this.stripAnsi(match[1])\n              const p = stripped\n                .replaceAll(/[\\r\\n]/g, "")\n                .trim()\n                .replaceAll(/[.*+?^${}()|[\\]\\\\]/g, \'\\\\$&\')\n              term.kill()\n',
-      replacement: '              __r25PromptState.normalize_count = Math.min(10000, __r25PromptState.normalize_count + 1)\n              __r25PtyProcessing(__r25PromptState, \'normalize\')\n              let p\n              try {\n                let stripped = this.stripAnsi(match[1])\n                p = stripped.replaceAll(/[\\r\\n]/g, "").trim().replaceAll(/[.*+?^${}()|[\\]\\\\]/g, \'\\\\$&\')\n              } catch (error) { __r25PtyFailure(__r25PromptState, \'normalize\', error); throw error }\n              __r25PtyProcessing(__r25PromptState, \'normalize\')\n              term.kill()\n',
+      needle: '              let stripped = this.stripAnsi(match[1])\n              const p = stripped\n                .replaceAll(/[\\r\\n]/g, "")\n                .trim()\n                .replaceAll(/[.*+?^${}()|[\\]\\\\]/g, \'\\\\$&\');\n              term.kill()\n',
+      replacement: '              __r25PromptState.normalize_count = Math.min(10000, __r25PromptState.normalize_count + 1)\n              __r25PtyProcessing(__r25PromptState, \'normalize\', { ready: this.prompt_ready, done: this.prompt_done })\n              let p\n              try {\n                let stripped = this.stripAnsi(match[1])\n                p = stripped.replaceAll(/[\\r\\n]/g, "").trim().replaceAll(/[.*+?^${}()|[\\]\\\\]/g, \'\\\\$$&\')\n              } catch (error) { __r25PtyFailure(__r25PromptState, \'normalize\', error); throw error }\n              __r25PtyProcessing(__r25PromptState, \'normalize\', { ready: this.prompt_ready, done: this.prompt_done })\n              term.kill()\n',
     },
     {
       name: 'prompt-filter-entry',
@@ -246,17 +254,17 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
     {
       name: 'prompt-vt-write-return',
       needle: '          })\n          cb()\n',
-      replacement: '          })\n          __r25PromptState.write_return_count = Math.min(10000, __r25PromptState.write_return_count + 1)\n          __r25PtyProcessing(__r25PromptState, \'vt-write\')\n          } catch (error) { __r25PtyFailure(__r25PromptState, \'vt-write\', error); throw error }\n          cb()\n',
+      replacement: '          })\n          __r25PromptState.write_return_count = Math.min(10000, __r25PromptState.write_return_count + 1)\n          __r25PtyProcessing(__r25PromptState, \'vt-write\', { write_return: true })\n          } catch (error) { __r25PtyFailure(__r25PromptState, \'vt-write\', error); throw error }\n          cb()\n',
     },
     {
       name: 'prompt-resolve',
-      needle: '              resolve(p)\n',
-      replacement: '              __r25PtyProcessing(__r25PromptState, \'resolve\')\n              resolve(p)\n',
+      needle: '              queue.killAndDrain()\n              resolve(p)\n',
+      replacement: '              queue.killAndDrain()\n              __r25PtyProcessing(__r25PromptState, \'resolve\')\n              resolve(p)\n',
     },
     {
       name: 'prompt-recognized-and-kill',
-      needle: '              term.kill()\n',
-      replacement: '              __r25PtyCapture(\'prompt-recognized\')\n              __r25PtyCapture(\'prompt-kill-start\', { requested_pid: term?.pid })\n              let __r25PromptKillError\n              try { term.kill() } catch (error) { __r25PromptKillError = error; throw error } finally {\n                __r25PtyCapture(\'prompt-kill-end\', { requested_pid: term?.pid, error: Boolean(__r25PromptKillError), error_value: __r25PromptKillError })\n              }\n',
+      needle: '              term.kill()\n              vt.dispose()\n',
+      replacement: '              __r25PtyCapture(\'prompt-recognized\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })\n              __r25PtyCapture(\'prompt-kill-start\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid, requested_pid: term?.pid })\n              let __r25PromptKillError\n              try { term.kill() } catch (error) { __r25PromptKillError = error; throw error } finally {\n                __r25PtyCapture(\'prompt-kill-end\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid, requested_pid: term?.pid, error: Boolean(__r25PromptKillError), error_value: __r25PromptKillError })\n              }\n              vt.dispose()\n',
     },
     {
       name: 'exec-pty-spawn',
