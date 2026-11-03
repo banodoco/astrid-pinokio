@@ -35,6 +35,7 @@ function createMacPtyDiagnostics({ probe, failFastMs = 90_000, rawLimit = RAW_LI
   onFailure = () => {} } = {}) {
   if (typeof probe !== 'string' || probe.length === 0) throw new TypeError('probe must be non-empty text');
   let raw = Buffer.alloc(0);
+  let textTail = '';
   let rawBytesSeen = 0;
   let probeAt = null;
   let promptAt = null;
@@ -67,9 +68,10 @@ function createMacPtyDiagnostics({ probe, failFastMs = 90_000, rawLimit = RAW_LI
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
     rawBytesSeen += bytes.length;
     if (raw.length < rawLimit) raw = Buffer.concat([raw, bytes.subarray(0, rawLimit - raw.length)]);
-    const retainedText = raw.toString('utf8');
-    if (probeAt !== null && retainedText.includes(probe)) state.echo = 'observed';
-    return inspectText(retainedText);
+    const text = textTail + bytes.toString('utf8');
+    if (probeAt !== null && text.includes(probe)) state.echo = 'observed';
+    textTail = text.slice(-128);
+    return inspectText(text);
   }
   function inspectText(text) {
     if (FAILURE_TEXT.test(text)) fail('failure-marker');

@@ -64,6 +64,20 @@ test('diagnostic fail-fast fires only for unanswered probe and marker/error/term
   assert.equal(failures.at(-1), 'error-event');
 });
 
+test('detects split echo and failure text after the retained raw-byte limit', () => {
+  const failures = [];
+  const diag = createMacPtyDiagnostics({ probe: 'echo-nonce', rawLimit: 4, onFailure: value => failures.push(value) });
+  diag.probeWritten();
+  diag.onData('banner echo-');
+  diag.onData('nonce');
+  assert.equal(diag.snapshot().echo, 'observed');
+  diag.onData('0123456789ASTRID_PINOKIO_');
+  diag.onData('FAILURE');
+  assert.equal(failures.at(-1), 'failure-marker');
+  assert.equal(diag.snapshot().raw_on_data.bytes_retained, 4);
+  diag.dispose();
+});
+
 test('records PTerm wait and daemon terminal emission independently, with bounded raw payload', () => {
   const diag = createMacPtyDiagnostics({ probe: 'nonce', rawLimit: 8 });
   diag.terminalWait('child-exit');
