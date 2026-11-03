@@ -39,6 +39,7 @@ jobs:
         if: runner.os == 'Windows'
         with:
           install: util-linux
+          path-type: inherit
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
@@ -46,6 +47,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
+          command -v node
+          node --version
           command -v setsid
           setsid --version
       - name: Focused watchdog test (Windows)
