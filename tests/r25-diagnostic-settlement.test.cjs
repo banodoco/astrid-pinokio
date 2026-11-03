@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createDiagnosticSettlement } = require('../.github/venue/r25-diagnostic-settlement.cjs');
+const { createDiagnosticSettlement, SCHEDULE_MARGIN_MS } = require('../.github/venue/r25-diagnostic-settlement.cjs');
 
 test('rewritten sidecars preserve prompt-1 resolution and bound unanswered prompt-2 by its write timestamp', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cross-os-settlement-'));
@@ -23,7 +23,7 @@ test('rewritten sidecars preserve prompt-1 resolution and bound unanswered promp
     time += 7000;
     write([{kind: 'prompt-probe-write-return', prompt_ordinal: 2, at: new Date(time - 100).toISOString()}]);
     watch.scan();
-    assert.equal(due, time - 100 + 90000);
+    assert.equal(due, time - 100 + 90000 - SCHEDULE_MARGIN_MS);
     assert.equal(watch.signal.aborted, false);
     time = due;
     fire();
@@ -83,6 +83,15 @@ test('probe journal retains an earlier resolution when prompt-2 replaces the leg
   watch.scan();
   assert.equal(watch.snapshot().probes[0].resolved,true);
   assert.equal(watch.signal.aborted,false);
-  assert.equal(due,time-500+90000);
+  assert.equal(due,time-500+90000-SCHEDULE_MARGIN_MS);
  } finally {watch.stop();fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('terminal packets arriving after diagnostic refusal remain observable until cleanup stops the recorder', () => {
+ const watch=createDiagnosticSettlement();
+ watch.packet({type:'stream',data:{raw:'Terminated Shell'}});
+ watch.packet({type:'disconnect'});
+ assert.equal(watch.snapshot().failure.reason,'terminated-shell');
+ assert.equal(watch.snapshot().emitted.disconnect,1);
+ watch.stop();
 });

@@ -289,7 +289,7 @@ function promptHarness(root, scenarios = []) {
     const shell = new sandbox.module.exports();
     shell.prompt_ready = true;
     shell.prompt_done = false;
-    shell.shell = 'stub';
+    shell.shell = scenario.shell || 'stub';
     shell.args = [];
     shell.EOL = '\n';
     shell.filterDecsync = data => {
@@ -406,7 +406,7 @@ test('cumulative exact command-line counters handle chunk splits, cap counts, an
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-command-line-stream-'));
   try {
     const harness = promptHarness(root);
-    const run = harness.start({ serialized: 'ordinary screen' });
+    const run = harness.start({ serialized: 'ordinary screen', shell: 'cmd.exe' });
     run.term.emit('C:\\private\\> ech');
     run.term.emit('o pin');
     run.term.emit('okio\r');
@@ -551,7 +551,7 @@ test('injected prompt adds a bare echo discriminator and keeps state or nonce ou
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-nonce-write-'));
   try {
     const harness = promptHarness(root);
-    const run = harness.start({ serialized: 'ordinary screen' });
+    const run = harness.start({ serialized: 'ordinary screen', shell: 'cmd.exe' });
     run.shell.prompt_ready = false;
     run.term.emit('initial prompt output');
     await new Promise(resolve => setTimeout(resolve, 550));
@@ -589,4 +589,20 @@ test('native cmd.exe bare echo emits its state line on Windows', { skip: process
   const result = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'echo'], { encoding: 'utf8', windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^ECHO is on\.?\r?\n?$/i);
+});
+
+test('PowerShell diagnostics retain the nonce probe without invoking interactive bare Write-Output', async () => {
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'r25-powershell-echo-'));
+ try {
+  const harness=promptHarness(root);
+  const run=harness.start({serialized:'ordinary screen',shell:'powershell.exe'});
+  run.shell.prompt_ready=false;run.term.emit('initial prompt output');
+  await new Promise(resolve=>setTimeout(resolve,550));
+  assert.equal(run.term.writes.length,2);
+  assert.equal(run.term.writes.includes('echo\n'),false);
+  assert.match(run.term.writes[1],/^echo r25_[a-f0-9]{24}\n$/);
+  const row=harness.rows().find(item=>item.kind==='prompt-processing');
+  assert.equal(row.cmd_echo_state_probe_attempted,false);
+  assert.equal(row.nonce_probe_write_returned,true);
+ } finally {fs.rmSync(root,{recursive:true,force:true});}
 });

@@ -272,8 +272,8 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
       windows_diagnostic_failure: settlement?.snapshot().failure || null,
       status_after: await io.status(path.join(appRoot, script), `${action}-status`) };
   } finally {
-    settlement?.stop();
     if (settlement?.signal.aborted) await terminateChild(child);
+    settlement?.stop();
     const shellDiagnosticFile = path.join(appRoot, '_r25-setup-shell-diagnostics.jsonl');
     flushCaptures(diagnostic?.stdio);
     diagnostic?.shell?.(shellDiagnosticFile);

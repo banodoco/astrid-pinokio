@@ -47,7 +47,7 @@ function __r25WinCapture(kind, fields = {}) {
     row.pid = Number.isInteger(fields.pid) ? fields.pid : null;
     row.shell = typeof fields.shell === 'string' ? __r25WinPath.win32.basename(fields.shell).slice(0, 80) : null;
     row.shell_sha256 = __r25WinHash(fields.shell || '');
-    row.args = Array.isArray(fields.args) ? fields.args.slice(0, 12).map(value => /^\/[a-z]$/i.test(String(value)) ? String(value) : 'sha256:' + __r25WinHash(value)) : [];
+    row.args = Array.isArray(fields.args) ? fields.args.slice(0, 12).map(value => /^(?:\/[a-z]|--?(?:nologo|noprofile|norc|noexit))$/i.test(String(value)) ? String(value) : 'sha256:' + __r25WinHash(value)) : [];
     row.cwd_sha256 = __r25WinHash(fields.cwd || '');
     row.env = {};
     for (const key of ${JSON.stringify(ENV_KEYS)}) {
@@ -82,7 +82,7 @@ function __r25WinCapture(kind, fields = {}) {
 }
 `;
   replaceOnce("const __r25PtyFs = require('fs');\n", helper + "\nconst __r25PtyFs = require('fs');\n", 'runtime-helper');
-  replaceOnce("      __r25PtySetPromptPid(term?.pid)\n", "      __r25PtySetPromptPid(term?.pid)\n      __r25WinCapture('spawn', { role: __r25PromptOrdinal === 2 ? 'prompt-2' : 'prompt-1', shell: this.shell, args: this.args, cwd: config.cwd || this.path, env: config.env })\n", 'prompt-spawn');
+  replaceOnce("      __r25PtySetPromptPid(term?.pid)\n", "      __r25PtySetPromptPid(term?.pid)\n      __r25WinCapture('spawn', { role: __r25PromptOrdinal === 2 ? 'prompt-2' : 'prompt-1', pid: term?.pid, shell: this.shell, args: this.args, cwd: config.cwd || this.path, env: config.env })\n", 'prompt-spawn');
   replaceOnce("        if (!__r25PromptFirstOutput) { __r25PromptFirstOutput = true;", "        __r25WinCapture('raw-ondata', { data, role: __r25PromptOrdinal === 2 ? 'prompt-2' : 'prompt-1' })\n        if (!__r25PromptFirstOutput) { __r25PromptFirstOutput = true;", 'raw-ondata');
   replaceOnce("          __r25PtyCapture('exec-pty-spawn', { pid: this.ptyProcess?.pid, ppid: process.pid })\n", "          __r25PtyCapture('exec-pty-spawn', { pid: this.ptyProcess?.pid, ppid: process.pid })\n          const __r25RegistryCheck = String(this.exec_cmd || this.cmd || '').includes('LongPathsEnabled') && /reg query/i.test(String(this.exec_cmd || this.cmd || ''))\n          if (__r25RegistryCheck) __r25WinCapture('spawn', { role: 'registry-check', pid: this.ptyProcess?.pid, shell: this.shell, args: shellArgs, cwd: config.cwd, env: config.env })\n", 'registry-control-spawn');
   replaceOnce("          this.ptyProcess.onData((data) => {\n", "          this.ptyProcess.onData((data) => {\n            __r25WinCapture('raw-ondata', { data, role: __r25RegistryCheck ? 'registry-check' : 'exec' })\n", 'registry-control-raw-ondata');

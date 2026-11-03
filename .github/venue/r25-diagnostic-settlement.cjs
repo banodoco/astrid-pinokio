@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const PROBE_MS = 90_000;
 const CAPTURE_BYTES = 131072;
+const SCHEDULE_MARGIN_MS = 100;
 const MARKERS = ['ASTRID_PINOKIO_FAILURE', 'Terminated Shell'];
 
 // A diagnostic observer, never an acceptance predicate. Qualification callers
@@ -37,7 +38,7 @@ function createDiagnosticSettlement({ captureFile, record = () => {}, now = Date
     const pending = [...probes.values()].filter(probe => !probe.resolved);
     if (!pending.length || stopped || state.failure) return;
     const first = pending.sort((a, b) => a.deadline - b.deadline)[0];
-    timer = setTimer(() => fail('probe-unanswered-90s', first.ordinal), Math.max(0, first.deadline - now()));
+    timer = setTimer(() => fail('probe-unanswered-90s', first.ordinal), Math.max(0, first.deadline - now() - SCHEDULE_MARGIN_MS));
   }
   function scan() {
     if (stopped || state.failure || !captureFile) return;
@@ -85,10 +86,11 @@ function createDiagnosticSettlement({ captureFile, record = () => {}, now = Date
     start() { if (!interval && !stopped) { scan(); interval = setPoll(scan, 100); } },
     scan,
     packet(packet) {
-      if (stopped || state.failure) return;
+      if (stopped) return;
       const type = packet?.type;
       if (type === 'stop' || type === 'disconnect' || type === 'error') state.emitted[type] += 1;
       if (type === 'event' && (packet.data === 'stop' || packet.data === 'disconnect')) state.emitted['event_' + packet.data] += 1;
+      if (state.failure) { persist(); return; }
       if (type === 'error' || type === 'installer-failure-marker') return fail(type === 'error' ? 'error-event' : 'failure-marker');
       const raw = type === 'stream' && typeof packet.data?.raw === 'string' ? packet.data.raw : '';
       if (type === 'stream') {
@@ -103,4 +105,4 @@ function createDiagnosticSettlement({ captureFile, record = () => {}, now = Date
   };
 }
 
-module.exports = { PROBE_MS, createDiagnosticSettlement };
+module.exports = { PROBE_MS, SCHEDULE_MARGIN_MS, createDiagnosticSettlement };

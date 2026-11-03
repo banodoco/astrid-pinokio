@@ -791,8 +791,8 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
       logs: { stdout: stdoutPath, stderr: stderrPath },
       status_after: await io.status(path.join(appRoot, script), `${action}-status`) };
   } finally {
-    settlement?.stop();
     if (settlement?.signal.aborted) await terminateChild(child);
+    settlement?.stop();
     io.disposeSocket(socket);
   }
 }
