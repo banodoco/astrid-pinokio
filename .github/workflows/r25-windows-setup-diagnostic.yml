@@ -1,0 +1,160 @@
+name: C6 macOS first-failure capture
+'on':
+  workflow_dispatch: {}
+permissions:
+  actions: read
+  contents: read
+concurrency:
+  group: c6-macos-first-failure
+  cancel-in-progress: false
+jobs:
+  macos-setup-diagnostic:
+    name: C6 capture (pinokio-fully-local-macos) / macos-setup-diagnostic
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      AGENT_REF: a6b68d5b5478326a4db1971966d33a2cfe61d091
+      SLOT_ID: pinokio-fully-local-macos
+      R25_CROSS_OS_DIAGNOSTIC: '1'
+      R25_TARGET_OS: macos
+      R25_SLOT_ID: pinokio-fully-local-macos
+      PINOKIOD_REF: add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
+      PTERM_REF: 5be43718701c448b43daf0ce51d8935f170065bb
+      R25_TUPLE_JSON: '{"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","artifacts":{"public/install":"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d","public/install.sh":"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285","public/install.ps1":"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"},"published_at":"2026-11-02T17:55:27Z"}'
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+        path: control
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+        ref: 95ef7e4201681f3d998744437b742e3b746e3b6d
+        path: observation
+    - name: Preserve exact Git blob bytes on macOS
+      shell: bash
+      run: |
+        set -euo pipefail
+        git config --global core.autocrlf false
+        git config --global core.eol lf
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20.19.4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Materialize exact Agent collector source
+      shell: bash
+      env:
+        AGENT_ROOT: ${{ runner.temp }}/astrid-agent
+      run: |
+        set -euo pipefail
+        test "$AGENT_REF" = 'a6b68d5b5478326a4db1971966d33a2cfe61d091'
+        node -e 'const got=JSON.parse(process.env.R25_TUPLE_JSON); const want=JSON.parse(process.argv[1]); if(JSON.stringify(got)!==JSON.stringify(want)) throw new Error("candidate_tuple differs from published CURRENT-TUPLE.json")' '{"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","artifacts":{"public/install":"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d","public/install.sh":"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285","public/install.ps1":"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"},"published_at":"2026-11-02T17:55:27Z"}'
+        git clone --filter=blob:none --no-checkout https://github.com/banodoco/astrid-agent.git "$AGENT_ROOT"
+        git -C "$AGENT_ROOT" fetch --no-tags --depth=1 origin "$AGENT_REF"
+        git -C "$AGENT_ROOT" config core.autocrlf false
+        git -C "$AGENT_ROOT" config core.eol lf
+        git -C "$AGENT_ROOT" checkout --detach FETCH_HEAD
+        test "$(git -C "$AGENT_ROOT" rev-parse HEAD)" = "$AGENT_REF"
+    - name: Materialize pinned native engine dependencies
+      shell: bash
+      env:
+        PINOKIOD_ROOT: ${{ runner.temp }}/pinokiod
+        PTERM_ROOT: ${{ runner.temp }}/pterm
+      run: |
+        set -euo pipefail
+        git clone --filter=blob:none --no-checkout https://github.com/pinokiocomputer/pinokiod.git "$PINOKIOD_ROOT"
+        git -C "$PINOKIOD_ROOT" fetch --no-tags --depth=1 origin "$PINOKIOD_REF"
+        git -C "$PINOKIOD_ROOT" config core.autocrlf false
+        git -C "$PINOKIOD_ROOT" config core.eol lf
+        git -C "$PINOKIOD_ROOT" checkout --detach FETCH_HEAD
+        test "$(git -C "$PINOKIOD_ROOT" rev-parse HEAD)" = "$PINOKIOD_REF"
+        npm ci --omit=dev --prefix "$PINOKIOD_ROOT" --silent
+        git clone --filter=blob:none --no-checkout https://github.com/pinokiocomputer/pterm.git "$PTERM_ROOT"
+        git -C "$PTERM_ROOT" fetch --no-tags --depth=1 origin "$PTERM_REF"
+        git -C "$PTERM_ROOT" config core.autocrlf false
+        git -C "$PTERM_ROOT" config core.eol lf
+        git -C "$PTERM_ROOT" checkout --detach FETCH_HEAD
+        test "$(git -C "$PTERM_ROOT" rev-parse HEAD)" = "$PTERM_REF"
+        npm ci --omit=dev --prefix "$PTERM_ROOT" --silent
+    - name: Validate immutable sources and focused route checks
+      shell: bash
+      env:
+        AGENT_ROOT: ${{ runner.temp }}/astrid-agent
+      run: |+
+        set -euo pipefail
+        assert_git_blob_bytes() {
+          local root="$1" relative="$2" blob actual
+          blob="$(git -C "$root" rev-parse "HEAD:$relative")"
+          actual="$(git -C "$root" hash-object --no-filters -- "$relative")"
+          test "$actual" = "$blob" || { echo "Git blob bytes changed after checkout: $root $relative ($actual != $blob)" >&2; return 1; }
+        }
+        assert_git_blob_bytes "$PWD" pinokio/providers/r25-snapshot-macos.cjs
+        assert_git_blob_bytes "$PWD" pinokio/providers/r25-snapshot-windows.cjs
+        assert_git_blob_bytes "$AGENT_ROOT" scripts/pinokio_snapshot_collector.py
+        assert_git_blob_bytes "$AGENT_ROOT" scripts/pinokio_snapshot_macos.py
+        assert_git_blob_bytes "$AGENT_ROOT" scripts/pinokio_snapshot_windows.py
+        node pinokio/providers/r25-native-collector-binding.cjs \
+          --validate-source-only true --agent-ref "$AGENT_REF" \
+          --agent-root "$AGENT_ROOT" --pinokio-root "$PWD"
+        node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-macos.test.cjs tests/r25-conda-provision.test.cjs tests/r25-macos-diagnostic.test.cjs tests/r25-cross-os-pty.test.cjs tests/r25-diagnostic-settlement.test.cjs
+        python -m py_compile \
+          "$AGENT_ROOT/scripts/pinokio_snapshot_collector.py" \
+          "$AGENT_ROOT/scripts/pinokio_snapshot_macos.py"
+        node --check .github/venue/r25-snapshot-runner.cjs
+
+    - name: Bind diagnostic source and materialize command-exit capture
+      shell: bash
+      env:
+        R25_DIAGNOSTICS: ${{ runner.temp }}/r25-diagnostics
+      run: |
+        set -euo pipefail
+        mkdir -p "$R25_DIAGNOSTICS"
+        test "$(git rev-parse HEAD)" = 95ef7e4201681f3d998744437b742e3b746e3b6d
+        test "$(shasum -a 256 .github/venue/r25-macos-snapshot-runner.cjs | cut -d ' ' -f 1)" = c57604ab4ccb6823954e5f9cbaafae2c4de0583837eba58c9efcfbcdec0d5d53
+        git apply --check "$GITHUB_WORKSPACE/control/docs/merge-plan/diagnostics/R-PIN-C6-MAC-ROWS/setup-capture.patch"
+        git apply "$GITHUB_WORKSPACE/control/docs/merge-plan/diagnostics/R-PIN-C6-MAC-ROWS/setup-capture.patch"
+        node --check .github/venue/r25-macos-snapshot-runner.cjs
+        node - <<'NODE'
+        const fs = require('node:fs');
+        const cp = require('node:child_process');
+        const crypto = require('node:crypto');
+        const source = '95ef7e4201681f3d998744437b742e3b746e3b6d';
+        const files = ['.github/venue/r25-macos-snapshot-runner.cjs','pinokio/shell.mjs','.github/venue/r25-diagnostic-settlement.cjs'];
+        const hashes = Object.fromEntries(files.map(file => [file,crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')]));
+        fs.writeFileSync(process.env.R25_DIAGNOSTICS+'/effective-inputs.json',JSON.stringify({proof_mode:'diag',qualification_claimed:false,workflow_sha:process.env.GITHUB_SHA,observation_source_ref:source,observation_effective_head:cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),source_overlay:true,tuple:JSON.parse(process.env.R25_TUPLE_JSON),hashes})+'\n');
+        NODE
+        node --test tests/environment.test.mjs tests/r25-setup-diagnostics.test.mjs tests/r25-diagnostic-settlement.test.cjs tests/r25-mac-observability.test.cjs
+        git diff --check
+    - name: Run one setup-only macOS diagnostic
+      shell: bash
+      env:
+        AGENT_ROOT: ${{ runner.temp }}/astrid-agent
+        PINOKIOD_ROOT: ${{ runner.temp }}/pinokiod
+        PTERM_ROOT: ${{ runner.temp }}/pterm
+        PYTHON: python
+        R25_OUTPUT: ${{ runner.temp }}/r25-snapshot-output
+        R25_DIAGNOSTICS: ${{ runner.temp }}/r25-diagnostics
+        PINOKIO_HOME: ${{ runner.temp }}/pinokio-home
+      run: |
+        set -euo pipefail
+        test "$(id -u)" -gt 0
+        test "$(id -un)" != root
+        bash .github/venue/r25-provision-macos-conda.sh
+        export R25_LAUNCHD_TARGET="gui/$(id -u)/haus.astrid.runtime"
+        node .github/venue/r25-snapshot-runner.cjs \
+          --agent-root "$AGENT_ROOT" --pinokiod "$PINOKIOD_ROOT" \
+          --pterm "$PTERM_ROOT" --output "$R25_OUTPUT" --setup-only true --cross-os-diagnostic true
+    - name: Retain bounded macOS diagnostics
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: r25-macos-setup-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/r25-diagnostics
+        if-no-files-found: warn
+        retention-days: 30
+    defaults:
+      run:
+        working-directory: observation

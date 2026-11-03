@@ -1,0 +1,35 @@
+--- a/.github/venue/r25-macos-snapshot-runner.cjs
++++ b/.github/venue/r25-macos-snapshot-runner.cjs
+@@ -851,6 +851,16 @@
+   await verifyAppCandidate(tuple);
+   binding.validateSourceRoots({ agentRoot: path.resolve(cli['agent-root']), pinokioRoot: process.cwd(), agentRef: AGENT_REF });
+   materializeProduct(productRoot, appRoot);
++  // Diagnostic-only overlay: published product bytes do not contain the
++  // command-exit capture helper. Record both byte identities explicitly.
++  const shellPath = path.join(appRoot, 'pinokio', 'shell.mjs');
++  const baselineShellHash = digest(fs.readFileSync(shellPath));
++  fs.copyFileSync(path.join(process.cwd(), 'pinokio', 'shell.mjs'), shellPath);
++  writeCanonical(path.join(diagnostics, 'setup-shell-overlay.json'), {
++    proof_mode: 'diag', source_ref: '95ef7e4201681f3d998744437b742e3b746e3b6d',
++    product_base_ref: PINOKIO_TUPLE_REF, baseline_shell_sha256: baselineShellHash,
++    observed_shell_sha256: digest(fs.readFileSync(shellPath)),
++  });
+   const environment = path.join(appRoot, '_ENVIRONMENT');
+   fs.writeFileSync(environment, '# R-25 run-owned candidate pin\nASTRID_APP_REF=lane/M-APP/PINOKIO-APP-BINDING\n', { encoding: 'utf8', flag: 'w', mode: 0o600 });
+   fs.writeFileSync(requestPath, `${JSON.stringify(request, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+@@ -993,6 +1003,15 @@
+     if (initialCensus) writeCanonical(path.join(output, 'census', 'initial.json'), initialCensus);
+     if (finalCensus) writeCanonical(path.join(output, 'census', 'final.json'), finalCensus);
+   } finally {
++    // Retain the actual app-side helper journal even on first refusal.
++    try {
++      const helperCapture = copyBoundedTail(path.join(appRoot, '_r25-setup-shell-diagnostics.jsonl'),
++        path.join(diagnostics, 'setup-shell-diagnostics.jsonl'));
++      writeCanonical(path.join(diagnostics, 'setup-shell-capture.json'), {
++        proof_mode: 'diag', capture: helperCapture,
++        natural_inner_exit: 'read shell-command-exit rows; absent means unknown',
++      });
++    } catch { /* Capture failure must not bypass the existing cleanup path. */ }
+     setupDiagnostic?.stage('cleanup-start');
+     if (TARGET_OS === 'macos' && !finalCensus) {
+       try {
