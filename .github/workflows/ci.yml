@@ -121,8 +121,6 @@ jobs:
       APP_REF: ${{ inputs.app_ref }}
       RUNTIME_REF: ${{ inputs.runtime_ref }}
       PINOKIO_DIAGNOSTIC_KEEP_GOING: '1'
-      PINOKIO_KEEPGOING_REPORT: ${{ runner.temp }}/keepgoing-report.json
-      PINOKIO_KEEPGOING_ROOT: ${{ runner.temp }}/pinokio-keepgoing
     steps:
       - uses: actions/checkout@v4
         with:
@@ -136,6 +134,7 @@ jobs:
         env:
           PINOKIO_DIAGNOSTIC_KEEP_GOING: ${{ inputs.diagnostic_keep_going && '1' || '0' }}
           PINOKIO_KEEPGOING_REPORT: ${{ runner.temp }}/keepgoing-report.json
+          PINOKIO_KEEPGOING_ROOT: ${{ runner.temp }}/pinokio-keepgoing
           PINOKIO_KEEPGOING_SLOT: pinokio-${{ matrix.channel }}-${{ runner.os == 'Linux' && 'linux' || runner.os == 'macOS' && 'macos' || 'windows' }}
         run: node .github/venue/keepgoing-native.mjs ${{ matrix.channel }}
       - name: Retain diagnostic-only report
