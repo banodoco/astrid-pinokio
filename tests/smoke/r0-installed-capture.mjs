@@ -19,20 +19,6 @@ function inside(candidate, parent, paths = path) {
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${paths.sep}`) && !paths.isAbsolute(relative));
 }
 
-function findFiles(directory, basename) {
-  const matches = [];
-  const visit = (current) => {
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-      const file = path.join(current, entry.name);
-      if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory()) visit(file);
-      else if (entry.isFile() && entry.name === basename) matches.push(file);
-    }
-  };
-  visit(directory);
-  return matches;
-}
-
 function containsCommit(value) {
   if (typeof value === 'string') return value.toLowerCase().includes(R0.commit);
   if (Array.isArray(value)) return value.some(containsCommit);
@@ -82,12 +68,12 @@ export function captureInstalledR0(root, { platform = process.platform, tempDire
     throw new Error('Refusing capture: recorded Python is outside the installed version directory.');
   }
   const pythonRoot = path.win32.join(path.win32.dirname(versionRecord.python), 'Lib', 'site-packages');
-  const bootstrapFiles = findFiles(pythonRoot, 'bootstrap.py').filter((file) => file.toLowerCase().endsWith('astrid_runtime\\bootstrap.py'));
-  const lifecycleFiles = findFiles(pythonRoot, 'lifecycle.py').filter((file) => file.toLowerCase().endsWith('runtime_protocol\\lifecycle.py'));
-  if (bootstrapFiles.length !== 1 || lifecycleFiles.length !== 1) throw new Error('Expected exactly one installed R0 bootstrap and lifecycle module.');
+  const bootstrapFile = path.win32.join(pythonRoot, 'astrid_runtime', 'bootstrap.py');
+  const lifecycleFile = path.win32.join(pythonRoot, 'runtime_protocol', 'lifecycle.py');
+  if (!fs.existsSync(bootstrapFile) || !fs.existsSync(lifecycleFile)) throw new Error('Installed R0 bootstrap or lifecycle module is missing.');
   const source = {
-    bootstrap: { path: bootstrapFiles[0], sha256: sha256(bootstrapFiles[0]) },
-    lifecycle: { path: lifecycleFiles[0], sha256: sha256(lifecycleFiles[0]) },
+    bootstrap: { path: bootstrapFile, sha256: sha256(bootstrapFile) },
+    lifecycle: { path: lifecycleFile, sha256: sha256(lifecycleFile) },
   };
   source.matchesAuthenticatedR0 = source.bootstrap.sha256 === R0.bootstrapSha256 && source.lifecycle.sha256 === R0.lifecycleSha256;
   return {
