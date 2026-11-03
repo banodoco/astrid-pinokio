@@ -18,7 +18,11 @@ if [[ "${1:-}" == --execute || "${1:-}" == --watchdog ]]; then
   mkdir "$R21_PROGRESS_DIR"
   export R21_STARTED_MS
   R21_STARTED_MS=$(node -p 'Date.now()')
-  setsid bash "$0" --work "$request" &
+  # Bash job control gives each background job its own process group, which
+  # lets the same TERM/KILL cleanup work in Git Bash without the external
+  # `setsid` utility.
+  set -m
+  bash "$0" --work "$request" &
   worker=$!
   sleep "$deadline" &
   timer=$!
