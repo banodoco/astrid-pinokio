@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import library from '../pinokio/lib.js';
@@ -263,7 +264,7 @@ test('hosted Update refuses at read-only preflight before the launcher pull', as
 });
 
 test('Update performs only installed-CLI recovery before any new launcher or manifest fetch', async (t) => {
-  const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'astrid-pinokio-recovery-'));
+  const temporary = fs.mkdtempSync(path.join(tmpdir(), 'astrid-pinokio-recovery-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const appDirectory = path.join(temporary, 'pinokio', 'api', 'Astrid');
   const root = path.join(appDirectory, 'app', 'astrid');
@@ -1254,7 +1255,9 @@ test('fully-local Update route stages failure, promotes success, and reports ins
         },
         installer: async (_cmd, args) => {
           events.push('installer'); assert.equal(git(editor, 'rev-parse', 'HEAD'), target);
-          assert.match(args.join(' '), /--update/); assert.match(args.join(' '), /install-manifest\.json/);
+          assert.match(args.join(' '), /--update/);
+          assert.ok(args.join(' ').includes(path.join(editor, 'public', 'install-manifest.json')));
+          assert.doesNotMatch(args.join(' '), /npm run update/);
           return { status: outcome === 'installer failure' ? 1 : 0, stderr: outcome === 'installer failure' ? 'controlled installer failure' : '' };
         },
       } });
