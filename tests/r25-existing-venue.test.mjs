@@ -26,6 +26,13 @@ test('capture branch selects exactly the bounded setup-only Windows workflow and
   assert.match(broadWorkflow, /'!lane\/M-PIN\/R-PIN-WINDOWS-CAPTURE'/);
 });
 
+test('PTY integration push selects the changed setup-only route', () => {
+  assert.match(workflow, /- lane\/M-PIN\/R-PIN-WINDOWS-PTY-INTEGRATE/);
+  assert.match(workflow, /github\.ref_name == 'lane\/M-PIN\/R-PIN-WINDOWS-PTY-INTEGRATE'/);
+  assert.match(workflow, /SETUP_ONLY:.*R-PIN-WINDOWS-PTY-INTEGRATE/);
+  assert.doesNotMatch(workflow, /R-PIN-WINDOWS-PTY-INTEGRATE.*six-action/);
+});
+
 test('existing six-action path remains available only on its original push ref or manual slot', () => {
   assert.match(workflow, /github\.ref_name == 'lane\/M-PIN\/R-25-WINDOWS-LF-ROUTE-R1'/);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch' && inputs\.slot_id == 'pinokio-fully-local-windows'/);

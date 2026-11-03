@@ -7,6 +7,7 @@ on:
       - lane/M-PIN/R-PIN-WINDOWS-EXISTING-VENUE
       - lane/M-PIN/R-PIN-WINDOWS-BOUNDED
       - lane/M-PIN/R-PIN-WINDOWS-CAPTURE
+      - lane/M-PIN/R-PIN-WINDOWS-PTY-INTEGRATE
   workflow_dispatch:
     inputs:
       agent_ref:
@@ -34,7 +35,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       AGENT_REF: ${{ github.event_name == 'push' && 'a6b68d5b5478326a4db1971966d33a2cfe61d091' || inputs.agent_ref }}
       SLOT_ID: ${{ github.event_name == 'push' && 'pinokio-fully-local-windows' || inputs.slot_id }}
-      SETUP_ONLY: ${{ github.event_name == 'push' && (github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-EXISTING-VENUE' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-BOUNDED' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-CAPTURE') }}
+      SETUP_ONLY: ${{ github.event_name == 'push' && (github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-EXISTING-VENUE' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-BOUNDED' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-CAPTURE' || github.ref_name == 'lane/M-PIN/R-PIN-WINDOWS-PTY-INTEGRATE') }}
       PINOKIOD_REF: add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
       PTERM_REF: 5be43718701c448b43daf0ce51d8935f170065bb
       R25_SETUP_TIMEOUT_MS: 600000
