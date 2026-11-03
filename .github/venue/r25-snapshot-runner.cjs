@@ -403,6 +403,23 @@ function releaseUnsignalledDaemon(daemon) {
   try { daemon.unref(); } catch {}
 }
 
+function validatedSignal(expected, runRoot, signal) {
+  const current = readProcessIdentity(expected.pid);
+  const mismatches = identityMismatches(current, {
+    pid: expected.pid, ppid: expected.ppid, uid: expected.uid,
+    executable: expected.executable, cwd: expected.cwd,
+    start_identity: expected.start_identity, run_root: runRoot,
+    argv: expected.argv, script: expected.argv?.[0] || null,
+  });
+  if (mismatches.length) return { ok: false, pid: expected.pid, mismatches, observed: current };
+  try {
+    process.kill(expected.pid, signal);
+    return { ok: true, pid: expected.pid, signal, observed: current };
+  } catch (error) {
+    return { ok: false, pid: expected.pid, reason: error.code || error.message || 'signal-failed', observed: current };
+  }
+}
+
 async function cleanupOwnedDaemon(daemon, { identity = null, killMs = 1000 } = {}) {
   const base = {
     schema: 'astrid.r25.daemon-cleanup.v1', status: 'failed', cleanup_verified: false,
@@ -440,43 +457,71 @@ async function cleanupOwnedDaemon(daemon, { identity = null, killMs = 1000 } = {
       residuals: [{ kind: 'daemon-descendants', status: 'unknown', reason: initialCensus.reason || 'independent descendant census unavailable' }],
     };
   }
-  const descendantProcesses = initialCensus.processes
+  const stopped = [];
+  const stoppedPids = new Set();
+  let stableCensus = null;
+  let containmentFailure = null;
+  for (let round = 0; round < 4; round += 1) {
+    const census = ownedProcessCensus(identity.expected.pid, initialCensus.run_root);
+    if (!census.available) {
+      containmentFailure = { reason: census.reason || 'containment-census-unavailable', census };
+      break;
+    }
+    const processes = census.processes.sort((left, right) => left.depth - right.depth || left.pid - right.pid);
+    for (const expected of processes) {
+      if (stoppedPids.has(expected.pid)) continue;
+      const result = validatedSignal(expected, initialCensus.run_root, 'SIGSTOP');
+      if (!result.ok) {
+        containmentFailure = { reason: 'identity-or-stop-failed', signal_failure: result, census };
+        break;
+      }
+      stoppedPids.add(expected.pid);
+      stopped.push(expected.pid);
+    }
+    if (containmentFailure) break;
+    const afterStop = ownedProcessCensus(identity.expected.pid, initialCensus.run_root);
+    if (!afterStop.available) {
+      containmentFailure = { reason: afterStop.reason || 'post-stop-census-unavailable', census: afterStop };
+      break;
+    }
+    const newProcesses = afterStop.processes.filter(item => !stoppedPids.has(item.pid));
+    stableCensus = afterStop;
+    if (newProcesses.length === 0 && afterStop.processes.length === stoppedPids.size) break;
+    if (round === 3) containmentFailure = { reason: 'containment-census-did-not-stabilize', census: afterStop };
+  }
+  if (containmentFailure || !stableCensus) {
+    const releaseTargets = [...new Map([
+      ...initialCensus.processes,
+      ...(containmentFailure?.census?.processes || []),
+    ].map(item => [item.pid, item])).values()].sort((left, right) => right.depth - left.depth || right.pid - left.pid);
+    const releaseSignals = [];
+    for (const expected of releaseTargets) {
+      if (!stoppedPids.has(expected.pid)) continue;
+      releaseSignals.push(validatedSignal(expected, initialCensus.run_root, 'SIGKILL'));
+    }
+    releaseUnsignalledDaemon(daemon);
+    return {
+      ...base, bounded: true, failure: containmentFailure?.reason || 'containment-census-did-not-stabilize', identity,
+      initial_census: initialCensus, containment_census: containmentFailure?.census || null,
+      stopped_processes: stopped, release_signals: releaseSignals,
+      residuals: [{ kind: 'daemon-descendants', status: 'unknown', reason: containmentFailure?.reason || 'containment-census-did-not-stabilize' }],
+    };
+  }
+  const descendantProcesses = stableCensus.processes
     .filter(item => item.pid !== identity.expected.pid)
     .sort((left, right) => right.depth - left.depth || right.pid - left.pid);
   const signalled = [];
   const signalFailures = [];
   for (const expected of descendantProcesses) {
-    const current = readProcessIdentity(expected.pid);
-    const reasons = identityMismatches(current, {
-      pid: expected.pid, ppid: expected.ppid, uid: expected.uid,
-      executable: expected.executable, cwd: expected.cwd,
-      start_identity: expected.start_identity, run_root: initialCensus.run_root,
-      argv: expected.argv, script: expected.argv?.[0] || null,
-    });
-    if (reasons.length) {
-      if (reasons.includes('current-identity-unavailable') || reasons.includes('identity-read-failed')) {
-        signalFailures.push({ pid: expected.pid, reason: 'identity-unavailable-before-signal' });
-      } else if (reasons.includes('birth-identity-changed')) {
-        signalFailures.push({ pid: expected.pid, reason: 'birth-identity-changed-before-signal' });
-      } else {
-        signalFailures.push({ pid: expected.pid, reason: reasons.join(',') });
-      }
-      continue;
-    }
-    try {
-      process.kill(expected.pid, 'SIGKILL');
-      signalled.push(expected.pid);
-    } catch (error) {
-      if (error.code !== 'ESRCH') signalFailures.push({ pid: expected.pid, reason: error.code || error.message || 'signal-failed' });
-    }
+    const result = validatedSignal(expected, stableCensus.run_root, 'SIGKILL');
+    if (result.ok) signalled.push(expected.pid);
+    else signalFailures.push({ pid: expected.pid, reason: result.reason || result.mismatches?.join(',') || 'identity-or-signal-failure' });
   }
   let signalError = null;
-  const daemonCurrent = readProcessIdentity(identity.expected.pid);
-  const daemonMismatches = identityMismatches(daemonCurrent, identity.expected);
-  if (daemonMismatches.length) signalError = 'daemon-identity-changed-before-signal';
-  else {
-    try { process.kill(identity.expected.pid, 'SIGKILL'); } catch (error) { signalError = error.code || error.message || 'signal-failed'; }
-  }
+  const daemonSignal = validatedSignal(identity.expected, stableCensus.run_root, 'SIGKILL');
+  const daemonCurrent = daemonSignal.observed;
+  const daemonMismatches = daemonSignal.mismatches || [];
+  if (!daemonSignal.ok) signalError = daemonSignal.reason || 'daemon-identity-changed-before-signal';
   if (signalError) {
     releaseUnsignalledDaemon(daemon);
     return {
@@ -504,7 +549,8 @@ async function cleanupOwnedDaemon(daemon, { identity = null, killMs = 1000 } = {
     ...base, status: complete ? 'verified' : 'failed', cleanup_verified: complete,
     direct_signal_attempted: true, direct_target: identity.expected.pid, signal: 'SIGKILL', exit,
     bounded: Boolean(exit), failure: complete ? null : (signalFailures.length ? 'descendant-identity-or-signal-failure' : (finalCensus.available ? 'descendants-remain' : 'final-census-unavailable')),
-    signalled_descendants: signalled, signal_failures: signalFailures,
+    stopped_processes: stopped, signalled_descendants: signalled, signal_failures: signalFailures,
+    containment_census: stableCensus,
     initial_census: initialCensus, final_census: finalCensus,
     residuals: residuals.length ? residuals : (unknown ? [{ kind: 'daemon-descendants', status: 'unknown', reason: finalCensus.reason || 'descendant signal/census uncertainty' }] : []),
     identity: { ...identity, cleanup_observed: observed },
