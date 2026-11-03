@@ -34,12 +34,18 @@ function createActionTracker() {
     failure() { return failure; },
   };
 }
-function ptermExit(child, label, timeoutMs, diagnostic = null) {
+function ptermExit(child, label, timeoutMs, diagnostic = null, { signal = null } = {}) {
   const note = (event, value) => { try { (typeof diagnostic === 'function' ? diagnostic : diagnostic?.pterm)?.(event, value); } catch {} };
   const beforeTimeout = async value => { try { await diagnostic?.beforeTimeout?.(value); } catch {} };
   const started = Date.now();
   return new Promise((resolve, reject) => {
     let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(signal.reason instanceof Error && signal.reason.name !== 'AbortError' ? signal.reason : new Error(`${label} installer failure marker`));
+    };
     const timer = setTimeout(async () => {
       const fired = Date.now();
       note('timer-fire', { at: fired });
@@ -51,16 +57,20 @@ function ptermExit(child, label, timeoutMs, diagnostic = null) {
     }, timeoutMs);
     child.once('error', () => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       note('spawn-error');
       if (!settled) { settled = true; reject(new Error(`${label} PTerm spawn failed`)); }
     });
-    child.once('exit', (code, signal) => {
+    child.once('exit', (code, childSignal) => {
       clearTimeout(timer);
-      note('child-exit', { code, signal });
-      if (!settled) { settled = true; resolve({ code, signal: signal || null }); }
+      signal?.removeEventListener('abort', onAbort);
+      note('child-exit', { code, signal: childSignal });
+      if (!settled) { settled = true; resolve({ code, signal: childSignal || null }); }
     });
     child.once('close', (code, signal) => note('child-close', { code, signal: signal || null }));
     note('timer-start', { started, deadline: started + timeoutMs });
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -114,7 +124,7 @@ const installKinds = ['start', 'stream', 'result', 'error', 'installer-failure-m
 const installMethods = ['shell.run', 'local.set', 'script.start', 'input'];
 const installStages = ['daemon-spawn-start', 'daemon-spawn', 'daemon-ready', 'daemon-error', 'observer-open', 'observer-subscribe',
   'pterm-spawn', 'pterm-timer-start', 'pterm-timer-fire', 'pterm-exit', 'pterm-close',
-  'process-snapshot-before-timeout', 'installer-output-before-timeout', 'setup-complete', 'cleanup-start'];
+  'process-snapshot-before-timeout', 'installer-output-before-timeout', 'process-snapshot-before-failure-marker', 'installer-output-before-failure-marker', 'installer-output-capture', 'setup-complete', 'cleanup-start'];
 const shellKinds = ['shell-helper-start', 'shell-child-spawn', 'shell-child-error', 'shell-child-exit', 'shell-child-close', 'bootstrap-stage'];
 const snapshotErrors = ['unsupported-platform', 'invalid-request', 'timeout', 'process-limit', 'output-limit', 'command-error', 'malformed-output'];
 const shellStages = ['bootstrap.download-installer', 'bootstrap.download-manifest', 'bootstrap.invoke-installer', 'bootstrap.cleanup'];
@@ -214,6 +224,7 @@ function projectInstallEvidence(raw, binding) {
       signal: ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', 'SIGABRT', 'SIGSEGV'].includes(child.signal) ? child.signal : null,
       signal_observed: typeof child.signal_observed === 'boolean' ? child.signal_observed : null,
       close_at: timestamp(child.close_at), close_code: boundedCode(child.close_code),
+      close_observed: Boolean(timestamp(child.close_at)),
       close_signal: ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', 'SIGABRT', 'SIGSEGV'].includes(child.close_signal) ? child.close_signal : null,
       close_observed: typeof child.close_observed === 'boolean' ? child.close_observed : null } };
 }

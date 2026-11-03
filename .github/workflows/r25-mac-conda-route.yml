@@ -1,0 +1,22 @@
+name: R-25 macOS Conda provisioning route
+
+on:
+  push:
+    branches:
+      - lane/M-PIN/R-PIN-MAC-ROUTE-FIX
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  hosted-macos-provisioning:
+    name: Hosted macOS provisioning candidate
+    uses: ./.github/workflows/r25-snapshot-journey.yml
+    with:
+      agent_ref: a6b68d5b5478326a4db1971966d33a2cfe61d091
+      slot_id: pinokio-backend-macos
+      candidate_tuple: '{"app":"79f7e5397c044c4c97dc7e97b20ad96f787e5247","agent":"ab43bad818ef65ca1e929b973a2f61cd9fc4bf61","runtime":"2776ba973b6c8f3555b5629b0840d9691a98d3c2","pinokio":"3a6a98ae251ca126505245286e2d3e760f4348e9","manifest_sha256":"b2584f0bb5a949890364004572a0182f2b568adcdba061e73b739e1d3d2d623f","artifacts":{"public/install":"100bab1deb15d620abd910c8fb0c9a6d77f4945428a3229dac6b506705e3fd0d","public/install.sh":"591c4c51b148fccef2a7d1c45782d9ff949d5fd03d46cd82b5591e3a23d1b285","public/install.ps1":"bba3f2edc41c047cb51475ceeac4489a04610af73a3af44bdc05287964d28258"},"published_at":"2026-11-02T17:55:27Z"}'
+    permissions:
+      actions: read
+      contents: read
