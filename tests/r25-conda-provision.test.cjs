@@ -17,7 +17,8 @@ function fixture() {
   fs.writeFileSync(path.join(mocks, 'curl'), '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do if [ "$1" = -o ]; then shift; : > "$1"; fi; shift; done\n');
   fs.writeFileSync(path.join(mocks, 'bash'), '#!/bin/sh\nshift\nshift\nshift\nprefix="$1"\nmkdir -p "$prefix/bin"\ncat > "$prefix/bin/conda" <<\'CONDASH\'\n#!/bin/sh\nprintf "%s\\n" "$*" >> "$CONDA_TEST_LOG"\ncase "$1" in shell.bash) echo hook ;; --version) echo conda 26.5.3 ;; esac\nCONDASH\nchmod +x "$prefix/bin/conda"\n');
   for (const name of ['uname', 'curl', 'bash']) fs.chmodSync(path.join(mocks, name), 0o755);
-  return { temp, mocks, home: path.join(temp, 'pinokio-home'), log: path.join(temp, 'commands.log') };
+  return { temp, mocks, home: path.join(temp, 'pinokio-home'), log: path.join(temp, 'commands.log'),
+    diagnostics: path.join(temp, 'diagnostics') };
 }
 
 test('macOS preprovisioning seeds only the runner-owned Pinokio prefix with the pinned engine package set', t => {
@@ -25,7 +26,8 @@ test('macOS preprovisioning seeds only the runner-owned Pinokio prefix with the 
   t.after(() => fs.rmSync(f.temp, { recursive: true, force: true }));
   const result = spawnSync('/bin/bash', [script], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: f.temp, PINOKIO_HOME: f.home, CONDA_TEST_LOG: f.log },
+    env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: f.temp, PINOKIO_HOME: f.home,
+      R25_DIAGNOSTICS: f.diagnostics, NODE_BINARY: process.execPath, CONDA_TEST_LOG: f.log },
   });
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   const calls = fs.readFileSync(f.log, 'utf8');
@@ -34,6 +36,12 @@ test('macOS preprovisioning seeds only the runner-owned Pinokio prefix with the 
   assert.match(calls, /^shell\.bash hook$/m);
   assert.match(calls, /^--version$/m);
   assert.ok(fs.existsSync(path.join(f.home, 'bin', 'miniforge', 'bin', 'conda')));
+  const presence = JSON.parse(fs.readFileSync(path.join(f.diagnostics, 'pre-shell-conda-presence.json'), 'utf8'));
+  assert.deepEqual(presence, {
+    schema: 'astrid.r25.macos-conda-presence.v1', miniforge_root_exists: true,
+    conda_path_exists: true, conda_executable: true, conda_directory_on_path: false,
+    observed_before: 'pinokio-setup-shell.run',
+  });
 });
 
 test('canonicalizes a symlinked runner temp before provisioning its exact child', t => {
@@ -46,7 +54,8 @@ test('canonicalizes a symlinked runner temp before provisioning its exact child'
   const home = path.join(tempAlias, 'pinokio-home');
   const result = spawnSync('/bin/bash', [script], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: tempAlias, PINOKIO_HOME: home, CONDA_TEST_LOG: f.log },
+    env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: tempAlias, PINOKIO_HOME: home,
+      R25_DIAGNOSTICS: f.diagnostics, NODE_BINARY: process.execPath, CONDA_TEST_LOG: f.log },
   });
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   assert.ok(fs.existsSync(path.join(realTemp, 'pinokio-home', 'bin', 'miniforge', 'bin', 'conda')));
@@ -59,7 +68,8 @@ test('provisioning refuses an existing home and an unbound home path before down
   fs.writeFileSync(path.join(f.home, 'preserve-me'), 'existing');
   const existing = spawnSync('/bin/bash', [script], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: f.temp, PINOKIO_HOME: f.home, CONDA_TEST_LOG: f.log },
+    env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: f.temp, PINOKIO_HOME: f.home,
+      R25_DIAGNOSTICS: f.diagnostics, NODE_BINARY: process.execPath, CONDA_TEST_LOG: f.log },
   });
   assert.equal(existing.status, 66);
   assert.equal(fs.readFileSync(path.join(f.home, 'preserve-me'), 'utf8'), 'existing');
@@ -67,7 +77,8 @@ test('provisioning refuses an existing home and an unbound home path before down
 
   const escaped = spawnSync('/bin/bash', [script], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: f.temp, PINOKIO_HOME: path.join(f.temp, 'elsewhere'), CONDA_TEST_LOG: f.log },
+    env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: f.temp, PINOKIO_HOME: path.join(f.temp, 'elsewhere'),
+      R25_DIAGNOSTICS: f.diagnostics, NODE_BINARY: process.execPath, CONDA_TEST_LOG: f.log },
   });
   assert.equal(escaped.status, 64);
   assert.equal(fs.existsSync(f.log), false);

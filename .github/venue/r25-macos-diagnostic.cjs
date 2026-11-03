@@ -27,6 +27,15 @@ function condaPresence(home, env = process.env, fsApi = fs) {
   };
 }
 
+function writeCondaPresence(home, diagnosticsDir, env = process.env, fsApi = fs) {
+  if (typeof diagnosticsDir !== 'string' || diagnosticsDir.length === 0) throw new TypeError('diagnosticsDir is required');
+  const destination = path.join(diagnosticsDir, 'pre-shell-conda-presence.json');
+  fsApi.mkdirSync(diagnosticsDir, { recursive: true });
+  const value = { ...condaPresence(home, env, fsApi), observed_before: 'pinokio-setup-shell.run' };
+  fsApi.writeFileSync(destination, `${JSON.stringify(value)}\n`, { encoding: 'utf8', mode: 0o600 });
+  return value;
+}
+
 // Diagnostic-only observer for the macOS setup action. Call probeWritten only
 // after the probe is sent, onData for each raw PTerm onData payload, and
 // promptResolved only when the expected prompt response is observed.
@@ -99,4 +108,4 @@ function createMacPtyDiagnostics({ probe, failFastMs = 90_000, rawLimit = RAW_LI
     dispose() { if (timer !== null) clearTimer(timer); timer = null; } };
 }
 
-module.exports = { condaPresence, createMacPtyDiagnostics, RAW_LIMIT, EVENT_LIMIT };
+module.exports = { condaPresence, writeCondaPresence, createMacPtyDiagnostics, RAW_LIMIT, EVENT_LIMIT };

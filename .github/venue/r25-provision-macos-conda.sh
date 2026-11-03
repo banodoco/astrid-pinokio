@@ -59,3 +59,9 @@ export PIP_REQUIRE_VIRTUALENV=false
 # managed PATH and runs the same `conda shell.bash hook` startup command.
 "$conda" shell.bash hook >/dev/null
 "$conda" --version
+
+# Retain the run-owned Conda state immediately before pinokio-setup's
+# shell.run. This records presence without adding a global Conda path.
+: "${R25_DIAGNOSTICS:?R25_DIAGNOSTICS is required}"
+node_bin="${NODE_BINARY:-node}"
+"$node_bin" -e 'require("./.github/venue/r25-macos-diagnostic.cjs").writeCondaPresence(process.env.PINOKIO_HOME, process.env.R25_DIAGNOSTICS)'
