@@ -108,6 +108,13 @@ function prepareCheckout(source, appDirectory) {
   const branch = 'ci-smoke';
   execFileSync('git', ['-C', source, 'checkout', '-B', branch, 'HEAD'], { stdio: 'inherit' });
   execFileSync('git', ['clone', '--branch', branch, '--single-branch', source, appDirectory], { stdio: 'inherit' });
+  const environmentFile = path.join(appDirectory, '_ENVIRONMENT');
+  let environment = fs.readFileSync(environmentFile, 'utf8');
+  const refSetting = /^\s*ASTRID_APP_REF\s*=.*$/m;
+  environment = refSetting.test(environment)
+    ? environment.replace(refSetting, 'ASTRID_APP_REF=feat/pinokio')
+    : `${environment.trimEnd()}\nASTRID_APP_REF=feat/pinokio\n`;
+  fs.writeFileSync(environmentFile, environment);
 }
 
 async function processTreeKill(child) {
