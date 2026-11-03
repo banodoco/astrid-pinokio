@@ -52,10 +52,10 @@ const stageProduces = {
   'fully-local Stop': ['fully-local-stopped'], 'fully-local Update': ['fully-local-updated'],
   'local editor after Update restart': ['updated-editor-responded'], 'final fully-local Stop': ['final-fully-local-stop'],
 };
-const step = (name, action, options = {}) => keepGoing.run(name, () => timedStep(name, action, log), {
-  needs: options.needs ?? stageNeeds[name],
-  produces: options.produces ?? stageProduces[name],
-});
+const step = (name, action, options = {}) => keepGoing.run(name, async () => {
+  try { return await timedStep(name, action, log); }
+  catch (error) { options.onError?.(error); throw error; }
+}, { needs: options.needs ?? stageNeeds[name], produces: options.produces ?? stageProduces[name] });
 
 function load(file, app, appDirectory) {
   const filename = path.join(appDirectory, file);
@@ -380,6 +380,7 @@ async function invokeAction(name, app, appDirectory, environment, home, getDaemo
   const loaded = load(`pinokio/${name}.js`, app, appDirectory);
   const script = typeof loaded === 'function' ? await loaded({}, {}) : loaded;
   const kernel = kernelFor(app, getDaemon, stopDaemon);
+  const stepErrors = [];
   for (const [offset, pinokioStep] of script.run.entries()) {
     await step(`${name} ${offset + 1}/${script.run.length} ${typeof pinokioStep.method === 'string' ? pinokioStep.method : 'callback'}`, async () => {
       if (pinokioStep.method === 'shell.run') {
@@ -398,8 +399,9 @@ async function invokeAction(name, app, appDirectory, environment, home, getDaemo
         const result = await pinokioStep.method({}, (value) => { if (value?.raw) process.stdout.write(value.raw); }, kernel);
         log(`${name}: ${JSON.stringify(result ?? {})}`);
       } else throw new Error(`Unhandled Pinokio step in ${name}: ${String(pinokioStep.method)}`);
-    });
+    }, { onError: (error) => stepErrors.push(error) });
   }
+  if (stepErrors.length) throw new AggregateError(stepErrors, `Pinokio ${name} action had ${stepErrors.length} failed step(s).`);
   return script;
 }
 
