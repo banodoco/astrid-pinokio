@@ -38,7 +38,43 @@ permissions:
   contents: read
 
 jobs:
+  m46-engine-native-diagnostic:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: banodoco/astrid-pinokio
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - name: Provision exact pinned sources
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/pinokiocomputer/pinokiod.git "$RUNNER_TEMP/pinokiod"
+          git -C "$RUNNER_TEMP/pinokiod" checkout --detach add4a674ad1ba95bb62ec427fce519fe5bf0e9bf
+          git clone --filter=blob:none https://github.com/pinokiocomputer/pterm.git "$RUNNER_TEMP/pterm"
+          git -C "$RUNNER_TEMP/pterm" checkout --detach 5be43718701c448b43daf0ce51d8935f170065bb
+          npm ci --omit=dev --prefix "$RUNNER_TEMP/pinokiod" --silent
+          npm ci --omit=dev --prefix "$RUNNER_TEMP/pterm" --silent
+      - name: Run focused overlay tests
+        run: PINOKIOD_API_SOURCE="$RUNNER_TEMP/pinokiod/kernel/api/index.js" node --test tests/r-pin-m46-engine-overlay.test.cjs
+      - name: Load overlay and dispatch safe disposable Reset request
+        run: bash .github/venue/m46-engine-native-diagnostic.sh
+      - name: Retain bounded diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m46-engine-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/m46-engine-evidence
+          if-no-files-found: warn
+          retention-days: 30
+
   linux-real-action:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -72,6 +108,7 @@ jobs:
           retention-days: 30
 
   native-probe:
+    if: github.event_name != 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
