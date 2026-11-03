@@ -18,7 +18,7 @@ for (const phase of ['setup', 'journey']) {
       // A resistant descendant exercises escalation after its leader receives TERM.
       fs.writeFileSync(path.join(bin, 'git'), `#!/bin/bash
 if [[ "$R21_FAKE_PHASE" == setup && "$1" == clone ]] || [[ "$R21_FAKE_PHASE" == journey && "$1" == rev-parse ]]; then
-  bash -c 'trap "" TERM; echo "$BASHPID" > "$R21_CHILD_PID"; while :; do sleep 1; done' &
+  bash -c 'trap "" TERM; echo "$$" > "$R21_CHILD_PID"; while :; do sleep 1; done' &
   wait
 fi
 exit 0
