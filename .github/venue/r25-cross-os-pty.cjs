@@ -66,6 +66,22 @@ function __r25CrossProbeWrite(ordinal, role, input, returned = false) {
   if (returned) write.returned_at = new Date().toISOString();
   __r25CrossWrite();
 }
+function __r25CrossSgrMatcherPair(state, ordinal, term, eol) {
+  if (process.env.ASTRID_R25_WINDOWS_SGR_DIAGNOSTIC !== '1' || !state ||
+      state.sgr_color_setting_proven !== true || state.sgr_color_setting_failed === true ||
+      state.sgr_matcher_pair_write_attempted === true) return;
+  state.sgr_matcher_pair_write_attempted = true;
+  const input = `echo pinokio${eol}echo pinokio${eol}`;
+  __r25CrossProbeWrite(ordinal, 'matcher-pair', input);
+  try {
+    term.write(input);
+    state.sgr_matcher_pair_write_returned = true;
+    __r25CrossProbeWrite(ordinal, 'matcher-pair', input, true);
+  } catch (error) {
+    state.sgr_matcher_pair_write_error = error?.name || 'Error';
+  }
+  __r25CrossWrite();
+}
 function __r25CrossWriteAudit(ordinal, shell, guard) {
   if (process.env.ASTRID_R25_CROSS_OS_DIAGNOSTIC !== '1') return;
   let probe = __r25CrossProbes.find(item => item.prompt_ordinal === ordinal);
@@ -90,15 +106,17 @@ function __r25CrossMacPrompt(ordinal) {
   replace('    this.prompt_pattern = await this.prompt(params.path)',
     '    __r25CrossBeforeShell(this.kernel.homedir, this.env)\n    this.prompt_pattern = await this.prompt(params.path)', 'pre-shell');
   replace('      term.onData((data) => {', '      term.onData((data) => {\n        __r25CrossMacPrompt(__r25PromptOrdinal)?.onData(data)\n        __r25CrossWrite()', 'prompt-on-data');
+  const sgrProofCallback = "        __r25PtyProcessing(__r25PromptState, 'callback', { ready: this.prompt_ready, done: this.prompt_done, input_length: typeof data === 'string' ? data.length : 0, input_probe_count: __r25PtyProbeCount(data), input_command_line_count: __r25InputCommandLines })";
+  replace(sgrProofCallback, sgrProofCallback + "\n        __r25CrossSgrMatcherPair(__r25PromptState, __r25PromptOrdinal, term, this.EOL)", 'sgr-proof-pair-boundary');
   const probe = "                __r25PtyCapture('prompt-probe-write-return', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })";
   replace(probe, probe + "\n                __r25CrossProbe(__r25PromptOrdinal, 'written_at')" + '\n                __r25CrossMacPrompt(__r25PromptOrdinal)?.probeWritten()\n                __r25CrossWrite()', 'probe-write-return');
   replace("                const __r25CmdEchoProbe = /^cmd(?:\\.exe)?$/i.test(__r25PtyPath.win32.basename(String(this.shell || '')))\n",
     "                const __r25CmdEchoProbe = /^cmd(?:\\.exe)?$/i.test(__r25PtyPath.win32.basename(String(this.shell || '')))\n" +
     "                __r25PtyProcessing(__r25PromptState, 'callback', { nonce_probe_attempted: true, cmd_echo_state_probe_attempted: false })\n" +
     "                __r25CrossWriteAudit(__r25PromptOrdinal, __r25PtyPath.win32.basename(String(this.shell || '')), __r25CmdEchoProbe)\n", 'nonce-probe-audit');
-  // The preceding SGR overlay moves the unchanged matcher-pair write into its
-  // normal-input `else` arm. Bind the cross-OS audit to that exact nested
-  // write while leaving the opt-in changed input and matcher untouched.
+  // Keep the ordinary matcher-pair write in its normal-input branch. The
+  // changed-input branch writes removal alone; its echo pair follows the
+  // callback that has already proven the removal marker.
   const matcherPairAudit =
     "                const __r25MatcherPairInput = `echo pinokio${this.EOL}echo pinokio${this.EOL}`\n" +
     "                __r25CrossProbeWrite(__r25PromptOrdinal, 'matcher-pair', __r25MatcherPairInput)\n" +
@@ -106,7 +124,12 @@ function __r25CrossMacPrompt(ordinal) {
     "                __r25CrossProbeWrite(__r25PromptOrdinal, 'matcher-pair', __r25MatcherPairInput, true)";
   const changedSgrInput = "if (process.env.ASTRID_R25_WINDOWS_SGR_DIAGNOSTIC === '1') term.write(`Remove-Module PSReadLine -ErrorAction SilentlyContinue; if (-not (Get-Module -Name PSReadLine)) { Write-Output 'R25_SGR_COLOR_DISABLED' } else { Write-Output 'R25_SGR_COLOR_SETTING_FAILED' }${this.EOL}echo pinokio${this.EOL}echo pinokio${this.EOL}`); else term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)";
   replaceOneOf([
-    { needle: changedSgrInput, addition: "if (process.env.ASTRID_R25_WINDOWS_SGR_DIAGNOSTIC === '1') { term.write(`Remove-Module PSReadLine -ErrorAction SilentlyContinue; if (-not (Get-Module -Name PSReadLine)) { Write-Output 'R25_SGR_COLOR_DISABLED' } else { Write-Output 'R25_SGR_COLOR_SETTING_FAILED' }${this.EOL}echo pinokio${this.EOL}echo pinokio${this.EOL}`) } else {\n" + matcherPairAudit + "\n                }" },
+    { needle: changedSgrInput, addition: "if (process.env.ASTRID_R25_WINDOWS_SGR_DIAGNOSTIC === '1') {\n" +
+        "                  const __r25SgrRemovalInput = `Remove-Module PSReadLine -ErrorAction SilentlyContinue; if (-not (Get-Module -Name PSReadLine)) { Write-Output 'R25_SGR_COLOR_DISABLED' } else { Write-Output 'R25_SGR_COLOR_SETTING_FAILED' }${this.EOL}`\n" +
+        "                  __r25CrossProbeWrite(__r25PromptOrdinal, 'sgr-removal', __r25SgrRemovalInput)\n" +
+        "                  term.write(__r25SgrRemovalInput)\n" +
+        "                  __r25CrossProbeWrite(__r25PromptOrdinal, 'sgr-removal', __r25SgrRemovalInput, true)\n" +
+        "                } else {\n" + matcherPairAudit + "\n                }" },
     { needle: '                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)', addition: matcherPairAudit },
   ], 'matcher-pair-write');
   replace('                    if (__r25CmdEchoProbe) term.write(`echo${this.EOL}`)',
