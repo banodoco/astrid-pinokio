@@ -74,6 +74,12 @@ export async function preflightStop(rootOrInstalled, { timeoutMs = DOWN_MS, run 
       { env: installed.env, cwd: installed.data, timeoutMs });
   } catch (error) {
     const raw = String(error.message || error).replace(/^Command failed:\s*/, '');
+    // R0 did not export this read-only helper. Its normal `down` command still
+    // performs the final fenced stop; callers must reach that authority before
+    // closing the Pinokio-owned process tree.
+    if (/cannot import name ['"]preflight_stop['"] from ['"]astrid_runtime\.bootstrap['"]/.test(raw)) {
+      return { safe: true, final_down_required: true };
+    }
     try {
       const refusal = JSON.parse(raw);
       const preserved = new Error(refusal.message || 'Runtime stop preflight refused.');

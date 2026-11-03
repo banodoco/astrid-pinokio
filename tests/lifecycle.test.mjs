@@ -127,6 +127,17 @@ test('Runtime preflight invokes the installed read-only API and preserves struct
   });
 });
 
+test('legacy R0 missing read-only preflight defers to final fenced down only', async () => {
+  const installed = { python: '/pinned/python', data: '/data', env: {} };
+  const report = await preflightStop(installed, { run: async () => {
+    throw new Error("Command failed: ImportError: cannot import name 'preflight_stop' from 'astrid_runtime.bootstrap' (/installed/bootstrap.py)");
+  } });
+  assert.deepEqual(report, { safe: true, final_down_required: true });
+  await assert.rejects(preflightStop(installed, { run: async () => {
+    throw new Error('Command failed: ImportError: cannot import name \'RuntimePaths\' from \'astrid_runtime.paths\'');
+  } }), /RuntimePaths/);
+});
+
 test('lock verifier uses installed Python, a bounded wait and fails closed for incomplete installs', async () => {
   for (const platform of ['darwin', 'linux', 'win32']) {
     const installed = { python: platform === 'win32' ? 'C:\\pinned\\python.exe' : '/pinned/python', env: { HOME: '/fake-home' } };

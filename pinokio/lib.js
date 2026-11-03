@@ -434,12 +434,21 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     ondata?.({ raw: 'Astrid stopped.\r\n' });
     return { stopped: active, lockFree: true };
   }
-  async function preflightStop(_req, ondata) {
+  async function preflightStop(_req, ondata, kernel) {
     const operations = lifecycle || await import('./lifecycle.mjs');
     try {
       const report = await operations.preflightStop(BACKEND_ROOT, {
         filesystem, platform, environment, appDirectory: APP_DIR,
       });
+      // A legacy R0's post-Stop retry may advance to the installer, whose C5
+      // lock admission is authoritative. While its Pinokio controller remains,
+      // preserve the established first-click Stop instruction.
+      const startUri = paths.join(APP_DIR, 'pinokio', 'start.js');
+      const active = kernel?.api?.running
+        ? Boolean(kernel.api.running[startUri]) : hasOwnedSupervisor();
+      if (report?.final_down_required && active) {
+        throw new Error("Astrid is still running. Choose Pinokio's Stop button, then try again.");
+      }
       return { safe: true, report };
     } catch (error) {
       ondata?.({ raw: `${error.message}${error.details === undefined ? '' : `\r\n${JSON.stringify(error.details)}`}\r\n` });

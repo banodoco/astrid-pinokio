@@ -262,6 +262,55 @@ test('hosted Update refuses at read-only preflight before the launcher pull', as
   assert.equal(script.run[1].method, 'shell.run');
 });
 
+test('legacy R0 Update refuses first click, then Stop and fresh retry reach installer', async () => {
+  const base = fakeApp('linux', '', 'backend');
+  let controller = true;
+  let downBlocked = true;
+  const calls = [];
+  const filesystem = {
+    readFileSync(file) {
+      if (file.endsWith('install-mode.json')) return JSON.stringify({ schema_version: 1, mode: 'backend' });
+      if (file.endsWith('pinokio-control.json') && controller) return JSON.stringify({ schema: 1, pid: 123, port: 4567 });
+      throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+    },
+    existsSync: () => false,
+  };
+  const app = library.createApp({ platform: 'linux', appDirectory: base.APP_DIR, environment: {}, filesystem,
+    lifecycle: {
+      preflightStop: async () => ({ safe: true, final_down_required: true }),
+      requestGracefulStop: async () => {
+        calls.push('runtime-down');
+        if (downBlocked) throw new Error('Astrid is busy (1 tasks running). Try again when they finish.');
+      },
+      waitForInstallerLock: async () => calls.push('installer-lock-free'),
+    },
+  });
+  app.validateExistingEditorCheckout = () => true;
+  const update = await load('pinokio/update.js', app)({}, {});
+  const uri = app.paths.join(app.APP_DIR, 'pinokio', 'start.js');
+  const kernel = { api: { running: { [uri]: true } } };
+  await assert.rejects(update.run[0].method({}, () => {}, kernel), /Choose Pinokio's Stop button, then try again/);
+  assert.deepEqual(calls, []);
+
+  const stop = await load('pinokio/stop.js', app);
+  kernel.api.stop = async () => {
+    calls.push('Pinokio-session-stop'); controller = false;
+  };
+  await assert.rejects(stop.run[0].method({}, () => {}, kernel), /Astrid is busy \(1 tasks running\)/);
+  assert.deepEqual(calls, ['runtime-down']);
+
+  downBlocked = false;
+  await stop.run[0].method({}, () => {}, kernel);
+  assert.deepEqual(calls, ['runtime-down', 'runtime-down', 'Pinokio-session-stop', 'installer-lock-free']);
+
+  const retry = await load('pinokio/update.js', app)({}, {});
+  kernel.api.running[uri] = false;
+  await retry.run[0].method({}, () => {}, kernel);
+  const shells = retry.run.filter((step) => step.method === 'shell.run');
+  assert.equal(shells.length, 2);
+  assert.match(shells[1].params.message, /astrid.*install/s);
+});
+
 test('Update performs only installed-CLI recovery before any new launcher or manifest fetch', async (t) => {
   const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'astrid-pinokio-recovery-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
