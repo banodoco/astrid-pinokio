@@ -114,7 +114,9 @@ function __r25PtyNewProcessing(promptOrdinal, promptPid) {
   return {
     ordinal: promptOrdinal, pid: promptPid, stage: 'callback', callback_count: 0,
     ready: false, done: false, input_length: 0, input_probe_count: 0,
+    input_command_line_count: 0, input_command_line_carry: '',
     output_length: 0, output_probe_count: 0, serialize_length: 0, serialized_probe_count: 0,
+    filtered_command_line_count: 0, filtered_command_line_carry: '',
     filter_calls: 0, queue_calls: 0, write_calls: 0, write_return_count: 0,
     write_callback_count: 0, serialize_count: 0, regex_count: 0, normalize_count: 0,
     match: null, error_stage: null, error_class: null,
@@ -142,6 +144,23 @@ function __r25PtyProbeCount(value) {
     from = index + 7;
   }
   return found;
+}
+function __r25PtyCountProbeCommandLines(state, side, value) {
+  if (!state || typeof value !== 'string' || (side !== 'input' && side !== 'filtered')) return 0;
+  const countField = side === 'input' ? 'input_command_line_count' : 'filtered_command_line_count';
+  const carryField = side === 'input' ? 'input_command_line_carry' : 'filtered_command_line_carry';
+  const carry = state[carryField];
+  const combined = (typeof carry === 'string' ? carry : '') + value;
+  let added = 0;
+  const line = /(?:^|[\s>])echo pinokio(?=[\r\n])/g;
+  let match;
+  while (state[countField] + added < 1000 && (match = line.exec(combined)) !== null) {
+    const terminator = match.index + match[0].length;
+    if (terminator >= carry.length) added += 1;
+  }
+  state[countField] = Math.min(1000, state[countField] + added);
+  state[carryField] = combined.slice(-13);
+  return state[countField];
 }
 function __r25PtyRegexShape(value) {
   const shape = { probe_command_count: 0, probe_command_line_count: 0, probe_output_line_count: 0, probe_command_output_sequence_count: 0,
@@ -218,7 +237,9 @@ function __r25PtyProcessing(state, stage, values = {}) {
       at: new Date().toISOString(), kind: 'prompt-processing', prompt_ordinal: __r25PtyPid(state.ordinal), prompt_pid: __r25PtyPid(state.pid),
       stage: state.stage, callback_count: state.callback_count, ready: state.ready, done: state.done,
       input_length: state.input_length, input_probe_count: state.input_probe_count,
+      input_command_line_count: state.input_command_line_count,
       output_length: state.output_length, output_probe_count: state.output_probe_count,
+      filtered_command_line_count: state.filtered_command_line_count,
       serialize_length: state.serialize_length, serialized_probe_count: state.serialized_probe_count,
       probe_command_count: state.probe_command_count,
       probe_command_line_count: state.probe_command_line_count,
@@ -297,7 +318,7 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
     {
       name: 'prompt-first-output',
       needle: '      term.onData((data) => {\n',
-      replacement: '      term.onData((data) => {\n        if (!__r25PromptFirstOutput) { __r25PromptFirstOutput = true; __r25PtyCapture(\'prompt-first-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        else if (!__r25PromptFollowupOutput) { __r25PromptFollowupOutput = true; __r25PtyCapture(\'prompt-followup-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        if (__r25PromptProbeWriteReturned && !__r25PromptPostProbeOutput) { __r25PromptPostProbeOutput = true; __r25PtyCapture(\'prompt-post-probe-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        __r25PromptState.callback_count = Math.min(10000, __r25PromptState.callback_count + 1)\n        __r25PtyProcessing(__r25PromptState, \'callback\', { ready: this.prompt_ready, done: this.prompt_done, input_length: typeof data === \'string\' ? data.length : 0, input_probe_count: __r25PtyProbeCount(data) })\n',
+      replacement: '      term.onData((data) => {\n        if (!__r25PromptFirstOutput) { __r25PromptFirstOutput = true; __r25PtyCapture(\'prompt-first-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        else if (!__r25PromptFollowupOutput) { __r25PromptFollowupOutput = true; __r25PtyCapture(\'prompt-followup-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        if (__r25PromptProbeWriteReturned && !__r25PromptPostProbeOutput) { __r25PromptPostProbeOutput = true; __r25PtyCapture(\'prompt-post-probe-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        __r25PromptState.callback_count = Math.min(10000, __r25PromptState.callback_count + 1)\n        const __r25InputCommandLines = __r25PtyCountProbeCommandLines(__r25PromptState, \'input\', data)\n        __r25PtyProcessing(__r25PromptState, \'callback\', { ready: this.prompt_ready, done: this.prompt_done, input_length: typeof data === \'string\' ? data.length : 0, input_probe_count: __r25PtyProbeCount(data), input_command_line_count: __r25InputCommandLines })\n',
     },
     {
       name: 'prompt-probe-write',
@@ -317,7 +338,7 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
     {
       name: 'prompt-filter-entry',
       needle: '            queue.push(this.filterDecsync(data))\n',
-      replacement: '            __r25PromptState.filter_calls = Math.min(10000, __r25PromptState.filter_calls + 1)\n            __r25PtyProcessing(__r25PromptState, \'filter\')\n            let __r25FilteredData\n            try { __r25FilteredData = this.filterDecsync(data) } catch (error) { __r25PtyFailure(__r25PromptState, \'filter\', error); throw error }\n            __r25PtyProcessing(__r25PromptState, \'filter\', { output_length: typeof __r25FilteredData === \'string\' ? __r25FilteredData.length : 0, output_probe_count: __r25PtyProbeCount(__r25FilteredData) })\n            __r25PromptState.queue_calls = Math.min(10000, __r25PromptState.queue_calls + 1)\n            queue.push(__r25FilteredData)\n',
+      replacement: '            __r25PromptState.filter_calls = Math.min(10000, __r25PromptState.filter_calls + 1)\n            __r25PtyProcessing(__r25PromptState, \'filter\')\n            let __r25FilteredData\n            try { __r25FilteredData = this.filterDecsync(data) } catch (error) { __r25PtyFailure(__r25PromptState, \'filter\', error); throw error }\n            const __r25FilteredCommandLines = __r25PtyCountProbeCommandLines(__r25PromptState, \'filtered\', __r25FilteredData)\n            __r25PtyProcessing(__r25PromptState, \'filter\', { output_length: typeof __r25FilteredData === \'string\' ? __r25FilteredData.length : 0, output_probe_count: __r25PtyProbeCount(__r25FilteredData), filtered_command_line_count: __r25FilteredCommandLines })\n            __r25PromptState.queue_calls = Math.min(10000, __r25PromptState.queue_calls + 1)\n            queue.push(__r25FilteredData)\n',
     },
     {
       name: 'prompt-vt-write-return',

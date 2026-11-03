@@ -292,6 +292,7 @@ function promptHarness(root, scenarios = []) {
     shell.EOL = '\n';
     shell.filterDecsync = data => {
       if (scenario.filterThrows) throw scenario.filterThrows;
+      if (scenario.filter) return scenario.filter(data);
       return data;
     };
     shell.stripAnsi = value => {
@@ -396,5 +397,54 @@ test('interleaved prompt callbacks stay bound to their prompt and stage summarie
     row = harness.rows().find(item => item.kind === 'prompt-processing');
     assert.equal(row.prompt_ordinal, 2);
     assert.doesNotMatch(output, /old secret|new secret|old prompt|new prompt/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('cumulative exact command-line counters handle chunk splits, cap counts, and retain no payload', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-command-line-stream-'));
+  try {
+    const harness = promptHarness(root);
+    const run = harness.start({ serialized: 'ordinary screen' });
+    run.term.emit('C:\\private\\> ech');
+    run.term.emit('o pin');
+    run.term.emit('okio\r');
+    run.term.emit('\nC:\\private\\> echo pinokio\r\n');
+    let row = harness.rows().find(item => item.kind === 'prompt-processing');
+    assert.equal(row.input_command_line_count, 2);
+    assert.equal(row.filtered_command_line_count, 2);
+    assert.equal(row.probe_command_line_count, 0, 'existing shape field remains the serialized-buffer count');
+    assert.doesNotMatch(fs.readFileSync(harness.file, 'utf8'), /private|echo pinokio|C:\\private/);
+
+    const capped = harness.start({ serialized: 'ordinary screen' });
+    capped.term.emit(`${'echo pinokio\n'.repeat(1100)}`);
+    row = harness.rows().find(item => item.kind === 'prompt-processing');
+    assert.equal(row.input_command_line_count, 1000);
+    assert.equal(row.filtered_command_line_count, 1000);
+    assert.ok(Buffer.byteLength(fs.readFileSync(harness.file, 'utf8')) <= 4096);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('bounded discriminator attributes command loss before filtering, in filtering, or in serialization', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-command-line-stages-'));
+  try {
+    const harness = promptHarness(root);
+    const scenarios = [
+      { name: 'before-filter', input: 'PS> ordinary text\r\n', filter: value => value, serialized: 'PS> ordinary text\r\n', expectedInput: 0, expectedFiltered: 0 },
+      { name: 'filter', input: 'PS> echo pinokio\r\n', filter: value => value.replace('echo pinokio', '[removed]'), serialized: 'PS> [removed]\r\n', expectedInput: 1, expectedFiltered: 0 },
+      { name: 'serialization', input: 'PS> echo pinokio\r\n', filter: value => value, serialized: 'PS> pinokio\r\n', expectedInput: 1, expectedFiltered: 1 },
+    ];
+    for (const scenario of scenarios) {
+      const run = harness.start(scenario);
+      run.term.emit(scenario.input);
+      const row = harness.rows().find(item => item.kind === 'prompt-processing');
+      assert.equal(row.stage, 'regex', `${scenario.name} reaches serialized shape evaluation`);
+      assert.equal(row.input_command_line_count, scenario.expectedInput, `${scenario.name} callback count`);
+      assert.equal(row.filtered_command_line_count, scenario.expectedFiltered, `${scenario.name} filter output count`);
+      assert.equal(row.probe_command_line_count, 0, `${scenario.name} serialized shape count`);
+      assert.equal(row.match, false, `${scenario.name} leaves the matcher unchanged`);
+    }
+    const output = fs.readFileSync(harness.file, 'utf8');
+    assert.doesNotMatch(output, /PS>|echo pinokio|\[removed\]|ordinary text/);
+    assert.ok(Buffer.byteLength(output) <= 4096);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
