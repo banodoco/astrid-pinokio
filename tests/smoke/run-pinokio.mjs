@@ -6,6 +6,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { smokeTarget } from './app-ref.mjs';
 import library from '../../pinokio/lib.js';
 import { signalGroup } from '../../pinokio/session.mjs';
 import { runTool as executeTool, timedStep } from './process.mjs';
@@ -104,7 +105,7 @@ function makeGitLauncher(gitDirectory) {
   fs.writeFileSync(path.join(gitDirectory, 'git.cmd'), `@echo off\r\n"${git}" %*\r\nexit /b %ERRORLEVEL%\r\n`);
 }
 
-function prepareCheckout(source, appDirectory) {
+function prepareCheckout(source, appDirectory, appRef) {
   const branch = 'ci-smoke';
   execFileSync('git', ['-C', source, 'checkout', '-B', branch, 'HEAD'], { stdio: 'inherit' });
   execFileSync('git', ['clone', '--branch', branch, '--single-branch', source, appDirectory], { stdio: 'inherit' });
@@ -112,8 +113,8 @@ function prepareCheckout(source, appDirectory) {
   let environment = fs.readFileSync(environmentFile, 'utf8');
   const refSetting = /^[ \t]*ASTRID_APP_REF[ \t]*=.*$/m;
   environment = refSetting.test(environment)
-    ? environment.replace(refSetting, 'ASTRID_APP_REF=main')
-    : `${environment.trimEnd()}\nASTRID_APP_REF=main\n`;
+    ? environment.replace(refSetting, `ASTRID_APP_REF=${appRef}`)
+    : `${environment.trimEnd()}\nASTRID_APP_REF=${appRef}\n`;
   fs.writeFileSync(environmentFile, environment);
 }
 
@@ -384,7 +385,7 @@ async function stopDaemon(getDaemon) {
   getDaemon.set(null);
 }
 
-async function setup() {
+async function setup(target) {
   assert.equal(process.env.GITHUB_ACTIONS, 'true', 'This harness runs only on GitHub Actions runners.');
   assert.ok(['darwin', 'linux', 'win32'].includes(process.platform), `unsupported CI platform ${process.platform}`);
   const fixture = await import(pathToFileURL(fixturePath));
@@ -406,7 +407,7 @@ async function setup() {
   const pinokioGitDirectory = path.join(binDirectory, 'miniforge', 'Library', 'bin');
   makeGitLauncher(pinokioGitDirectory);
   makeFfmpegGuard(guardDirectory);
-  prepareCheckout(repository, appDirectory);
+  prepareCheckout(repository, appDirectory, target.appRef);
 
   const environment = makeEnvironment(pinokioHome, process.platform);
   assert.ok(environment && typeof environment === 'object', 'Pinokio env fixture must return an environment object');
@@ -440,13 +441,13 @@ async function setup() {
   environment.ASTRID_PINOKIO_APP_DIR = appDirectory;
   environment.ASTRID_RUNTIME_DOOR_PORT = '17340';
   const app = library.createApp({ platform: process.platform, appDirectory, environment });
-  assert.equal(app.appRef(), 'main', 'Install must select the manifest ref from _ENVIRONMENT');
+  assert.equal(app.appRef(), target.appRef, 'Install must select the manifest ref from _ENVIRONMENT');
   const servicesBefore = await fakeServices(pinokioHome, userHome, environment);
   return { pinokioHome, userHome, appDirectory, cacheDirectory, binDirectory, environment, app, servicesBefore };
 }
 
-async function runHosted() {
-  const context = await step('setup', setup);
+async function runHosted(target = smokeTarget('hosted')) {
+  const context = await step('setup', () => setup(target));
   const { pinokioHome, userHome, appDirectory, cacheDirectory, environment, app, servicesBefore } = context;
   let daemon = null;
   const getDaemon = () => daemon;
@@ -498,8 +499,36 @@ async function runHosted() {
   }
 }
 
+async function runPublishedManifestStopDiagnostic() {
+  const target = smokeTarget('hosted-proof-manifest');
+  const context = await step('setup', () => setup(target));
+  const { pinokioHome, userHome, appDirectory, environment, app, servicesBefore } = context;
+  let daemon = null;
+  const getDaemon = () => daemon;
+  getDaemon.set = (value) => { daemon = value; };
+  const stop = async () => stopDaemon(getDaemon);
+  try {
+    log(`published-manifest Stop diagnostic on ${process.platform}; App ref ${target.appRef}; Pinokio home ${pinokioHome}`);
+    await invokeAction('install', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    verifyInstallRecords(app, pinokioHome, 'backend');
+    await assertNoServices(pinokioHome, userHome, environment, servicesBefore);
+    await invokeAction('start', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    const health = await step('hosted health before Stop', () => requestJson(library.DOOR_HEALTH_URL, { origin: 'https://astrid.haus', environment }));
+    assert.equal(health.status, 200, JSON.stringify(health.body));
+    assert.equal(health.body.install?.managed_by, 'pinokio', JSON.stringify(health.body));
+    await invokeAction('stop', app, appDirectory, environment, pinokioHome, getDaemon, stop);
+    assert.equal(await freePort(17340), true, 'port 17340 remained open after Stop');
+    assert.equal(await freePort(5180), true, 'port 5180 remained open after Stop');
+    log(`PASS: bounded Stop diagnostic with App ref ${target.appRef}`);
+  } finally {
+    if (daemon) await step('cleanup Start process', stop);
+    fs.rmSync(pinokioHome, { recursive: true, force: true });
+    fs.rmSync(userHome, { recursive: true, force: true });
+  }
+}
+
 async function runFullyLocal() {
-  const context = await step('setup', setup);
+  const context = await step('setup', () => setup(smokeTarget('hosted')));
   const { pinokioHome, userHome, appDirectory, cacheDirectory, environment, app, servicesBefore } = context;
   let daemon = null;
   const getDaemon = () => daemon;
@@ -550,6 +579,7 @@ async function runFullyLocal() {
 }
 
 const flow = process.argv[2] || 'hosted';
-if (flow === 'hosted') await runHosted();
+if (flow === 'hosted') await runHosted(smokeTarget(flow));
+else if (flow === 'hosted-proof-manifest') await runPublishedManifestStopDiagnostic();
 else if (flow === 'fully-local') await runFullyLocal();
 else throw new Error(`Unknown smoke flow: ${flow}`);
