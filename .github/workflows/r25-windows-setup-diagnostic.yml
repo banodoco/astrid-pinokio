@@ -93,7 +93,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           node pinokio/providers/r25-native-collector-binding.cjs --validate-source-only true --agent-ref $env:AGENT_REF --agent-root $env:AGENT_ROOT --pinokio-root $env:GITHUB_WORKSPACE
-          node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-windows.test.cjs tests/r25-setup-diagnostics.test.mjs tests/r25-pinokiod-pty-instrumentation.test.cjs
+          node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-windows.test.cjs tests/r25-setup-diagnostics.test.mjs tests/r25-pinokiod-pty-instrumentation.test.cjs tests/r25-windows-pty-diagnostics.test.cjs
           node --check .github/venue/r25-snapshot-runner.cjs
           node --check .github/venue/r21-observer-diagnostics.cjs
           node --check pinokio/shell.mjs
