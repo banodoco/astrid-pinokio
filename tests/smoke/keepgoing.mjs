@@ -4,7 +4,9 @@ import path from 'node:path';
 export const DIAGNOSTIC_KEEP_GOING_ENV = 'PINOKIO_DIAGNOSTIC_KEEP_GOING';
 export const KEEP_GOING_REPORT_ENV = 'PINOKIO_KEEPGOING_REPORT';
 export function diagnosticKeepGoingEnabled(environment = process.env) {
-  return environment[DIAGNOSTIC_KEEP_GOING_ENV] === '1' || environment.diagnostic_keep_going === 'true';
+  return environment[DIAGNOSTIC_KEEP_GOING_ENV] === '1'
+    || ['1', 'true'].includes(String(environment.INPUT_DIAGNOSTIC_KEEP_GOING || '').toLowerCase())
+    || ['1', 'true'].includes(String(environment.DIAGNOSTIC_KEEP_GOING || '').toLowerCase());
 }
 const unique = values => [...new Set(values)];
 const message = error => (error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 8192);

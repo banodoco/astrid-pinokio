@@ -36,11 +36,16 @@ const endpoint = 'pinokio://127.0.0.1:42000/api/astrid';
 const timeout = Number(process.env.PINOKIO_DIAGNOSTIC_TIMEOUT_MS || 120000);
 const cleanups = recorder.metadata.cleanups = [];
 let daemon, io;
+let fixtureOwned = false;
+let selectionVerified = false;
 let stageNumber = 0;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const safe = text => String(text).replace(/(bearer\s+|(?:token|secret|password)[=: ]+)[^\s"']+/ig, '$1<redacted>').slice(-8192);
 
 async function command(argv, cwd, { env = process.env, deadline = timeout, label = 'command' } = {}) {
+  assert.ok(fixtureOwned, 'refuse command outside a verified task-owned native fixture');
+  const relative = path.relative(root, path.resolve(cwd));
+  assert.ok(!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`), 'command cwd escaped diagnostic fixture');
   const child = spawn(argv[0], argv.slice(1), { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   let output = '';
   child.stdout?.on('data', data => { output = (output + data).slice(-8192); });
@@ -56,6 +61,7 @@ async function command(argv, cwd, { env = process.env, deadline = timeout, label
 }
 
 async function clonePinned(name, repository, ref) {
+  assert.ok(fixtureOwned, 'refuse dependency mutation without task-owned fixture');
   const cwd = path.join(root, name);
   fs.mkdirSync(cwd);
   await command(['git', 'init', '-q'], cwd);
@@ -124,12 +130,17 @@ async function readiness() {
 
 try {
   await recorder.run('disposable native fixture', async () => {
+    const runnerTemp = path.resolve(process.env.RUNNER_TEMP || '');
+    const relative = path.relative(runnerTemp, root);
+    assert.ok(relative && !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`), 'native fixture must be below disposable RUNNER_TEMP');
     assert.ok(!fs.existsSync(root), 'refuse reuse of a native diagnostic scratch root');
     fs.mkdirSync(root, { recursive: true });
+    fixtureOwned = true;
     fs.mkdirSync(path.dirname(appRoot), { recursive: true });
     fs.mkdirSync(userHome);
     await command(['git', 'clone', '--no-hardlinks', source, appRoot], root);
     const selection = await prepareDiagnosticFixture(appRoot, process.env, source);
+    selectionVerified = true;
     Object.assign(recorder.metadata, selection, { engine: 'native Pinokiod/PTerm', fixture: 'genuine run-owned native app and user home' });
     return { app: appRoot, selection };
   }, { needs: [], produces: ['fresh native Pinokio app and isolated user home', 'frozen manifest and installer hashes'] });
@@ -138,6 +149,7 @@ try {
   await recorder.run('pinokiod dependencies', () => npmInstall(engineRoot), { needs: ['pinokiod source'], produces: ['native daemon dependencies'] });
   await recorder.run('pterm dependencies', () => npmInstall(ptermRoot), { needs: ['pterm source'], produces: ['native PTerm dependencies'] });
   await recorder.run('native daemon ready', async () => {
+    assert.ok(fixtureOwned && selectionVerified, 'refuse native launch without verified disposable fixture and exact tuple');
     const server = await import('node:net');
     await new Promise((resolve, reject) => { const probe = server.createServer(); probe.once('error', reject); probe.listen(42000, '127.0.0.1', () => probe.close(resolve)); });
     const env = { ...process.env, HOME: userHome, USERPROFILE: userHome, PINOKIO_HOME: home,
