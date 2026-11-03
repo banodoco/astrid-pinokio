@@ -875,7 +875,7 @@ async function main() {
   const setupDiagnosticView = setupDiagnostic ? Object.assign({}, setupDiagnostic, {
     stdio: setupOutput,
     cross_os: crossDiagnostic,
-    pty_capture_file: path.join(diagnostics, 'r25-pty-diagnostics.jsonl'),
+    pty_capture_file: path.join(diagnostics, 'cross-os-pty.json'),
     settlement_file: path.join(diagnostics, 'setup-install-settlement.json'),
     beforeFailureMarker(value = {}) {
       captureProcessSnapshot(path.join(diagnostics, 'process-snapshot-before-failure-marker.json'), [value.pid, daemon?.pid]);

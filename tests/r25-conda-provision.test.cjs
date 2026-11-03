@@ -27,7 +27,7 @@ test('macOS preprovisioning seeds only the runner-owned Pinokio prefix with the 
   const result = spawnSync('/bin/bash', [script], {
     encoding: 'utf8',
     env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: f.temp, PINOKIO_HOME: f.home,
-      R25_DIAGNOSTICS: f.diagnostics, NODE_BINARY: process.execPath, CONDA_TEST_LOG: f.log },
+      R25_CROSS_OS_DIAGNOSTIC: '1', R25_DIAGNOSTICS: f.diagnostics, NODE_BINARY: process.execPath, CONDA_TEST_LOG: f.log },
   });
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   const calls = fs.readFileSync(f.log, 'utf8');
@@ -55,7 +55,7 @@ test('canonicalizes a symlinked runner temp before provisioning its exact child'
   const result = spawnSync('/bin/bash', [script], {
     encoding: 'utf8',
     env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: tempAlias, PINOKIO_HOME: home,
-      R25_DIAGNOSTICS: f.diagnostics, NODE_BINARY: process.execPath, CONDA_TEST_LOG: f.log },
+      R25_CROSS_OS_DIAGNOSTIC: '1', R25_DIAGNOSTICS: f.diagnostics, NODE_BINARY: process.execPath, CONDA_TEST_LOG: f.log },
   });
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   assert.ok(fs.existsSync(path.join(realTemp, 'pinokio-home', 'bin', 'miniforge', 'bin', 'conda')));
@@ -69,7 +69,7 @@ test('provisioning refuses an existing home and an unbound home path before down
   const existing = spawnSync('/bin/bash', [script], {
     encoding: 'utf8',
     env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: f.temp, PINOKIO_HOME: f.home,
-      R25_DIAGNOSTICS: f.diagnostics, NODE_BINARY: process.execPath, CONDA_TEST_LOG: f.log },
+      R25_CROSS_OS_DIAGNOSTIC: '1', R25_DIAGNOSTICS: f.diagnostics, NODE_BINARY: process.execPath, CONDA_TEST_LOG: f.log },
   });
   assert.equal(existing.status, 66);
   assert.equal(fs.readFileSync(path.join(f.home, 'preserve-me'), 'utf8'), 'existing');
@@ -78,7 +78,7 @@ test('provisioning refuses an existing home and an unbound home path before down
   const escaped = spawnSync('/bin/bash', [script], {
     encoding: 'utf8',
     env: { ...process.env, PATH: `${f.mocks}:/usr/bin:/bin`, RUNNER_TEMP: f.temp, PINOKIO_HOME: path.join(f.temp, 'elsewhere'),
-      R25_DIAGNOSTICS: f.diagnostics, NODE_BINARY: process.execPath, CONDA_TEST_LOG: f.log },
+      R25_CROSS_OS_DIAGNOSTIC: '1', R25_DIAGNOSTICS: f.diagnostics, NODE_BINARY: process.execPath, CONDA_TEST_LOG: f.log },
   });
   assert.equal(escaped.status, 64);
   assert.equal(fs.existsSync(f.log), false);

@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const PROBE_MS = 90_000;
-const CAPTURE_BYTES = 4096;
+const CAPTURE_BYTES = 131072;
 const MARKERS = ['ASTRID_PINOKIO_FAILURE', 'Terminated Shell'];
 
 // A diagnostic observer, never an acceptance predicate. Qualification callers
@@ -53,7 +53,15 @@ function createDiagnosticSettlement({ captureFile, record = () => {}, now = Date
         data = buffer.subarray(0, length).toString('utf8');
       } finally { fs.closeSync(fd); }
     } catch (error) { if (error.code !== 'ENOENT') fail('capture-read-error'); return; }
-    const rows = data.split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+    let rows;
+    try {
+      const capture = JSON.parse(data);
+      if (!Array.isArray(capture.prompt_probes) || capture.prompt_probes.length > 32) throw new Error('not a probe journal');
+      rows = capture.prompt_probes.flatMap(probe => [
+        ...(probe.written_at ? [{kind: 'prompt-probe-write-return', prompt_ordinal: probe.prompt_ordinal, at: probe.written_at}] : []),
+        ...(probe.resolved_at ? [{kind: 'prompt-recognized', prompt_ordinal: probe.prompt_ordinal, at: probe.resolved_at}] : []),
+      ]);
+    } catch { rows = data.split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }); }
     for (const row of rows) {
       const ordinal = row.prompt_ordinal;
       if (!Number.isSafeInteger(ordinal) || ordinal < 1 || ordinal > 10000) continue;

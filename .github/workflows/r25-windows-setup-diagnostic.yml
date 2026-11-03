@@ -3,7 +3,7 @@ name: R-25 combined Windows and macOS diagnostic
 on:
   push:
     branches:
-      - lane/M-PIN/R-PIN-WINDOWS-SETUP-REPAIR
+      - lane/M-PIN/R-PIN-CROSS-OS-DIAGNOSTIC
   workflow_dispatch:
 
 permissions:
@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   windows-setup-diagnostic:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[C2-CROSS-OS-ONCE]')
     runs-on: windows-2022
     timeout-minutes: 20
     env:
@@ -119,6 +120,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
   macos-setup-diagnostic:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[C2-CROSS-OS-ONCE]')
     name: R-25 macOS (pinokio-fully-local-macos) / macos-setup-diagnostic
     runs-on: macos-15
     timeout-minutes: 20

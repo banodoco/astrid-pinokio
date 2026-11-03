@@ -415,7 +415,7 @@ async function main() {
   const setupDiagnosticView = setupOnly ? Object.assign({}, setupDiagnostics, {
     stdio: ptermOutput,
     settlement_file: path.join(diagnostics, 'setup-install-settlement.json'),
-    windows_pty_capture_file: process.platform === 'win32' ? ptyCaptureFile : null,
+    windows_pty_capture_file: process.platform === 'win32' ? (crossPty ? path.join(diagnostics, 'cross-os-pty.json') : ptyCaptureFile) : null,
     async beforeTimeout(value) {
       refreshPtyCaptureStatus();
       setupDiagnostics.shell(shellDiagnosticFile);

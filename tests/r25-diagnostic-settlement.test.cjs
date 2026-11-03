@@ -69,3 +69,20 @@ test('PTerm close alone cannot pass; diagnostic error rejects the child-exit wai
   assert.equal(watch.snapshot().failure.native_exit,null);
   watch.stop();
 });
+
+test('probe journal retains an earlier resolution when prompt-2 replaces the legacy ring', () => {
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'r25-probe-journal-'));
+ const captureFile=path.join(root,'journal.json');
+ const time=Date.parse('2026-11-03T07:00:00.000Z');let due;
+ const watch=createDiagnosticSettlement({captureFile,now:()=>time,setTimer:(_,delay)=>{due=time+delay;return 1;},clearTimer:()=>{}});
+ try {
+  fs.writeFileSync(captureFile,JSON.stringify({prompt_probes:[
+   {prompt_ordinal:1,written_at:new Date(time-100000).toISOString(),resolved_at:new Date(time-99900).toISOString()},
+   {prompt_ordinal:2,written_at:new Date(time-500).toISOString()},
+  ]}));
+  watch.scan();
+  assert.equal(watch.snapshot().probes[0].resolved,true);
+  assert.equal(watch.signal.aborted,false);
+  assert.equal(due,time-500+90000);
+ } finally {watch.stop();fs.rmSync(root,{recursive:true,force:true});}
+});

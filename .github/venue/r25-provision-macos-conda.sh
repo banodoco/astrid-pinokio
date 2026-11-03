@@ -62,6 +62,8 @@ export PIP_REQUIRE_VIRTUALENV=false
 
 # Retain the run-owned Conda state immediately before pinokio-setup's
 # shell.run. This records presence without adding a global Conda path.
+if [ "${R25_CROSS_OS_DIAGNOSTIC:-0}" = 1 ]; then
 : "${R25_DIAGNOSTICS:?R25_DIAGNOSTICS is required}"
 node_bin="${NODE_BINARY:-node}"
 "$node_bin" -e 'require("./.github/venue/r25-macos-diagnostic.cjs").writeCondaPresence(process.env.PINOKIO_HOME, process.env.R25_DIAGNOSTICS)'
+fi

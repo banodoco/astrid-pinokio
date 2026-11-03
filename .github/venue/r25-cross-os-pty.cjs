@@ -17,10 +17,11 @@ const __r25CrossPath = require('path');
 const __r25CrossMacHelper = require(${JSON.stringify(macHelper)});
 const __r25CrossMac = new Map();
 const __r25CrossPreShell = [];
+const __r25CrossProbes = [];
 function __r25CrossWrite() {
   const file = process.env.ASTRID_R25_CROSS_CAPTURE_FILE;
   if (!file || process.env.ASTRID_R25_CROSS_OS_DIAGNOSTIC !== '1') return;
-  const value = { schema: 'astrid.r25.cross-os-pty.v1', pre_shell: __r25CrossPreShell,
+  const value = { schema: 'astrid.r25.cross-os-pty.v1', pre_shell: __r25CrossPreShell, prompt_probes: __r25CrossProbes,
     macos_prompts: [...__r25CrossMac.entries()].map(([ordinal, item]) => ({ ordinal, ...item.snapshot() })) };
   const data = JSON.stringify(value) + '\n';
   if (Buffer.byteLength(data, 'utf8') > 131072) return;
@@ -36,6 +37,12 @@ function __r25CrossBeforeShell(home, env) {
   __r25CrossPreShell.push(state);
   if (__r25CrossPreShell.length > 8) __r25CrossPreShell.shift();
   __r25CrossWrite();
+}
+function __r25CrossProbe(ordinal, field) {
+  if (process.env.ASTRID_R25_CROSS_OS_DIAGNOSTIC !== '1') return;
+  let probe = __r25CrossProbes.find(item => item.prompt_ordinal === ordinal);
+  if (!probe) { if (__r25CrossProbes.length >= 32) return; probe = {prompt_ordinal: ordinal}; __r25CrossProbes.push(probe); }
+  probe[field] = new Date().toISOString();
 }
 function __r25CrossMacPrompt(ordinal) {
   if (process.platform !== 'darwin' || process.env.ASTRID_R25_CROSS_OS_DIAGNOSTIC !== '1') return null;
@@ -53,9 +60,9 @@ function __r25CrossMacPrompt(ordinal) {
     '    __r25CrossBeforeShell(this.kernel.homedir, this.env)\n    this.prompt_pattern = await this.prompt(params.path)');
   replace('      term.onData((data) => {', '      term.onData((data) => {\n        __r25CrossMacPrompt(__r25PromptOrdinal)?.onData(data)\n        __r25CrossWrite()');
   const probe = "                __r25PtyCapture('prompt-probe-write-return', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })";
-  replace(probe, probe + '\n                __r25CrossMacPrompt(__r25PromptOrdinal)?.probeWritten()\n                __r25CrossWrite()');
+  replace(probe, probe + "\n                __r25CrossProbe(__r25PromptOrdinal, 'written_at')" + '\n                __r25CrossMacPrompt(__r25PromptOrdinal)?.probeWritten()\n                __r25CrossWrite()');
   const resolved = "              __r25PtyProcessing(__r25PromptState, 'resolve')";
-  replace(resolved, resolved + '\n              __r25CrossMacPrompt(__r25PromptOrdinal)?.promptResolved()\n              __r25CrossWrite()');
+  replace(resolved, resolved + "\n              __r25CrossProbe(__r25PromptOrdinal, 'resolved_at')" + '\n              __r25CrossMacPrompt(__r25PromptOrdinal)?.promptResolved()\n              __r25CrossWrite()');
   return source;
 }
 
