@@ -180,6 +180,110 @@ function currentUid() {
   return typeof process.getuid === 'function' ? process.getuid() : null;
 }
 
+function readOwnedProcessTable() {
+  const uid = currentUid();
+  if (!Number.isSafeInteger(uid) || uid < 0) throw new Error('process-census-uid-unavailable');
+  if (!['linux', 'darwin'].includes(process.platform)) throw new Error(`process-census-unsupported-platform:${process.platform}`);
+  const output = execFileSync('ps', ['-u', String(uid), '-o', 'pid=,ppid=,uid=,state=,command='], {
+    encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 5000,
+  });
+  const rows = output.split('\n').map(line => {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s*(.*)$/);
+    if (!match) return null;
+    return { pid: Number(match[1]), ppid: Number(match[2]), uid: Number(match[3]), state: match[4], command: match[5] || '' };
+  }).filter(row => row && Number.isSafeInteger(row.pid) && Number.isSafeInteger(row.ppid) && row.uid === uid);
+  if (!rows.length) throw new Error('process-census-empty');
+  return { uid, rows };
+}
+
+function ownedProcessCensus(rootPid, runRoot) {
+  const base = {
+    schema: 'astrid.r25.owned-process-census.v1', source: 'ps-user-process-table',
+    captured_at: new Date().toISOString(), root_pid: rootPid, run_root: runRoot,
+    available: false, processes: [], residuals: [], truncated: false,
+  };
+  try {
+    const root = realPath(runRoot);
+    if (!root || root === path.parse(root).root || !Number.isSafeInteger(rootPid) || rootPid < 1) {
+      return { ...base, reason: 'owned-process-census-root-unavailable' };
+    }
+    const table = readOwnedProcessTable();
+    const children = new Map();
+    for (const row of table.rows) children.set(row.ppid, [...(children.get(row.ppid) || []), row]);
+    const wanted = new Map();
+    const queue = [{ pid: rootPid, depth: 0 }];
+    while (queue.length) {
+      const current = queue.shift();
+      if (wanted.has(current.pid)) continue;
+      wanted.set(current.pid, current.depth);
+      for (const row of children.get(current.pid) || []) queue.push({ pid: row.pid, depth: current.depth + 1 });
+    }
+    const processes = [];
+    const residuals = [];
+    for (const [pid, depth] of wanted) {
+      const identity = readProcessIdentity(pid);
+      if (!identity.available) {
+        residuals.push({ kind: 'descendant-identity', pid, status: 'unknown', reason: identity.reason || 'identity-unavailable' });
+        continue;
+      }
+      const owned = identity.uid === table.uid && pathWithin(root, identity.cwd);
+      if (!owned) {
+        residuals.push({ kind: 'descendant-ownership', pid, status: 'unknown', reason: 'uid-or-cwd-outside-run-root' });
+        continue;
+      }
+      processes.push({ depth, ...identity });
+    }
+    const unavailable = residuals.length > 0 || !processes.some(item => item.pid === rootPid);
+    return {
+      ...base, available: !unavailable, uid: table.uid, run_root: root,
+      processes: processes.sort((left, right) => left.depth - right.depth || left.pid - right.pid),
+      residuals,
+      reason: unavailable ? (residuals[0]?.reason || 'root-not-in-census') : null,
+    };
+  } catch (error) {
+    return { ...base, reason: error.code || error.message || 'owned-process-census-failed' };
+  }
+}
+
+function finalOwnedProcessCensus(runRoot, expectedProcesses) {
+  const base = {
+    schema: 'astrid.r25.owned-process-census.v1', source: 'ps-user-process-table',
+    captured_at: new Date().toISOString(), root_pid: null, run_root: runRoot,
+    available: false, processes: [], residuals: [], truncated: false,
+  };
+  try {
+    const root = realPath(runRoot);
+    if (!root || root === path.parse(root).root) return { ...base, reason: 'owned-process-final-root-unavailable' };
+    const table = readOwnedProcessTable();
+    const expected = new Map((expectedProcesses || []).map(item => [item.pid, item]));
+    const processes = [];
+    const residuals = [];
+    for (const row of table.rows) {
+      const identity = readProcessIdentity(row.pid);
+      const expectedIdentity = expected.get(row.pid);
+      if (!identity.available) {
+        const stillPresent = (() => {
+          try { return readOwnedProcessTable().rows.some(item => item.pid === row.pid); } catch { return true; }
+        })();
+        if (stillPresent && (expectedIdentity || row.command.includes(root))) {
+          residuals.push({ kind: 'descendant-identity', pid: row.pid, status: 'unknown', reason: identity.reason || 'identity-unavailable' });
+        }
+        continue;
+      }
+      const sameExpected = expectedIdentity && identity.start_identity === expectedIdentity.start_identity;
+      const inRunRoot = pathWithin(root, identity.cwd);
+      if (sameExpected || inRunRoot) processes.push({ ...identity, expected: Boolean(sameExpected), in_run_root: inRunRoot });
+    }
+    return {
+      ...base, available: residuals.length === 0, uid: table.uid, run_root: root,
+      processes: processes.sort((left, right) => left.pid - right.pid), residuals,
+      reason: residuals.length ? residuals[0].reason : null,
+    };
+  } catch (error) {
+    return { ...base, reason: error.code || error.message || 'owned-process-final-census-failed' };
+  }
+}
+
 function readLsofPath(pid, descriptor) {
   const output = execFileSync('lsof', ['-a', '-p', String(pid), '-d', descriptor, '-Fn'], {
     encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 2000,
@@ -300,35 +404,109 @@ function releaseUnsignalledDaemon(daemon) {
 }
 
 async function cleanupOwnedDaemon(daemon, { identity = null, killMs = 1000 } = {}) {
-  const residuals = [{ kind: 'daemon-descendants', status: 'unknown', reason: 'runner does not inspect or signal descendants' }];
   const base = {
     schema: 'astrid.r25.daemon-cleanup.v1', status: 'failed', cleanup_verified: false,
-    direct_signal_attempted: false, signal: null, bounded: false, residuals,
+    direct_signal_attempted: false, signal: null, bounded: false,
   };
   const alreadyExited = childExitResult(daemon);
-  if (alreadyExited) return { ...base, bounded: true, exit: alreadyExited, failure: 'daemon-exited-with-descendants-unverified' };
+  if (alreadyExited) return {
+    ...base, bounded: true, exit: alreadyExited,
+    failure: 'daemon-exited-with-descendants-unverified',
+    residuals: [{ kind: 'daemon-descendants', status: 'unknown', reason: 'daemon exited before independent census' }],
+  };
   if (!identity?.available) {
     releaseUnsignalledDaemon(daemon);
-    return { ...base, bounded: true, failure: 'daemon-identity-unavailable', identity: identity || null };
+    return {
+      ...base, bounded: true, failure: 'daemon-identity-unavailable', identity: identity || null,
+      residuals: [{ kind: 'daemon-descendants', status: 'unknown', reason: 'daemon identity unavailable' }],
+    };
   }
   const observed = readProcessIdentity(identity.expected.pid);
   const mismatches = identityMismatches(observed, identity.expected);
   if (mismatches.length) {
     releaseUnsignalledDaemon(daemon);
-    return { ...base, bounded: true, failure: 'daemon-identity-mismatch', identity: { ...identity, cleanup_observed: observed, mismatches } };
+    return {
+      ...base, bounded: true, failure: 'daemon-identity-mismatch',
+      identity: { ...identity, cleanup_observed: observed, mismatches },
+      residuals: [{ kind: 'daemon-descendants', status: 'unknown', reason: 'daemon identity mismatch' }],
+    };
+  }
+  const initialCensus = ownedProcessCensus(identity.expected.pid, identity.expected.run_root);
+  if (!initialCensus.available) {
+    releaseUnsignalledDaemon(daemon);
+    return {
+      ...base, bounded: true, failure: 'descendant-census-unavailable', identity,
+      initial_census: initialCensus,
+      residuals: [{ kind: 'daemon-descendants', status: 'unknown', reason: initialCensus.reason || 'independent descendant census unavailable' }],
+    };
+  }
+  const descendantProcesses = initialCensus.processes
+    .filter(item => item.pid !== identity.expected.pid)
+    .sort((left, right) => right.depth - left.depth || right.pid - left.pid);
+  const signalled = [];
+  const signalFailures = [];
+  for (const expected of descendantProcesses) {
+    const current = readProcessIdentity(expected.pid);
+    const reasons = identityMismatches(current, {
+      pid: expected.pid, ppid: expected.ppid, uid: expected.uid,
+      executable: expected.executable, cwd: expected.cwd,
+      start_identity: expected.start_identity, run_root: initialCensus.run_root,
+      argv: expected.argv, script: expected.argv?.[0] || null,
+    });
+    if (reasons.length) {
+      if (reasons.includes('current-identity-unavailable') || reasons.includes('identity-read-failed')) {
+        signalFailures.push({ pid: expected.pid, reason: 'identity-unavailable-before-signal' });
+      } else if (reasons.includes('birth-identity-changed')) {
+        signalFailures.push({ pid: expected.pid, reason: 'birth-identity-changed-before-signal' });
+      } else {
+        signalFailures.push({ pid: expected.pid, reason: reasons.join(',') });
+      }
+      continue;
+    }
+    try {
+      process.kill(expected.pid, 'SIGKILL');
+      signalled.push(expected.pid);
+    } catch (error) {
+      if (error.code !== 'ESRCH') signalFailures.push({ pid: expected.pid, reason: error.code || error.message || 'signal-failed' });
+    }
   }
   let signalError = null;
-  try { process.kill(identity.expected.pid, 'SIGKILL'); } catch (error) { signalError = error.code || error.message || 'signal-failed'; }
+  const daemonCurrent = readProcessIdentity(identity.expected.pid);
+  const daemonMismatches = identityMismatches(daemonCurrent, identity.expected);
+  if (daemonMismatches.length) signalError = 'daemon-identity-changed-before-signal';
+  else {
+    try { process.kill(identity.expected.pid, 'SIGKILL'); } catch (error) { signalError = error.code || error.message || 'signal-failed'; }
+  }
   if (signalError) {
     releaseUnsignalledDaemon(daemon);
-    return { ...base, bounded: true, failure: 'direct-sigkill-failed', signal_error: signalError, identity: { ...identity, cleanup_observed: observed } };
+    return {
+      ...base, bounded: true, failure: 'direct-sigkill-failed', signal_error: signalError,
+      identity: { ...identity, cleanup_observed: observed, cleanup_signal_observed: daemonCurrent, cleanup_signal_mismatches: daemonMismatches },
+      initial_census: initialCensus, signalled_descendants: signalled,
+      residuals: [{ kind: 'daemon-descendants', status: 'unknown', reason: signalError }],
+    };
   }
   const exit = await waitForChildExit(daemon, killMs);
   if (!exit) releaseUnsignalledDaemon(daemon);
+  let finalCensus = finalOwnedProcessCensus(initialCensus.run_root, initialCensus.processes);
+  const censusDeadline = Date.now() + killMs;
+  while (finalCensus.available && finalCensus.processes.length > 0 && Date.now() < censusDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+    finalCensus = finalOwnedProcessCensus(initialCensus.run_root, initialCensus.processes);
+  }
+  const residuals = finalCensus.processes.map(item => ({
+    kind: 'daemon-descendant', pid: item.pid, status: 'present',
+    reason: item.expected ? 'captured descendant remains alive' : 'run-root process remains alive',
+  }));
+  const unknown = signalFailures.length > 0 || !finalCensus.available;
+  const complete = Boolean(exit && !unknown && residuals.length === 0);
   return {
-    ...base, direct_signal_attempted: true, direct_target: identity.expected.pid,
-    signal: 'SIGKILL', exit, bounded: Boolean(exit),
-    failure: exit ? 'daemon-killed-but-descendants-unverified' : 'daemon-exit-unverified',
+    ...base, status: complete ? 'verified' : 'failed', cleanup_verified: complete,
+    direct_signal_attempted: true, direct_target: identity.expected.pid, signal: 'SIGKILL', exit,
+    bounded: Boolean(exit), failure: complete ? null : (signalFailures.length ? 'descendant-identity-or-signal-failure' : (finalCensus.available ? 'descendants-remain' : 'final-census-unavailable')),
+    signalled_descendants: signalled, signal_failures: signalFailures,
+    initial_census: initialCensus, final_census: finalCensus,
+    residuals: residuals.length ? residuals : (unknown ? [{ kind: 'daemon-descendants', status: 'unknown', reason: finalCensus.reason || 'descendant signal/census uncertainty' }] : []),
     identity: { ...identity, cleanup_observed: observed },
   };
 }
@@ -717,7 +895,7 @@ async function main() {
 
 module.exports = {
   actionPlan, routeConfig, createBoundedCapture, copyBoundedTail, captureProcessSnapshot,
-  readProcessIdentity, captureOwnedDaemonIdentity, cleanupOwnedDaemon,
+  readProcessIdentity, captureOwnedDaemonIdentity, ownedProcessCensus, finalOwnedProcessCensus, cleanupOwnedDaemon,
 };
 if (require.main === module) {
   main().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });

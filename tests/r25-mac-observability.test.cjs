@@ -40,7 +40,7 @@ const { spawn } = require('node:child_process');
 const role = process.argv[2] || 'daemon';
 if (role === 'child') { setInterval(() => {}, 1000); }
 else {
-  const child = spawn(process.execPath, [__filename, 'child'], { cwd: process.cwd(), stdio: 'ignore' });
+  const child = spawn(process.execPath, [__filename, 'child'], { cwd: process.env.CHILD_CWD || process.cwd(), stdio: 'ignore' });
   fs.writeFileSync(process.env.CHILD_PID_FILE, String(child.pid));
   process.on('SIGTERM', () => fs.appendFileSync(process.env.TERM_FILE, 'SIGTERM\\n'));
   setInterval(() => {}, 1000);
@@ -53,7 +53,7 @@ function isAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-test('setup failure preserves the inner exit, sends no daemon TERM, and reports descendants as residual', async () => {
+test('setup failure preserves the inner exit, sends no daemon TERM, and verifies owned descendants are gone', async () => {
   const root = tempRoot();
   const script = writeDaemonFixture(root);
   const childPidFile = path.join(root, 'child.pid');
@@ -62,7 +62,7 @@ test('setup failure preserves the inner exit, sends no daemon TERM, and reports 
     cwd: root, env: { ...process.env, CHILD_PID_FILE: childPidFile, TERM_FILE: termFile }, stdio: 'ignore',
   });
   const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], { stdio: 'ignore' });
-  const inner = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(23), 20);'], { stdio: 'ignore' });
+  const inner = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(23), 200);'], { stdio: 'ignore' });
   let descendantPid = null;
   try {
     await waitForFile(childPidFile);
@@ -76,13 +76,20 @@ test('setup failure preserves the inner exit, sends no daemon TERM, and reports 
     const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
     assert.equal(cleanup.signal, 'SIGKILL');
     assert.deepEqual(cleanup.exit, { code: null, signal: 'SIGKILL' });
-    assert.equal(cleanup.status, 'failed');
-    assert.equal(cleanup.cleanup_verified, false);
+    assert.equal(cleanup.status, 'verified');
+    assert.equal(cleanup.cleanup_verified, true);
     assert.equal(cleanup.direct_signal_attempted, true);
-    assert.deepEqual(cleanup.residuals, [{ kind: 'daemon-descendants', status: 'unknown', reason: 'runner does not inspect or signal descendants' }]);
+    assert.deepEqual(cleanup.residuals, []);
+    assert.deepEqual(cleanup.signal_failures, []);
+    assert.equal(cleanup.initial_census.source, 'ps-user-process-table');
+    assert.equal(cleanup.initial_census.available, true);
+    assert.ok(cleanup.initial_census.processes.some(row => row.pid === daemon.pid));
+    assert.ok(cleanup.initial_census.processes.some(row => row.pid === descendantPid));
+    assert.equal(cleanup.final_census.available, true);
+    assert.deepEqual(cleanup.final_census.processes, []);
     assert.ok(elapsedMs < 1000, `owned-daemon cleanup took ${elapsedMs.toFixed(1)}ms`);
     assert.equal(fs.existsSync(termFile), false, 'daemon received an unsafe SIGTERM');
-    assert.equal(isAlive(descendantPid), true, 'unverified descendant was unexpectedly terminated');
+    assert.equal(isAlive(descendantPid), false, 'owned descendant was not cleaned');
     assert.equal(unrelated.exitCode, null);
     assert.doesNotThrow(() => process.kill(unrelated.pid, 0));
   } finally {
@@ -92,6 +99,40 @@ test('setup failure preserves the inner exit, sends no daemon TERM, and reports 
     if (descendantPid && isAlive(descendantPid)) process.kill(descendantPid, 'SIGKILL');
     await Promise.all([waitForClose(daemon), waitForClose(unrelated), waitForClose(inner)]);
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cleanup keeps uncertainty when a descendant is outside the private run root', async () => {
+  const root = tempRoot();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-mac-observability-outside-'));
+  const script = writeDaemonFixture(root);
+  const childPidFile = path.join(root, 'child.pid');
+  const termFile = path.join(root, 'term.log');
+  const daemon = spawn(process.execPath, [script], {
+    cwd: root,
+    env: { ...process.env, CHILD_PID_FILE: childPidFile, TERM_FILE: termFile, CHILD_CWD: outside },
+    stdio: 'ignore',
+  });
+  let descendantPid = null;
+  try {
+    await waitForFile(childPidFile);
+    descendantPid = Number(fs.readFileSync(childPidFile, 'utf8'));
+    const identity = captureOwnedDaemonIdentity(daemon, { cwd: root, runRoot: root, args: [script] });
+    const cleanup = await cleanupOwnedDaemon(daemon, { identity, killMs: 250 });
+    assert.equal(cleanup.status, 'failed');
+    assert.equal(cleanup.cleanup_verified, false);
+    assert.equal(cleanup.failure, 'descendant-census-unavailable');
+    assert.equal(cleanup.direct_signal_attempted, false);
+    assert.equal(cleanup.initial_census.available, false);
+    assert.equal(isAlive(daemon.pid), true, 'daemon was signalled despite incomplete ownership proof');
+    assert.equal(isAlive(descendantPid), true, 'unowned descendant was signalled');
+    assert.match(cleanup.residuals[0].reason, /uid-or-cwd-outside-run-root/);
+  } finally {
+    for (const pid of [daemon.pid, descendantPid]) {
+      if (pid && isAlive(pid)) process.kill(pid, 'SIGKILL');
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
   }
 });
 
