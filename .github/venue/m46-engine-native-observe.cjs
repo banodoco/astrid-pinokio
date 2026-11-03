@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { WebSocket } = require(path.join(process.env.RUNNER_TEMP, 'pterm/node_modules/unws'));
 
@@ -40,7 +41,8 @@ async function main() {
   const [events, exit] = await Promise.all([stream, ptermExit]);
   clearTimeout(timer);
   socket.close();
-  fs.writeFileSync(path.join(out, 'request-observation.json'), JSON.stringify({ uri, ref, uid: process.getuid(), pterm_pid: exit.pid, pterm_exit: exit, events }, null, 2) + '\n');
+  const digest = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  fs.writeFileSync(path.join(out, 'request-observation.json'), JSON.stringify({ uri, ref, uid: process.getuid(), pterm_pid: exit.pid, pterm_exit: exit, pterm_script_sha256: digest(path.join(process.env.RUNNER_TEMP, 'pterm/index.js')), node_executable: process.execPath, node_executable_sha256: digest(process.execPath), events }, null, 2) + '\n');
 }
 
 main().catch(error => {
