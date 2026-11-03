@@ -124,7 +124,7 @@ jobs:
           node pinokio/providers/r25-native-collector-binding.cjs \
             --validate-source-only true --agent-ref "$AGENT_REF" \
             --agent-root "$AGENT_ROOT" --pinokio-root "$GITHUB_WORKSPACE"
-          node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-macos.test.cjs
+          node --test tests/r25-native-collector-binding.test.cjs tests/r25-snapshot-macos.test.cjs tests/r25-conda-provision.test.cjs
           python -m py_compile \
             "$AGENT_ROOT/scripts/pinokio_snapshot_collector.py" \
             "$AGENT_ROOT/scripts/pinokio_snapshot_macos.py"
@@ -138,10 +138,12 @@ jobs:
           PYTHON: python
           R25_OUTPUT: ${{ runner.temp }}/r25-snapshot-output
           R25_DIAGNOSTICS: ${{ runner.temp }}/r25-diagnostics
+          PINOKIO_HOME: ${{ runner.temp }}/pinokio-home
         run: |
           set -euo pipefail
           test "$(id -u)" -gt 0
           test "$(id -un)" != root
+          bash .github/venue/r25-provision-macos-conda.sh
           export R25_LAUNCHD_TARGET="gui/$(id -u)/haus.astrid.runtime"
           node .github/venue/r25-snapshot-runner.cjs \
             --agent-root "$AGENT_ROOT" --pinokiod "$PINOKIOD_ROOT" \
