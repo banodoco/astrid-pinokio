@@ -70,7 +70,7 @@ test('PTerm close alone cannot pass; diagnostic error rejects the child-exit wai
   watch.stop();
 });
 
-test('cross-OS diagnostic refusal signals PTerm synchronously before it can submit another setup step', async () => {
+test('cross-OS diagnostic refusal signals PTerm synchronously before the promise unwinds', async () => {
  const { EventEmitter }=require('node:events');
  const { ptermExit }=require('../.github/venue/r21-observer-diagnostics.cjs');
  const child=new EventEmitter();const calls=[];child.kill=signal=>{calls.push(signal);};

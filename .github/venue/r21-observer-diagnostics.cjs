@@ -44,9 +44,9 @@ function ptermExit(child, label, timeoutMs, diagnostic = null, { signal = null, 
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      // The diagnostic observer is a separate WebSocket client. Stop PTerm
-      // synchronously on refusal so its script cannot submit the next setup
-      // step while the caller unwinds into its normal cleanup path.
+      // The diagnostic observer is a separate WebSocket client. Request
+      // PTerm termination synchronously on refusal instead of waiting for
+      // the caller to unwind into its normal cleanup path.
       if (terminateOnAbort) { try { child.kill('SIGTERM'); } catch {} }
       reject(signal.reason instanceof Error && signal.reason.name !== 'AbortError' ? signal.reason : new Error(`${label} installer failure marker`));
     };
