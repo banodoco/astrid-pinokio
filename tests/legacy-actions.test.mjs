@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const agent = path.resolve(repository, '../../../../astrid-agent');
+const agent = process.env.ASTRID_AGENT_DIR || path.resolve(repository, '../../../../astrid-agent');
 const revisions = ['bbba620e', 'c3b4cd5', '5e1f256'];
 
 function oldModule(revision, file, app) {

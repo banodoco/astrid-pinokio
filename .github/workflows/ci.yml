@@ -35,11 +35,27 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: banodoco/astrid-agent
+          ref: ab43bad818ef65ca1e929b973a2f61cd9fc4bf61
+          path: astrid-agent
+      - uses: actions/checkout@v4
+        with:
+          repository: banodoco/astrid-runtime
+          ref: 2776ba973b6c8f3555b5629b0840d9691a98d3c2
+          path: astrid-runtime
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - run: node --test --test-reporter=spec tests/*.test.mjs
         shell: bash
+        env:
+          ASTRID_AGENT_DIR: ${{ github.workspace }}/astrid-agent
+          PYTHONPATH: ${{ github.workspace }}/astrid-runtime
 
   pinokio-smoke:
     name: Pinokio smoke (${{ matrix.os }})
