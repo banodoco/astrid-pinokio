@@ -12,6 +12,7 @@ const { createObserverIO } = require('./r21-observer-io.cjs');
 const { ptermExit, createInstallDiagnostics, terminateChild, redactDiagnosticText } = require('./r21-observer-diagnostics.cjs');
 const { captureWindowsProcessTree } = require('./r25-windows-process-snapshot.cjs');
 const { MAX_BYTES: PTY_CAPTURE_MAX_BYTES, MAX_ROWS: PTY_CAPTURE_MAX_ROWS, PTY_MARKERS, applyPinokiodPtyInstrumentation } = require('./r25-pinokiod-pty-instrumentation.cjs');
+const { applyWindowsPtyDiagnostics, createWindowsProbeFailFast } = require('./r25-windows-pty-diagnostics.cjs');
 
 const AGENT_REF = binding.AGENT_SOURCE_REF;
 const PINOKIO_SOURCE_REF = '95aafb5a029c3f53cb2268d8596909eab0deb3c4';
@@ -230,10 +231,17 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
   let child;
   let terminal = { stop: false, disconnect: false, error: false };
   let firstError = null;
+  const windowsFailFast = diagnostic?.windows_pty_capture_file && process.platform === 'win32'
+    ? createWindowsProbeFailFast({ captureFile: diagnostic.windows_pty_capture_file, onFail: failure => {
+      terminal.error = true;
+      terminal.windows_failure = failure.reason;
+      if (!firstError) firstError = { kind: `windows-diagnostic-${failure.reason}` };
+    } }) : null;
   const onMessage = event => {
     try {
       const packet = JSON.parse(String(event.data));
       try { diagnostic?.packet(packet); } catch {}
+      windowsFailFast?.packet(packet);
       if (packet?.type === 'event' && packet.data === 'stop') terminal.stop = true;
       if (packet?.type === 'event' && packet.data === 'disconnect') terminal.disconnect = true;
       if (packet?.type === 'error' || packet?.type === 'installer-failure-marker') {
@@ -250,6 +258,7 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
     child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', endpoint], {
       cwd: home, env: process.env, stdio: stdio ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'ignore', 'ignore'],
     });
+    windowsFailFast?.start(child);
     diagnostic?.stage?.('pterm-spawn', { pid: child.pid, ppid: process.pid });
     if (stdio) {
       child.stdout.on('data', chunk => stdio.stdout.append(chunk));
@@ -260,8 +269,11 @@ async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, a
     const innerExit = await ptermExit(child, `R-25 ${action}`, timeoutMs, diagnostic
       ? { pterm: diagnostic.pterm, beforeTimeout: diagnostic.beforeTimeout } : null);
     await new Promise(resolve => setTimeout(resolve, 500));
-    return { script, inner_exit: innerExit, terminal, first_error: firstError, status_after: await io.status(path.join(appRoot, script), `${action}-status`) };
+    return { script, inner_exit: innerExit, terminal, first_error: firstError,
+      windows_diagnostic_failure: windowsFailFast?.result() || null,
+      status_after: await io.status(path.join(appRoot, script), `${action}-status`) };
   } finally {
+    windowsFailFast?.stop();
     const shellDiagnosticFile = path.join(appRoot, '_r25-setup-shell-diagnostics.jsonl');
     flushCaptures(diagnostic?.stdio);
     diagnostic?.shell?.(shellDiagnosticFile);
@@ -309,10 +321,14 @@ async function main() {
   const ptyInstrumentation = setupOnly ? applyPinokiodPtyInstrumentation(pinokiodRoot, {
     diagnosticFile: path.join(diagnostics, 'r25-pty-diagnostics.jsonl'),
   }) : { enabled: false, diagnostic_file_bound: false };
+  const windowsPtyInstrumentation = setupOnly && process.platform === 'win32'
+    ? applyWindowsPtyDiagnostics(pinokiodRoot, { diagnosticFile: path.join(diagnostics, 'r25-windows-pty-diagnostics.jsonl') })
+    : { enabled: false, reason: 'not-windows-setup-diagnostic' };
   const ptyCaptureFile = path.join(diagnostics, 'r25-pty-diagnostics.jsonl');
   const refreshPtyCaptureStatus = () => { if (setupOnly) ptyInstrumentation.capture_status = ptyCaptureStatus(ptyCaptureFile); };
   const engineBinding = materializeProduct(productRoot, appRoot);
   engineBinding.pinokiod_pty = ptyInstrumentation;
+  engineBinding.windows_pty = windowsPtyInstrumentation;
   const environment = path.join(appRoot, '_ENVIRONMENT');
   fs.writeFileSync(environment, '# R-25 run-owned candidate pin\nASTRID_APP_REF=lane/M-APP/PINOKIO-APP-BINDING\n', { encoding: 'utf8', flag: 'w', mode: 0o600 });
   fs.writeFileSync(requestPath, `${JSON.stringify(request, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
@@ -332,6 +348,7 @@ async function main() {
     pinokiod_ref: process.env.PINOKIOD_REF || null,
     shell_overlay: engineBinding.overlay,
     pinokiod_pty: engineBinding.pinokiod_pty,
+    windows_pty: engineBinding.windows_pty,
   }, value => {
     const file = path.join(diagnostics, 'r25-install-diagnostics.json');
     fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
@@ -341,6 +358,7 @@ async function main() {
     PINOKIO_HTTPS_ACTIVE: '0', PINOKIO_NETWORK_ACTIVE: '0',
     ...(setupOnly ? { ASTRID_R25_SETUP_DIAGNOSTICS: '1' } : {}),
     ...(setupOnly ? { ASTRID_R25_PTY_CAPTURE_FILE: path.join(diagnostics, 'r25-pty-diagnostics.jsonl') } : {}) };
+  if (setupOnly && process.platform === 'win32') daemonEnv.ASTRID_R25_WINDOWS_PTY_CAPTURE_FILE = path.join(diagnostics, 'r25-windows-pty-diagnostics.jsonl');
   const daemonOutput = setupOnly ? {
     stdout: createBoundedCapture(path.join(diagnostics, 'daemon.stdout.log')),
     stderr: createBoundedCapture(path.join(diagnostics, 'daemon.stderr.log')),
@@ -392,6 +410,7 @@ async function main() {
   const shellDiagnosticFile = path.join(appRoot, '_r25-setup-shell-diagnostics.jsonl');
   const setupDiagnosticView = setupOnly ? Object.assign({}, setupDiagnostics, {
     stdio: ptermOutput,
+    windows_pty_capture_file: process.platform === 'win32' ? ptyCaptureFile : null,
     async beforeTimeout(value) {
       refreshPtyCaptureStatus();
       setupDiagnostics.shell(shellDiagnosticFile);
