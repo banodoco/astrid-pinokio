@@ -189,7 +189,8 @@ test('successful Start still requires explicit engine, runtime and application r
   assert.deepEqual(f.notes.filter(n => n.category === 'success').map(n => n.operation), ['start-status', 'engine-resource', 'runtime', 'application']);
   const started = Date.now();
   await f.io.cleanup();
-  assert.equal(child.signalCode, 'SIGKILL');
+  // Windows terminates the child on the first signal; POSIX must exercise escalation.
+  assert.equal(child.signalCode, process.platform === 'win32' ? 'SIGTERM' : 'SIGKILL');
   assert.ok(Date.now() - started < 1500);
   assert.ok(f.sockets.every(socket => socket.terminated));
 });

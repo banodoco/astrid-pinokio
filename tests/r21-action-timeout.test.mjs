@@ -7,7 +7,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const observer = fs.readFileSync('.github/venue/r21-observe.cjs', 'utf8');
-const runner = fs.readFileSync('.github/venue/r21-real-engine.sh', 'utf8');
+const runner = fs.readFileSync('.github/venue/r21-real-engine.sh', 'utf8').replace(/\r\n/g, '\n');
 const diagnostics = createRequire(import.meta.url)('../.github/venue/r21-observer-diagnostics.cjs');
 
 test('only initial historical Install gets the larger PTerm bound', async () => {

@@ -6,7 +6,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const repo = path.resolve(import.meta.dirname, '..');
-for (const failObserver of [false, true]) test(`native Linux uses its own action path and cleans up when observer ${failObserver ? 'fails' : 'succeeds'}`, () => {
+for (const failObserver of [false, true]) test(`native Linux uses its own action path and cleans up when observer ${failObserver ? 'fails' : 'succeeds'}`, {
+  skip: process.platform === 'win32' && 'requires the native Linux /usr/bin/git fixture path',
+}, () => {
   const root = mkdtempSync(path.join(tmpdir(), 'r20-native-test-'));
   try {
     const bin = path.join(root, 'bin');
