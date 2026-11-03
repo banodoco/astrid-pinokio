@@ -37,13 +37,33 @@ for (const [chunks, reason] of [
   [[{type: 'error', data: 'private'}], 'error-event'],
   [[{type: 'installer-failure-marker'}], 'failure-marker'],
   [[{type:'stream',data:{raw:'ASTRID_PINO'}},{type:'stream',data:{raw:'KIO_FAILURE'}}], 'failure-marker'],
-  [[{type:'stream',data:{raw:'Terminated '}},{type:'stream',data:{raw:'Shell 123'}}], 'terminated-shell'],
 ]) test(`diagnostic aborts immediately on ${reason}, including chunk boundaries`, () => {
   const watch = createDiagnosticSettlement();
   for (const chunk of chunks) watch.packet(chunk);
   assert.equal(watch.signal.aborted, true);
   assert.equal(watch.snapshot().failure.reason, reason);
   assert.doesNotMatch(JSON.stringify(watch.snapshot()), /private|123/);
+  watch.stop();
+});
+
+test('Terminated Shell is retained as bounded context and observation continues to PTerm exit', async () => {
+  const { EventEmitter } = require('node:events');
+  const { ptermExit } = require('../.github/venue/r21-observer-diagnostics.cjs');
+  const watch = createDiagnosticSettlement();
+  const child = new EventEmitter();
+  child.pid = 12;
+  const pending = ptermExit(child, 'diagnostic', 1000, { pterm: (event, value) => watch.pterm(event, value) }, { signal: watch.signal });
+  watch.packet({type:'stream',data:{raw:`prefix ${'x'.repeat(400)} token=private-marker-secret Terminated `}});
+  watch.packet({type:'stream',data:{raw:'Shell tail'}});
+  assert.equal(watch.signal.aborted, false);
+  assert.equal(watch.snapshot().marker_observations.length, 1);
+  assert.equal(Buffer.byteLength(watch.snapshot().marker_observations[0].context, 'utf8') <= 256, true);
+  assert.match(watch.snapshot().marker_observations[0].context, /Terminated Shell/);
+  assert.doesNotMatch(watch.snapshot().marker_observations[0].context, /private-marker-secret/);
+  child.emit('exit', 0, null);
+  assert.deepEqual(await pending, { code: 0, signal: null });
+  assert.equal(watch.snapshot().failure, null);
+  assert.equal(watch.snapshot().pterm.some(row => row.event === 'child-exit' && row.code === 0), true);
   watch.stop();
 });
 
@@ -70,6 +90,19 @@ test('PTerm close alone cannot pass; diagnostic error rejects the child-exit wai
   watch.stop();
 });
 
+test('bounded PTerm timeout remains a refusal and signals only its observer child', async () => {
+  const { EventEmitter } = require('node:events');
+  const { ptermExit } = require('../.github/venue/r21-observer-diagnostics.cjs');
+  const watch = createDiagnosticSettlement();
+  const child = new EventEmitter();
+  const signals = [];
+  child.kill = signal => { signals.push(signal); return true; };
+  await assert.rejects(ptermExit(child, 'diagnostic', 5, null, { signal: watch.signal }), /PTerm timeout/);
+  assert.deepEqual(signals, ['SIGTERM']);
+  assert.equal(watch.snapshot().failure, null);
+  watch.stop();
+});
+
 test('probe journal retains an earlier resolution when prompt-2 replaces the legacy ring', () => {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'r25-probe-journal-'));
  const captureFile=path.join(root,'journal.json');
@@ -87,11 +120,12 @@ test('probe journal retains an earlier resolution when prompt-2 replaces the leg
  } finally {watch.stop();fs.rmSync(root,{recursive:true,force:true});}
 });
 
-test('terminal packets arriving after diagnostic refusal remain observable until cleanup stops the recorder', () => {
+test('terminal packets remain observable after a lifecycle marker until cleanup stops the recorder', () => {
  const watch=createDiagnosticSettlement();
  watch.packet({type:'stream',data:{raw:'Terminated Shell'}});
  watch.packet({type:'disconnect'});
- assert.equal(watch.snapshot().failure.reason,'terminated-shell');
+ assert.equal(watch.snapshot().failure,null);
+ assert.equal(watch.snapshot().marker_observations.length,1);
  assert.equal(watch.snapshot().emitted.disconnect,1);
  watch.stop();
 });

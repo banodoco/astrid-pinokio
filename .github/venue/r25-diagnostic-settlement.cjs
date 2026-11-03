@@ -1,10 +1,13 @@
 'use strict';
 
 const fs = require('node:fs');
+const { redactDiagnosticText } = require('./r21-observer-diagnostics.cjs');
 const PROBE_MS = 90_000;
 const CAPTURE_BYTES = 131072;
 const SCHEDULE_MARGIN_MS = 100;
-const MARKERS = ['ASTRID_PINOKIO_FAILURE', 'Terminated Shell'];
+const FAILURE_MARKER = 'ASTRID_PINOKIO_FAILURE';
+const MARKER_CONTEXT_BYTES = 256;
+const MARKER_LIMIT = 8;
 
 // A diagnostic observer, never an acceptance predicate. Qualification callers
 // do not construct it. Read the complete bounded sidecar: its writer rewrites
@@ -15,7 +18,7 @@ function createDiagnosticSettlement({ captureFile, record = () => {}, now = Date
   const state = { schema: 'astrid.r25.diagnostic-settlement.v1',
     observer_awaits: 'child.exit', pterm_awaits: ['packet.type=stop', 'packet.type=disconnect'],
     emitted: { stop: 0, disconnect: 0, event_stop: 0, event_disconnect: 0, error: 0 },
-    probes: [], failure: null };
+    probes: [], marker_observations: [], pterm: [], failure: null };
   let timer = null;
   let interval = null;
   let stopped = false;
@@ -96,8 +99,35 @@ function createDiagnosticSettlement({ captureFile, record = () => {}, now = Date
       if (type === 'stream') {
         const combined = tail + raw;
         tail = combined.slice(-64);
-        if (MARKERS.some(marker => combined.includes(marker))) return fail(combined.includes(MARKERS[0]) ? 'failure-marker' : 'terminated-shell');
+        for (const marker of [FAILURE_MARKER, 'Terminated Shell']) {
+          const index = combined.indexOf(marker);
+          if (index < 0) continue;
+          if (marker === FAILURE_MARKER) return fail('failure-marker');
+          if (state.marker_observations.length < MARKER_LIMIT) {
+            const before = combined.slice(Math.max(0, index - 96), index);
+            const after = combined.slice(index + marker.length, index + marker.length + 96);
+            state.marker_observations.push({ marker: 'Terminated Shell', at: new Date(now()).toISOString(),
+              context: redactDiagnosticText(`${before}[Terminated Shell]${after}`, MARKER_CONTEXT_BYTES) });
+          }
+        }
       }
+      persist();
+    },
+    pterm(event, value = {}) {
+      if (stopped) return;
+      if (!['timer-start', 'timer-fire', 'child-exit', 'child-close', 'spawn-error'].includes(event)
+          || state.pterm.length >= 16) return;
+      const row = { event, at: new Date(now()).toISOString() };
+      if (event === 'timer-start') {
+        if (Number.isFinite(value.started)) row.started_at = new Date(value.started).toISOString();
+        if (Number.isFinite(value.deadline)) row.deadline_at = new Date(value.deadline).toISOString();
+      }
+      if (event === 'timer-fire') row.fired_at = Number.isFinite(value.at) ? new Date(value.at).toISOString() : row.at;
+      if (event === 'child-exit' || event === 'child-close') {
+        row.code = Number.isInteger(value.code) ? value.code : null;
+        row.signal = typeof value.signal === 'string' ? value.signal : null;
+      }
+      state.pterm.push(row);
       persist();
     },
     stop() { stopped = true; clearTimer(timer); clearPoll(interval); timer = null; interval = null; persist(); },

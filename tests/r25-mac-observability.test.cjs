@@ -130,6 +130,44 @@ test('setup failure marker bounds the PTerm wait without signalling its child', 
   }
 });
 
+test('macOS cross-OS diagnostic observes setup result and PTerm exit after Terminated Shell', async () => {
+  const root = tempRoot();
+  let handler;
+  let evidence;
+  const child = new EventEmitter();
+  child.pid = 322;
+  child.kill = signal => { child.sent = signal; return true; };
+  const socket = {
+    addEventListener: (_name, callback) => { handler = callback; },
+    send: () => setTimeout(() => {
+      handler({ data: JSON.stringify({ type: 'stream', data: { raw: 'Terminated Shell' } }) });
+      handler({ data: JSON.stringify({ type: 'start', data: { current: 3, total: 6, method: 'shell.run' } }) });
+      handler({ data: JSON.stringify({ type: 'result', data: { index: 3, total: 6 } }) });
+      child.emit('exit', 0, null);
+    }, 10),
+  };
+  const diagnostic = createInstallDiagnostics({ action: 'setup-install', slot_id: 'pinokio-backend-macos' }, value => { evidence = value; });
+  Object.assign(diagnostic, { cross_os: true, pty_capture_file: path.join(root, 'pty.json'),
+    settlement_file: path.join(root, 'settlement.json') });
+  try {
+    const result = await observeAction({
+      io: { openSocket: async () => socket, disposeSocket: () => {}, status: async () => true },
+      ptermRoot: root, home: root, endpoint: 'pinokio://test', appRoot: root,
+      script: 'pinokio/install.js', action: 'setup-install', logRoot: root,
+      timeoutMs: 1000, diagnostic, spawnProcess: () => child,
+    });
+    const settlement = JSON.parse(fs.readFileSync(diagnostic.settlement_file, 'utf8'));
+    assert.deepEqual(result.inner_exit, { code: 0, signal: null });
+    assert.deepEqual(evidence.events.filter(item => item.kind !== 'stream').map(item => item.kind), ['start', 'result']);
+    assert.equal(settlement.marker_observations.length, 1);
+    assert.equal(settlement.failure, null);
+    assert.equal(settlement.pterm.some(row => row.event === 'child-exit' && row.code === 0), true);
+    assert.equal(child.sent, undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('setup failure preserves the inner exit, sends no daemon TERM, and verifies owned descendants are gone', async () => {
   const root = tempRoot();
   const script = writeDaemonFixture(root);
