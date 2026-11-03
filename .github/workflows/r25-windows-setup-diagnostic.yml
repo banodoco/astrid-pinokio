@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - lane/M-PIN/R-PIN-WINDOWS-SETUP-REPAIR
+      - lane/M-CI/R-PIN-WINDOWS-DISPATCH-ROUTE-R1
   workflow_dispatch:
 
 permissions:
