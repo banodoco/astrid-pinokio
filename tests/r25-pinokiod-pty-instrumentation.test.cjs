@@ -98,8 +98,26 @@ test('patches the exact source anchors and exposes every bounded PTY boundary ma
   assert.ok(preProbe >= 0 && preProbe < write && write < returned && returned < returnMarker);
   assert.ok(postCallback >= 0 && postMarker > postCallback);
   assert.match(result.source, /if \(__r25PromptProbeWriteReturned && !__r25PromptPostProbeOutput\) \{ __r25PromptPostProbeOutput = true; __r25PtyCapture\('prompt-post-probe-output',/);
+  assert.ok(result.source.includes("ASTRID_R25_WINDOWS_SGR_DIAGNOSTIC === '1') term.write(`Remove-Module PSReadLine -ErrorAction SilentlyContinue"));
+  assert.ok(result.source.includes("-not (Get-Module -Name PSReadLine)) { Write-Output 'R25_SGR_COLOR_DISABLED'"));
+  assert.match(result.source, /else term\.write\(`echo pinokio\$\{this\.EOL\}echo pinokio\$\{this\.EOL\}`\)/);
+  assert.match(result.source, /let re = \/\(\.\+\)echo pinokio\[\\r\\n\]\+pinokio\[\\r\\n\]\+\(\\1\)\/gs/);
   assert.deepEqual(PRESERVED_MARKERS, ['prompt-probe-write-return', 'prompt-post-probe-output']);
   assert.notEqual(result.patchedSha256, result.sourceSha256);
+});
+
+test('SGR changed-input proof is explicit, bounded, and opt-in', () => {
+  const source = sourceFixture();
+  const result = patchSource(source, { expectedSha256: sha256(Buffer.from(source, 'utf8')) });
+  assert.match(result.source, /sgr_color_setting_proven: state\.sgr_color_setting_proven/);
+  assert.match(result.source, /sgr_color_setting_failed: state\.sgr_color_setting_failed/);
+  assert.match(result.source, /if \(__r25Lines\.includes\('R25_SGR_COLOR_DISABLED'\)\) __r25PromptState\.sgr_color_setting_proven = true/);
+  assert.match(result.source, /if \(__r25Lines\.includes\('R25_SGR_COLOR_SETTING_FAILED'\)\) __r25PromptState\.sgr_color_setting_failed = true/);
+  const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/r25-windows-setup-diagnostic.yml'), 'utf8');
+  assert.match(workflow, /windows_sgr_split_probe:[\s\S]*type: boolean[\s\S]*default: false/);
+  assert.match(workflow, /windows_sgr_split_probe != true/);
+  assert.match(workflow, /120000/);
+  assert.match(workflow, /PSReadLine removal was not proven/);
 });
 
 test('fails closed on a source mismatch without modifying the checkout', () => {
