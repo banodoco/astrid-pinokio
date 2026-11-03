@@ -203,6 +203,10 @@ function projectInstallEvidence(raw, binding) {
       installer_output: ['captured', 'unavailable'].includes(preCleanup.installer_output) ? preCleanup.installer_output : null,
       pterm_output: ['captured', 'unavailable'].includes(preCleanup.pterm_output) ? preCleanup.pterm_output : null,
       daemon_output: ['captured', 'unavailable'].includes(preCleanup.daemon_output) ? preCleanup.daemon_output : null,
+      pre_timeout_pterm_stdout: ['captured', 'unavailable'].includes(preCleanup.pre_timeout_pterm_stdout) ? preCleanup.pre_timeout_pterm_stdout : null,
+      pre_timeout_pterm_stderr: ['captured', 'unavailable'].includes(preCleanup.pre_timeout_pterm_stderr) ? preCleanup.pre_timeout_pterm_stderr : null,
+      pre_timeout_daemon_stdout: ['captured', 'unavailable'].includes(preCleanup.pre_timeout_daemon_stdout) ? preCleanup.pre_timeout_daemon_stdout : null,
+      pre_timeout_daemon_stderr: ['captured', 'unavailable'].includes(preCleanup.pre_timeout_daemon_stderr) ? preCleanup.pre_timeout_daemon_stderr : null,
     },
     timer: { started_at: timestamp(timer.started_at), deadline_at: timestamp(timer.deadline_at), fired_at: timestamp(timer.fired_at) },
     child: { spawn_error_at: timestamp(child.spawn_error_at), exited_at: timestamp(child.exited_at),
@@ -291,7 +295,9 @@ function createInstallDiagnostics(binding, save, now = () => Date.now()) {
       state.pre_cleanup = { timestamp: iso(value.at || now()), pterm_pid: value.pterm_pid, pterm_ppid: value.pterm_ppid,
         daemon_pid: value.daemon_pid, daemon_ppid: value.daemon_ppid, process_snapshot: value.process_snapshot,
         process_snapshot_error: value.process_snapshot_error, installer_output: value.installer_output,
-        pterm_output: value.pterm_output, daemon_output: value.daemon_output };
+        pterm_output: value.pterm_output, daemon_output: value.daemon_output,
+        pre_timeout_pterm_stdout: value.pre_timeout_pterm_stdout, pre_timeout_pterm_stderr: value.pre_timeout_pterm_stderr,
+        pre_timeout_daemon_stdout: value.pre_timeout_daemon_stdout, pre_timeout_daemon_stderr: value.pre_timeout_daemon_stderr };
       persist();
     },
     shell(file) {
