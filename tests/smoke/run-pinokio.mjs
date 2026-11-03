@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import library from '../../pinokio/lib.js';
 import { signalGroup } from '../../pinokio/session.mjs';
 import { runTool as executeTool, timedStep } from './process.mjs';
+import { writeSmokeFailureCapture } from './diagnostics.mjs';
 
 const require = createRequire(import.meta.url);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -177,10 +178,19 @@ function launchShell(step, environment, { background = false, onSpawn } = {}) {
   if (!background) return child.exit.then(({ code, signal }) => {
     const installLogPath = windows
       ? path.join(environment.LOCALAPPDATA || environment.USERPROFILE, 'Astrid Runtime', 'logs', 'install.log')
-      : path.join(environment.HOME, '.local', 'share', 'astrid-runtime', 'logs', 'install.log');
+      : path.join(environment.HOME, '.local', process.platform === 'linux' ? 'state' : 'share', 'astrid-runtime', 'logs', 'install.log');
     const installLog = fs.existsSync(installLogPath)
       ? `\nAstrid install log (${installLogPath}):\n${fs.readFileSync(installLogPath, 'utf8')}`
       : '';
+    if (code !== 0 && process.platform === 'linux' && process.env.RUNNER_TEMP) {
+      writeSmokeFailureCapture({
+        directory: path.join(process.env.RUNNER_TEMP, 'astrid-pinokio-smoke-diagnostics'),
+        logPath: installLogPath,
+        step: step.params.message,
+        code,
+        signal,
+      });
+    }
     assert.equal(code, 0, `${step.params.shell} step failed (${signal || code}):\n${child.output}${installLog}`);
     return child;
   });
