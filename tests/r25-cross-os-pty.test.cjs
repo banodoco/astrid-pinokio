@@ -6,6 +6,8 @@ const path = require('node:path');
 const os = require('node:os');
 const vm = require('node:vm');
 const { patchCrossOsSource } = require('../.github/venue/r25-cross-os-pty.cjs');
+const { patchWindowsSource } = require('../.github/venue/r25-windows-pty-diagnostics.cjs');
+const { PINOKIOD_SHELL_SHA256, patchSource: patchSgrSource, sha256 } = require('../.github/venue/r25-pinokiod-pty-instrumentation.cjs');
 function fixture() { return ["const __r25PtyFs = require('fs');", '    this.prompt_pattern = await this.prompt(params.path)',
   '      term.onData((data) => {', "                __r25PtyCapture('prompt-probe-write-return', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid })",
   "              __r25PtyProcessing(__r25PromptState, 'resolve')",
@@ -61,4 +63,40 @@ test('changed-input overlay keeps matcher pair and nonce, records guard/write me
   assert.ok(probe.writes.every(write=>write.returned_at && /^[a-f0-9]{64}$/.test(write.sha256)));
   assert.doesNotMatch(fs.readFileSync(capture,'utf8'),/probe-nonce|echo pinokio/);
  } finally {fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('SGR then cross-OS overlays compose on authentic pinned pinokiod source', () => {
+ const pinnedPath=path.join(__dirname,'fixtures','pinokiod-shell-add4a674ad1ba95bb62ec427fce519fe5bf0e9bf.js');
+ const pinned=fs.readFileSync(pinnedPath,'utf8');
+ assert.equal(sha256(Buffer.from(pinned,'utf8')),PINOKIOD_SHELL_SHA256);
+ const sgr=patchSgrSource(pinned).source;
+ const windows=patchWindowsSource(sgr).source;
+ const combined=patchCrossOsSource(windows,path.resolve(__dirname,'../.github/venue/r25-macos-diagnostic.cjs'));
+ assert.doesNotThrow(()=>new vm.Script(combined));
+
+ // The SGR pass intentionally changes only the prompt input branch. The
+ // cross-OS pass must bind to that combined form and preserve both input
+ // payloads and pinokiod's literal matcher predicate.
+ assert.ok(combined.includes("if (process.env.ASTRID_R25_WINDOWS_SGR_DIAGNOSTIC === '1') { term.write(`Remove-Module PSReadLine -ErrorAction SilentlyContinue; if (-not (Get-Module -Name PSReadLine)) { Write-Output 'R25_SGR_COLOR_DISABLED' } else { Write-Output 'R25_SGR_COLOR_SETTING_FAILED' }${this.EOL}echo pinokio${this.EOL}echo pinokio${this.EOL}`) }"));
+ assert.ok(combined.includes("const __r25MatcherPairInput = `echo pinokio${this.EOL}echo pinokio${this.EOL}`"));
+ assert.ok(combined.includes("const __r25NonceInput = `echo ${__r25PromptState.nonce}${this.EOL}`"));
+ const matcher="let re = /(.+)echo pinokio[\\r\\n]+pinokio[\\r\\n]+(\\1)/gs";
+ assert.equal(pinned.split(matcher).length-1,1);
+ assert.equal(combined.split(matcher).length-1,1);
+ assert.equal(combined.split('if (match && match.length > 0) {').length-1,1);
+ for(const predicate of [
+  'probe_command_sgr_split_count',
+  'sgr_color_setting_proven',
+  'sgr_color_setting_failed',
+  'no_argument_echo_guard',
+  'no_argument_echo_write',
+  'matcher-pair',
+  "'nonce'",
+  "'resolved_at'",
+ ]) assert.ok(combined.includes(predicate),`missing retained predicate/observation ${predicate}`);
+
+ // Every pass is bound: a source drift is rejected by the pinned SGR hash
+ // check, the Windows anchors are unique, and every cross-OS anchor is exact.
+ assert.throws(()=>patchSgrSource(pinned.replace('const { Terminal }','const {Terminal }')),/source hash differs/);
+ assert.throws(()=>patchCrossOsSource(windows.replace('this.prompt_pattern = await this.prompt(params.path)','this.prompt_pattern = await this.prompt(params.other)'),'/tmp/helper'),/pre-shell matched 0 times/);
 });

@@ -1,0 +1,1939 @@
+const { Terminal } = require('@xterm/headless');
+const { SerializeAddon } = require("xterm-addon-serialize");
+const sanitize = require("sanitize-filename");
+const kill = require('kill-sync')
+const fastq = require('fastq')
+const normalize = require('normalize-path');
+const { v4: uuidv4 } = require('uuid');
+const os = require('os');
+const fs = require('fs');
+//const pty = require('node-pty-prebuilt-multiarch-cp');
+//const pty = require('@cocktailpeanut/node-pty-prebuilt-multiarch')
+const pty = require('@homebridge/node-pty-prebuilt-multiarch')
+const path = require("path")
+const sudo = require("sudo-prompt-programfiles-x86");
+const unparse = require('yargs-unparser-custom-flag');
+const Util = require('./util')
+const Environment = require('./environment')
+const { applyWindowsNodePackageManagerEnv } = require('./windows_node_package_manager_env')
+const ShellParser = require('./shell_parser')
+const AnsiStreamTracker = require('./ansi_stream_tracker')
+const ShellStateSync = require('./shell_state_sync')
+const ShellRunTemplate = require('./api/shell_run_template')
+const { PYTHON_INSTALL_SPEC } = require('./bin/conda-pins')
+const CondaRuntimeGuard = require('./shell_conda_runtime_guard')
+const home = os.homedir()
+const WINDOWS_CMD_CONDA_COMMAND_PATTERN = /(?:^|[&|()]\s*)@?\s*(?:call\s+)?(?:"[^"]*[\\/]conda(?:\.bat|\.exe)?"|(?:[a-z]:)?[^&|()\s"]*[\\/]conda(?:\.bat|\.exe)?|conda(?:\.bat|\.exe)?)\s+/i
+
+function normalizeComparablePath(filePath, platform) {
+  const normalized = path.normalize(filePath)
+  return platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+function isBluefairyShimPath(filePath, platform) {
+  if (!filePath || typeof filePath !== "string") {
+    return false
+  }
+  const normalized = normalizeComparablePath(filePath.trim(), platform)
+  if (!normalized) {
+    return false
+  }
+  const shimDirName = path.basename(normalized)
+  if (shimDirName !== "shims") {
+    return false
+  }
+  const parentDirName = path.basename(path.dirname(normalized))
+  return parentDirName === "bluefairy" || parentDirName === ".bluefairy"
+}
+
+function stripBluefairyShimPaths(pathValue, platform) {
+  if (!pathValue || typeof pathValue !== "string") {
+    return pathValue
+  }
+  return pathValue
+    .split(path.delimiter)
+    .filter((entry) => entry && !isBluefairyShimPath(entry, platform))
+    .join(path.delimiter)
+}
+
+const CONDA_ACTIVATION_STATE_PATTERN = /^(?:_CE_(?:M|CONDA)|CONDA_(?:EXE|PYTHON_EXE|PREFIX(?:_\d+)?|DEFAULT_ENV|PROMPT_MODIFIER|SHLVL|PS1_BACKUP))$/
+
+function isCondaActivationStateKey(key) {
+  return typeof key === "string" && CONDA_ACTIVATION_STATE_PATTERN.test(key)
+}
+
+function stripInheritedCondaActivationState(env) {
+  for (const key of Object.keys(env)) {
+    if (isCondaActivationStateKey(key)) {
+      delete env[key]
+    }
+  }
+}
+
+function setDefaultEnvValue(env, key, value) {
+  const existingKey = Object.keys(env).find((envKey) => envKey.toLowerCase() === key.toLowerCase())
+  if (!existingKey) {
+    env[key] = value
+    return
+  }
+  const existingValue = env[existingKey]
+  if (typeof existingValue !== "string" || !existingValue.trim()) {
+    env[existingKey] = value
+  }
+}
+
+// xterm.js currently ignores DECSYNCTERM (CSI ? 2026 h/l) and renders it as text on Windows.
+// filterDecsync() removes these sequences so they do not pollute the terminal output.
+class Shell {
+  /*
+    params 
+    req := {
+      uri: <root uri>,
+      method,
+      params: {
+        id,
+        path,
+        env
+      }
+    }
+  */
+  constructor(kernel) {
+    this.EOL = os.EOL
+    this.kernel = kernel
+    this.platform = os.platform()
+    this.logs = {}
+    this.shell = this.platform === 'win32' ? 'cmd.exe' : 'bash';
+    this.supportsBracketedPaste = this.computeBracketedPasteSupport(this.shell)
+    if (this.kernel && this.kernel.bracketedPasteSupport) {
+      const cached = this.kernel.bracketedPasteSupport[(this.shell || '').toLowerCase()]
+      if (typeof cached === 'boolean') {
+        this.supportsBracketedPaste = cached
+      }
+    }
+    this.decsyncBuffer = ''
+    this.nudgeRestoreTimer = null
+    this.nudging = false
+    this.nudgeReleaseTimer = null
+    this.lastInputAt = 0
+    this.canNudge = true
+    this.enableNudge = false
+    this.awaitingIdleNudge = false
+    this.idleNudgeTimer = null
+    this.idleNudgeDelay = 100
+    this.ignoreNudgeOutput = false
+    this.userActive = false
+    this.userActiveTimer = null
+    this.userActiveTimeout = 1000
+    this.ansiTracker = new AnsiStreamTracker()
+    this.stateSync = new ShellStateSync(this)
+
+    // Windows: /D => ignore AutoRun Registry Key
+    // Others: --noprofile => ignore .bash_profile, --norc => ignore .bashrc
+    this.args = this.platform === 'win32' ? ["/D"] : ["--noprofile", "--norc"]
+
+    //this.vt = new Terminal({ allowProposedApi: true, scrollback: 5, })
+    // this.vt = new Terminal({
+    //     allowProposedApi: true,
+    //     cols: 200,
+    //     rows: 30,
+
+    // })
+    // this.vts = new SerializeAddon()
+    // this.vt.loadAddon(this.vts)
+    this.checkpoint = {
+      on: [],
+      sequence: [],
+      serialized: 0
+    }
+    this.queue = fastq((data, cb) => {
+      this.stream(data, cb)
+    }, 1)
+
+  }
+  async init_env(params) {
+    this.env = Object.assign({}, process.env)
+    for (const key of Object.keys(this.env)) {
+      if (key.toUpperCase().startsWith("BLUEFAIRY_")) {
+        delete this.env[key]
+      }
+    }
+    stripInheritedCondaActivationState(this.env)
+    // If the user has set PYTHONPATH, unset it.
+    if (this.env.PYTHONPATH) {
+      delete this.env.PYTHONPATH
+    }
+
+    if (this.env.CMAKE_MAKE_PROGRAM) {
+      delete this.env.CMAKE_MAKE_PROGRAM
+    }
+
+    if (this.env.CMAKE_GENERATOR) {
+      delete this.env.CMAKE_GENERATOR
+    }
+
+    //this.env.PNPM_CONFIG_PREFIX = this.kernel.path("bin/npm")
+    //this.env.pnpm_config_prefix = this.kernel.path("bin/npm")
+//    this.env.PNPM_HOME = this.kernel.path("bin/npm")
+//    this.env.pnpm_home = this.kernel.path("bin/npm")
+
+//    this.env.NPM_CONFIG_PREFIX = this.kernel.path("bin/npm")
+//    this.env.npm_config_prefix = this.kernel.path("bin/npm")
+
+    
+//    if (this.env.CUDA_HOME) {
+//      delete this.env.CUDA_HOME
+//    }
+    for(let key in this.env) {
+      if (key.startsWith("CUDA")) {
+        delete this.env[key]
+      }
+      if (/.*(SSH|SSL).*/.test(key)) {
+        delete this.env[key]
+      }
+    }
+
+    this.env.CONDA_SHORTCUTS = 0
+
+//    this.env.TCELL_MINIMIZE=1
+    this.env.CMAKE_OBJECT_PATH_MAX = 1024
+    this.env.PYTORCH_ENABLE_MPS_FALLBACK = 1
+    this.env.TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD = 1
+    //this.env.NODE_EXTRA_CA_CERTS = this.kernel.path("cache/XDG_DATA_HOME/caddy/pki/authorities/local/root.crt")
+//    this.env.PIP_REQUIRE_VIRTUALENV = "true"
+//    this.env.NPM_CONFIG_USERCONFIG = this.kernel.path("user_npmrc")
+//    this.env.NPM_CONFIG_GLOBALCONFIG = this.kernel.path("global_npmrc")
+//    this.env.npm_config_userconfig = this.kernel.path("user_npmrc")
+//    this.env.npm_config_globalconfig = this.kernel.path("global_npmrc")
+
+    // First override this.env with system env
+    let system_env = await Environment.get(this.kernel.homedir, this.kernel)
+    this.env = Object.assign(this.env, system_env)
+
+    const parentPath = (params.$parent && params.$parent.path) ? path.resolve(params.$parent.path) : null
+    const apiRoot = path.resolve(this.kernel.path("api")) + path.sep
+    const parentStat = parentPath ? await fs.promises.stat(parentPath).catch(() => null) : null
+
+    if (parentStat && parentStat.isFile() && parentPath.startsWith(apiRoot)) {
+      const api_path = Util.api_path(parentPath, this.kernel)
+
+      // initialize folders
+      await Environment.init_folders(api_path, this.kernel)
+
+      // apply app env to this.env
+      let app_env = await Environment.get(api_path, this.kernel)
+      this.env = Object.assign(this.env, app_env)
+    }
+    stripInheritedCondaActivationState(this.env)
+    let PATH_KEY = Object.keys(this.env).find((key) => key.toLowerCase() === "path") || "PATH";
+    if (!this.env[PATH_KEY]) {
+      // fall back to whichever casing exists so we don't end up writing to an undefined key
+      this.env[PATH_KEY] = this.env.Path || this.env.PATH || this.env.path;
+    }
+    if (this.isCmdShell()) {
+      // ignore 
+    } else {
+      this.env[PATH_KEY]= this.kernel.shellpath || [
+        './node_modules/.bin',
+        '/.nodebrew/current/bin',
+        '/usr/local/bin',
+        this.env[PATH_KEY]
+      ].join(':');
+    }
+
+    if (this.platform !== "win32") {
+      const historyDir = this.kernel.path("history");
+      await fs.promises.mkdir(historyDir, { recursive: true }).catch(() => {});
+      this.env.HISTFILE = path.resolve(historyDir, "bash_history");
+    }
+
+    if (this.platform === "linux") {
+      let gxx = this.kernel.which('g++')
+      if (gxx) {
+        this.env.NVCC_PREPEND_FLAGS = `-ccbin ${gxx}`
+      }
+    }
+
+    this.env[PATH_KEY] = this.env[PATH_KEY] + path.delimiter + path.resolve(this.kernel.homedir, 'bin')
+
+
+    if (params.env) {
+      for(let key in params.env) {
+        // iterate through the env attributes
+        let val = params.env[key]
+        if (key.toLowerCase() === "path") {
+          // "path" is a special case => merge with process.env.PATH
+          if (params.env.path) {
+            this.env[PATH_KEY] = `${params.env.path.join(path.delimiter)}${path.delimiter}${this.env[PATH_KEY]}`.replaceAll('"', '')
+            //this.env.PINOKIO_PATH = params.env.path.join(path.delimiter)
+            //this.env[PATH_KEY] = `$PINOKIO_PATH${path.delimiter}${this.env[PATH_KEY]}`
+          }
+          if (params.env.PATH) {
+            this.env[PATH_KEY] = `${params.env.PATH.join(path.delimiter)}${path.delimiter}${this.env[PATH_KEY]}`.replaceAll('"', '')
+            //this.env.PINOKIO_PATH = params.env.PATH.join(path.delimiter)
+            //this.env[PATH_KEY] = `$PINOKIO_PATH${path.delimiter}${this.env[PATH_KEY]}`
+          }
+          if (params.env.Path) {
+            this.env[PATH_KEY] = `${params.env.Path.join(path.delimiter)}${path.delimiter}${this.env[PATH_KEY]}`.replaceAll('"', '')
+            //this.env.PINOKIO_PATH = params.env.Path.join(path.delimiter)
+            //this.env[PATH_KEY] = `$PINOKIO_PATH${path.delimiter}${this.env[PATH_KEY]}`
+          }
+        } else if (Array.isArray(val)) {
+          if (this.env[key]) {
+            this.env[key] = `${val.join(path.delimiter)}${path.delimiter}${this.env[key]}`
+          } else {
+            this.env[key] = `${val.join(path.delimiter)}`
+          }
+        } else {
+          // for the rest of attributes, simply set the values
+          this.env[key] = params.env[key]
+        }
+      }
+    }
+
+    setDefaultEnvValue(this.env, "UV_HTTP_TIMEOUT", "60")
+    setDefaultEnvValue(this.env, "HF_HUB_DISABLE_UPDATE_CHECK", "1")
+    setDefaultEnvValue(this.env, "HF_TOKEN_PATH", this.kernel.envs?.HF_TOKEN_PATH || path.resolve(this.kernel.homedir, "cache", "HF_AUTH", "token"))
+
+    if (this.platform === "win32") {
+      const managedSslDir = path.resolve(this.kernel.homedir, "bin", "miniforge", "Library", "ssl")
+      const managedCertFile = path.resolve(managedSslDir, "cacert.pem")
+      const managedCertFileExists = await fs.promises.access(managedCertFile).then(() => true).catch(() => false)
+      if (managedCertFileExists) {
+        setDefaultEnvValue(this.env, "SSL_CERT_FILE", managedCertFile)
+        setDefaultEnvValue(this.env, "SSL_CERT_DIR", managedSslDir)
+      }
+
+      // Hugging Face file symlinks regularly fail on non-admin Windows setups.
+      // Default to no-symlink cache mode unless the user/app explicitly overrides it.
+      setDefaultEnvValue(this.env, "HF_HUB_DISABLE_SYMLINKS", "1")
+      setDefaultEnvValue(this.env, "HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+    }
+
+    stripInheritedCondaActivationState(this.env)
+    this.env[PATH_KEY] = stripBluefairyShimPaths(this.env[PATH_KEY], this.platform)
+
+    for(let key in this.env) {
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key) && key !== "ProgramFiles(x86)") {
+        delete this.env[key]
+      }
+      let val = this.env[key]
+      if (!ShellRunTemplate.isPinokioEnvArgKey(key) && /[\r\n]/.test(val)) {
+        const replaced = val.replaceAll(/[\r\n]+/g, ' ');
+        this.env[key] = replaced
+//        delete this.env[key]
+      }
+    }
+
+
+    if (params["-env"] && Array.isArray(params["-env"])) {
+      for(let key of params["-env"]) {
+        delete this.env[key]
+      }
+    }
+
+    if (this.platform === "win32") {
+      await applyWindowsNodePackageManagerEnv(this.env, {
+        targetPath: params && params.path ? params.path : this.kernel.homedir,
+      })
+    }
+  }
+  isCmdShell(shellName=this.shell) {
+    const name = (shellName || '').toLowerCase()
+    return name.includes('cmd.exe') || name === 'cmd'
+  }
+  isPowerShell(shellName=this.shell) {
+    const name = (shellName || '').toLowerCase()
+    return name.includes('powershell') || name.includes('pwsh')
+  }
+  hasCondaCommand(message) {
+    if (Array.isArray(message)) {
+      return message.some((item) => this.hasCondaCommand(item))
+    }
+    if (message && message.constructor === Object) {
+      return this.hasCondaCommand(this.buildStructuredMessage(message))
+    }
+    return typeof message === "string" && WINDOWS_CMD_CONDA_COMMAND_PATTERN.test(message)
+  }
+  shouldSuppressCmdEchoForConda(params) {
+    return this.platform === "win32" &&
+      this.isCmdShell() &&
+      !(params && params.input) &&
+      this.hasCondaCommand(params && params.message)
+  }
+  prepareCommandExecution(params, command) {
+    if (!this.shouldSuppressCmdEchoForConda(params)) {
+      return { command }
+    }
+    return {
+      command,
+      preview: command,
+      quietCmd: true,
+    }
+  }
+  isUnresolvedTemplate(value) {
+    return typeof value === "string" && /^\{\{[\s\S]*\}\}$/.test(value)
+  }
+  normalizeStructuredMessage(value) {
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => this.normalizeStructuredMessage(item))
+        .filter((item) => typeof item !== "undefined")
+    }
+    if (value && value.constructor === Object) {
+      const normalized = {}
+      for (const [key, item] of Object.entries(value)) {
+        const rendered = this.normalizeStructuredMessage(item)
+        if (typeof rendered !== "undefined") {
+          normalized[key] = rendered
+        }
+      }
+      return normalized
+    }
+    if (this.isUnresolvedTemplate(value)) {
+      return undefined
+    }
+    return value
+  }
+  quoteArgForShell(value, shellName=this.shell) {
+    const input = value == null ? "" : String(value)
+    if (ShellRunTemplate.hasEnvArgMarker(input)) {
+      return ShellRunTemplate.quoteEnvArgComposite(input, shellName)
+    }
+    if (this.isCmdShell(shellName)) {
+      return `"${input.replace(/([()%!^"<>&|])/g, '^$1')}"`
+    }
+    if (this.isPowerShell(shellName)) {
+      return `'${input.replace(/'/g, "''")}'`
+    }
+    return `'${input.split("'").join("'\"'\"'")}'`
+  }
+  buildStructuredMessage(message, shellName=this.shell) {
+    // Structured message objects are argv-like; unresolved pure-template leaves are omitted.
+    const normalized = this.normalizeStructuredMessage(message)
+    if (!normalized || (normalized.constructor === Object && Object.keys(normalized).length === 0)) {
+      return ""
+    }
+    const chunks = unparse(normalized)
+      .filter((item) => item != null)
+      .map((item) => this.quoteArgForShell(item, shellName))
+    if (chunks.length === 0) {
+      return ""
+    }
+    if (this.isPowerShell(shellName)) {
+      return `& ${chunks.join(" ")}`
+    }
+    return chunks.join(" ")
+  }
+  async start(params, ondata, options = {}) {
+    this.ondata = ondata
+    this.condaRuntimeGuard = !!(options && options[CondaRuntimeGuard.SHELL_RUN_GUARD_OPTION])
+    if (this.nudgeRestoreTimer) {
+      clearTimeout(this.nudgeRestoreTimer)
+      this.nudgeRestoreTimer = null
+    }
+    if (this.nudgeReleaseTimer) {
+      clearTimeout(this.nudgeReleaseTimer)
+      this.nudgeReleaseTimer = null
+    }
+    this.cancelIdleNudge()
+    this.nudging = false
+    this.lastInputAt = 0
+    this.canNudge = true
+    this.ignoreNudgeOutput = false
+    if (this.userActiveTimer) {
+      clearTimeout(this.userActiveTimer)
+      this.userActiveTimer = null
+    }
+    this.userActive = false
+    this.decsyncBuffer = ''
+    this.stateSync.reset()
+    this.envArgsPreviewed = false
+    this.commandEchoPreview = null
+    this.commandEchoPreviewed = false
+    this.exec_cmd = null
+    this.quietCmdExecution = false
+
+    /*
+      params := {
+        group: <group id>,
+        id: <shell id>,
+        path: <shell cwd (always absolute path)>,
+        env: <environment value key pairs>
+      }
+    */
+
+    this.kill_messages = params.kill
+
+    this.cols = 100
+    this.rows = 30
+
+    if (params.cols) {
+      this.cols = params.cols
+    }
+    if (params.rows) {
+      this.rows = params.rows
+    }
+    if (params.client && params.client.cols) {
+      this.cols = params.client.cols
+    }
+    if (params.client && params.client.rows) {
+      this.rows = params.client.rows
+    }
+
+    this.vt = new Terminal({
+      allowProposedApi: true,
+      cols: this.cols,
+      rows: this.rows,
+      fontSize: 12,
+    })
+    this.vts = new SerializeAddon()
+    this.vt.loadAddon(this.vts)
+
+    const extractTerminalIdFromShellId = (shellId) => {
+      if (typeof shellId !== "string" || shellId.length === 0) {
+        return ""
+      }
+      const separatorIndex = shellId.indexOf("?")
+      if (separatorIndex < 0) {
+        return ""
+      }
+      const queryString = shellId.slice(separatorIndex + 1).replace(/&amp;/g, "&")
+      try {
+        const parsed = new URLSearchParams(queryString)
+        return typeof parsed.get("terminal_id") === "string" ? parsed.get("terminal_id").trim() : ""
+      } catch (error) {
+        return ""
+      }
+    }
+
+    // 1. id
+    this.id = (params.id ? params.id : uuidv4())
+    const explicitTerminalId = typeof params.terminal_id === "string" ? params.terminal_id.trim() : ""
+    const resolvedTerminalId = explicitTerminalId || extractTerminalIdFromShellId(this.id)
+    this.terminal_id = resolvedTerminalId || null
+    if (resolvedTerminalId) {
+      params.terminal_id = resolvedTerminalId
+    }
+
+    // 2. group id
+    this.group = params.group
+
+    // 2. env
+    // default env
+    await this.init_env(params)
+
+
+    this.ondata({ raw: `\r\n████\r\n██ Starting Shell ${this.id}\r\n` })
+
+    this.start_time = Date.now()
+    const cloneSourceMessage = (value) => {
+      if (Array.isArray(value)) {
+        return value.slice()
+      }
+      if (value && typeof value === "object") {
+        try {
+          return JSON.parse(JSON.stringify(value))
+        } catch (error) {
+          return value
+        }
+      }
+      return value
+    }
+    this.source_message = cloneSourceMessage(params.message)
+    this.params = params
+    this.stateSync.configure(params.state_interval)
+    this.EOL = os.EOL
+    if (this.params.shell) {
+      this.shell = this.params.shell
+      const normalizedShell = (this.shell || '').toLowerCase()
+      if (this.kernel && this.kernel.bracketedPasteSupport && typeof this.kernel.bracketedPasteSupport[normalizedShell] === 'boolean') {
+        this.supportsBracketedPaste = this.kernel.bracketedPasteSupport[normalizedShell]
+      } else {
+        this.supportsBracketedPaste = this.computeBracketedPasteSupport(this.shell)
+      }
+      if (this.isCmdShell(this.shell)) {
+        this.args = ["/D"]
+      } else if (this.isPowerShell(this.shell)) {
+        this.args = ["-NoLogo", "-NoProfile"]
+      } else if (/bash/i.test(this.shell)) {
+        this.args = ["--noprofile", "--norc"]
+        //this.args = [ "--login", "-i"]
+        this.EOL = "\n"
+        //if (this.platform === "win32") {
+        //  console.log("before transform this.env", this.env)
+        //  for(let key in this.env) {
+        //    let val = this.env[key]
+        //    if (val && typeof val === "string") {
+        //      // split with ;
+        //      let chunks = val.split(";")
+        //      let transformed_chunks = []
+        //      for(let chunk of chunks) {
+        //        if (path.isAbsolute(chunk)) {
+        //          let transformed = :normalize(chunk) 
+        //          transformed = "/" + transformed.replace(":", "")
+        //          transformed_chunks.push(transformed)
+        //        } else {
+        //          transformed_chunks.push(chunk)
+        //        }
+        //      }
+        //      this.env[key] = transformed_chunks.join(";")
+        //    }
+        //  }
+        //  console.log("after transform this.env", this.env)
+        //}
+      }
+    }
+    if (params._pinokio_cmd_delayed_expansion && this.isCmdShell(this.shell) && !this.args.includes("/V:ON")) {
+      this.args.push("/V:ON")
+    }
+
+    // 3. path => path can be http, relative, absolute
+    this.path = params.path
+
+    // automatically add self to the shells registry
+    this.kernel.shell.add(this)
+
+
+    if (params.sudo) {
+      let options = {
+        name: "Pinokio",
+//        env: {}
+//        icns: '/Applications/Electron.app/Contents/Resources/Electron.icns', // (optional)
+      };
+
+//      for(let key in this.env) {
+//        options.env[key] = String(this.env[key])
+//      }
+
+      // sudo-prompt uses TEMP
+      await fs.promises.mkdir(this.env.TEMP, { recursive: true }).catch((e) => { })
+      let response = await new Promise((resolve, reject) => {
+        params.message = this.build({ message: params.message })
+        if (ondata) ondata({ id: this.id, raw: params.message + "\r\n" })
+
+        // Modify process.env (and need to immediately revert it back to original process.env so as to not affect other logic)
+        let old_env = process.env
+        process.env = this.env
+        sudo.exec(params.message, options, (err, stdout, stderr) => {
+          if (err) {
+            console.log("SUDOPROMPT ERR", err)
+            // even when there's an error, just log the error, and don't throw the error. Instead, print the stdout so it displays what happened
+            resolve(stdout)
+//            reject(err)
+          } else if (stderr) {
+            console.log("SUDOPROMPT STDERR", stderr)
+            resolve(stdout)
+//            reject(stderr)
+          } else {
+            resolve(stdout)
+          }
+        });
+
+        // Immediately revert env back to original
+        process.env = old_env
+      })
+      if (ondata) ondata({
+        id: this.id,
+        raw: response.replaceAll("\n", "\r\n")
+      })
+      return response
+    } else {
+      let response = await this.request(params, async (stream) => {
+        if (ondata) ondata(stream)
+//        if (stream.prompt) {
+//          this.resolve()
+//        } else {
+//          if (ondata) ondata(stream)
+//        }
+      })
+      return response
+    }
+
+//    return this.id
+  }
+  resize({ cols, rows }) {
+//    console.log("RESIZE", { cols, rows })
+    this.cols = cols
+    this.rows = rows
+    if (this.ptyProcess && typeof this.ptyProcess.resize === "function") {
+      this.ptyProcess.resize(cols, rows)
+    }
+    if (this.vt && typeof this.vt.resize === "function") {
+      this.vt.resize(cols, rows)
+    }
+    this.stateSync.invalidate()
+  }
+  async emit2(message) {
+    /*
+    // buffer size
+    1. default:256
+    2. "interactive": true => 1024
+    3. "buffer": n => n
+    */
+    let chunk_size = 256  // default buffer: 256
+    if (this.params && this.params.buffer) {
+      chunk_size = this.params.buffer 
+    } else if (this.params.interactive) {
+      chunk_size = 1024
+    }
+//    console.log({ interactive: this.params.interactive, chunk_size })
+    this.canNudge = true
+    this.cancelIdleNudge()
+    for(let i=0; i<message.length; i+=chunk_size) {
+      let chunk = message.slice(i, i+chunk_size)
+//      console.log("write chunk", { i, chunk })
+      this.ptyProcess.write(chunk)
+      this.ondata({ i, total: message.length, type: "emit2" })
+      await new Promise(r => setTimeout(r, 10));
+//      if (interactive) {
+//        await new Promise(queueMicrotask); // zero-delay yield to avoid blocking
+//      } else {
+//        await new Promise(r => setTimeout(r, 1));
+//      }
+    }
+  }
+  emit(message) {
+    if (this.input) {
+      if (this.ptyProcess) {
+        this.stateSync.noteInput()
+        if (message.length > 1024) {
+          this.lastInputAt = Date.now()
+          this.canNudge = true
+          this.cancelIdleNudge()
+          this.emit2(message)
+        } else {
+          this.ptyProcess.write(message)
+          this.lastInputAt = Date.now()
+          this.canNudge = true
+          this.cancelIdleNudge()
+        }
+      }
+    }
+  }
+  send(message, newline, cb) {
+    if (this.ptyProcess) {
+      this.cb = cb
+      return new Promise((resolve, reject) => {
+        this.resolve = resolve
+        this.stateSync.noteInput()
+        if (Array.isArray(message)) {
+          for(let m of message) {
+            this.cmd = this.build({ message: m })
+            this.ptyProcess.write(this.cmd)
+            this.lastInputAt = Date.now()
+            this.canNudge = true
+            this.cancelIdleNudge()
+            if (newline) {
+              this.ptyProcess.write(this.EOL)
+              this.lastInputAt = Date.now()
+              this.canNudge = true
+              this.cancelIdleNudge()
+            }
+          }
+        } else {
+          this.cmd = this.build({ message })
+          this.ptyProcess.write(this.cmd)
+          this.lastInputAt = Date.now()
+          this.canNudge = true
+          this.cancelIdleNudge()
+          if (newline) {
+            this.ptyProcess.write(this.EOL)
+            this.lastInputAt = Date.now()
+            this.canNudge = true
+            this.cancelIdleNudge()
+          }
+        }
+      })
+    }
+  }
+  enter(message, cb) {
+    if (this.ptyProcess) {
+      this.cb = cb
+      return new Promise((resolve, reject) => {
+        this.resolve = resolve
+        this.stateSync.noteInput()
+        if (Array.isArray(message)) {
+          for(let m of message) {
+            this.cmd = this.build({ message: m })
+            this.ptyProcess.write(this.cmd)
+            this.ptyProcess.write(this.EOL)
+            this.lastInputAt = Date.now()
+            this.canNudge = true
+            this.cancelIdleNudge()
+          }
+        } else {
+          this.cmd = this.build({ message })
+          this.ptyProcess.write(this.cmd)
+          this.ptyProcess.write(this.EOL)
+          this.lastInputAt = Date.now()
+          this.canNudge = true
+          this.cancelIdleNudge()
+        }
+      })
+    }
+  }
+  write(message, cb) {
+    if (this.ptyProcess) {
+      this.cb = cb
+      return new Promise((resolve, reject) => {
+        this.resolve = resolve
+        this.stateSync.noteInput()
+        this.cmd = this.build({ message })
+        this.ptyProcess.write(this.cmd)
+        this.lastInputAt = Date.now()
+        this.canNudge = true
+        this.cancelIdleNudge()
+      })
+    }
+  }
+  clear() {
+    let buf = this.vts.serialize()
+    let cleaned = this.stripAnsi(buf)
+
+    // Log before resolving
+    this._log(buf, cleaned)
+    if (this.isCmdShell()) {
+      // For Windows
+      this.vt.write('\x1Bc');
+      //this.ptyProcess.write('cls\n');
+    } else {
+      // For Unix-like systems (Linux, macOS)
+      this.vt.write('\x1B[2J\x1B[3J\x1B[H');
+      //this.ptyProcess.write('clear\n')
+    }
+    this.stateSync.invalidate({ clearTail: true })
+  }
+  emitEnvArgsPreview(params) {
+    if (!params || !Array.isArray(params._pinokio_env_args) || params._pinokio_env_args.length === 0 || this.envArgsPreviewed) {
+      return
+    }
+    this.envArgsPreviewed = true
+    const raw = ShellRunTemplate.formatEnvArgsPreview(params._pinokio_env_args)
+    if (raw && this.ondata) {
+      this.ondata({ raw })
+    }
+  }
+  async run(params, cb) {
+    let r = await this.request(params, cb)
+    return r
+  }
+  async request(params, cb) {
+    // create the path if it doesn't exist
+    await fs.promises.mkdir(params.path, { recursive: true }).catch((e) => { })
+
+
+    // not connected => make a new connection => which means get a new prompt
+    // if already connected => no need for a new prompt
+    if (params.input) {
+      this.input = params.input
+    }
+    if (params.persistent) {
+      this.persistent = params.persistent
+    }
+    this.prompt_pattern = await this.prompt(params.path)
+    this.cb = cb
+    let r = await this.exec(params)
+    return r
+  }
+  respond(data) {
+    this.clear()
+    this.resolve(data)
+    this.cb  = undefined // clean up cb so that it doesn't get triggered anymore
+    this.resolve = undefined
+  }
+  // get the prompt => used to detec when the process ends (even when there is no clean exit)
+  prompt(cwd) {
+    return new Promise((resolve, reject) => {
+      const config = {
+        name: 'xterm-color',
+        cols: 1000,
+        rows: Math.max(this.rows || 24, 24),
+        //cols: 1000,
+        //rows: 30,
+      }
+      if (cwd) {
+        config.cwd = path.resolve(cwd)
+      }
+      config.env = this.env
+      //let re = /(.+\r\n)(\1)/gs
+
+      //let re = /([\r\n]+[^\r\n]+)(\1)/gs
+      let re = /(.+)(\1)/gs
+      let term = pty.spawn(this.shell, this.args, config)
+      let vt = new Terminal({
+        allowProposedApi: true,
+        fontSize: 12
+      })
+      let vts = new SerializeAddon()
+      vt.loadAddon(vts)
+
+      let queue = fastq((data, cb) => {
+        if (this.prompt_ready) {
+          vt.write(data, () => {
+            let buf = vts.serialize()
+            let re = /(.+)echo pinokio[\r\n]+pinokio[\r\n]+(\1)/gs
+            const match = re.exec(buf)
+            if (match && match.length > 0) {
+              this.prompt_ready = false
+              this.prompt_done = true
+              let stripped = this.stripAnsi(match[1])
+              const p = stripped
+                .replaceAll(/[\r\n]/g, "")
+                .trim()
+                .replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              term.kill()
+              vt.dispose()
+              queue.killAndDrain()
+              resolve(p)
+            }
+          })
+          cb()
+        }
+      }, 1)
+      term.onData((data) => {
+        if (!this.prompt_done) {
+          if (this.prompt_ready) {
+            queue.push(this.filterDecsync(data))
+          } else {
+            setTimeout(() => {
+              if (!this.prompt_ready) {
+                this.prompt_ready = true
+                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)
+              }
+            }, 500)
+          }
+        }
+      });
+    })
+  }
+  stripAnsi (str) {
+    const pattern = [
+      '[\\u001B\\u009B][[\\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]+)*|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)',
+      '(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-Za-z=><~]))'
+    ].join('|');
+    const regex = new RegExp(pattern, 'gi')
+    return str.replaceAll(regex, '');
+  }
+  computeBracketedPasteSupport(shellName) {
+    const name = (shellName || '').toLowerCase()
+    if (!name) {
+      return true
+    }
+    if (name.includes('cmd.exe') || name === 'cmd') {
+      return false
+    }
+    if (name.includes('powershell') || name.includes('pwsh')) {
+      return false
+    }
+    return true
+  }
+  exists(abspath) {
+    return new Promise(r=>fs.access(abspath, fs.constants.F_OK, e => r(!e)))
+  }
+  build (params) {
+    if (params.message) {
+      if (typeof params.message === "string") {
+        return params.message
+//        // raw string -> do not touch
+//        if (this.platform === "win32") {
+//          delimiter = " & ";
+//        } else {
+//          delimiter = " ; ";
+//        }
+//        let m = params.message + delimiter + `echo "FINISHED: ${params.message}"\r\n`
+//        return m
+      } else if (Array.isArray(params.message)) {
+//        params.message.push(`echo "SHELL FINISHED RUNNING"\r\n`)
+        // if params.message is empty, filter out
+        //let delimiter = " && "
+        let delimiter
+        if (this.isCmdShell()) {
+          if (params.chain) {
+            if (params.chain === "&") {
+              delimiter = " && ";   // stop if one command in the chain fails
+            } else if (params.chain === "|") {
+              delimiter = " || ";   // only run the rest of the chain if a command fails
+            } else if (params.chain === "*") {
+              delimiter = " & ";   // always run all commands regardless of whether a command fails
+            } else {
+              // exception => use the safe option (stop when command fails)
+              delimiter = " && "; // must use &&. & doesn't necessariliy wait until the curruent command finishes
+            }
+          } else {
+            // default
+            delimiter = " && "; // must use &&. & doesn't necessariliy wait until the curruent command finishes
+          }
+        } else {
+          if (params.chain) {
+            if (params.chain === "&") {
+              delimiter = " && ";   // stop if one command in the chain fails
+            } else if (params.chain === "|") {
+              delimiter = " || ";   // only run the rest of the chain if a command fails
+            } else if (params.chain === "*") {
+              delimiter = " ; ";   // always run all commands regardless of whether a command fails
+            } else {
+              // exception => use the safe option (stop when command fails)
+              delimiter = " && "; // must use &&. & doesn't necessariliy wait until the curruent command finishes
+            }
+          } else {
+            // default
+            delimiter = " && "; // must use &&. & doesn't necessariliy wait until the curruent command finishes
+          }
+        }
+        return params.message.map((message) => {
+          if (message && message.constructor === Object) {
+            return this.buildStructuredMessage(message)
+          }
+          return message
+        }).filter((m) => {
+          return m && !/^\s+$/.test(m)
+        }).join(delimiter)
+        //return params.message.join(" && ")
+      } else {
+        return this.buildStructuredMessage(params.message)
+      }
+    } else {
+      return ""
+    }
+  }
+  conda_hook () {
+    if (this.platform === "win32") {
+      if (/bash/i.test(this.shell)) {
+        const conda_sh = this.kernel.path("bin/miniforge/etc/profile.d/conda.sh")
+        return `source ${this.quoteArgForShell(Util.p2u(conda_sh))}`
+      } else {
+        return "conda_hook"
+      }
+    } else {
+      return `eval "$(conda shell.bash hook)"`
+    }
+  }
+  async activate(params) {
+
+    // conda and venv can coexist
+    // 1. first process conda
+    //    - if conda is not specified => base => no need to create
+    //    - if conda is specified
+    //      - if string => the string is the path => create if doesn't exist yet
+    //      - if object => the conda.path is the path => create if doesn't exist yet
+    // 2. then process venv
+
+    const isNumber = (value) => {
+      return !isNaN(Number(value)) && isFinite(Number(value));
+    }
+
+
+    // 1. conda
+    let conda_path
+    let conda_name
+    let conda_python = PYTHON_INSTALL_SPEC
+    let conda_args
+    let conda_activate
+
+    if (params.conda) {
+
+      conda_args = params.conda.args
+
+      // 1. conda_path/conda_name/conda_python
+      if (typeof params.conda === "string") {
+        // params.conda => interpret as path
+        conda_path = params.conda
+      } else {
+        // params.conda.skip
+        if (params.conda.skip) {
+          // do nothing
+        } else {
+          if (typeof params.conda === "string") {
+            conda_path = params.conda
+          } else {
+            // conda_path
+            if (params.conda.path) {
+              conda_path = params.conda.path
+            } else if (params.conda.name) {
+              conda_name = params.conda.name
+            } else {
+              throw new Error("when specifying conda as an object, the conda.name or conda.path must exist")
+            }
+
+            if (params.conda.activate) conda_activate = params.conda.activate
+
+            // conda_python
+            if (params.conda.python) {
+              if (isNumber(params.conda.python)) {
+                conda_python = "python=" + params.conda.python
+              } else {
+                conda_python = params.conda.python
+              }
+            } else if (params.conda_python) {
+              if (isNumber(params.conda_python)) {
+                conda_python = "python=" + params.conda_python
+              } else {
+                conda_python = params.conda_python
+              }
+            }
+          }
+        }
+      }
+    } else {
+      conda_name = "base"
+    }
+
+
+    // 2. conda_activation
+
+    let timeout
+    if (this.isCmdShell()) {
+      timeout = 'C:\\Windows\\System32\\timeout /t 1 > nul'
+    } else {
+      //timeout = "sleep '1'"
+      timeout = '/usr/bin/sleep 1'
+    }
+
+
+    let conda_hook = this.conda_hook()
+    let conda_activation = []
+    if (conda_activate) {
+      if (typeof conda_activate === "string") {
+        if (conda_activate === "minimal") {
+          conda_activation = [
+            conda_hook,
+            'conda activate base',
+          ]
+        }
+      } else if (Array.isArray(conda_activate)) {
+        conda_activation = conda_activate
+      }
+    } else if (conda_path) {
+      let env_path = path.resolve(params.path, conda_path)
+      const shell_env_path = (this.platform === "win32" && /bash/i.test(this.shell))
+        ? this.quoteArgForShell(Util.p2u(env_path))
+        : this.quoteArgForShell(env_path)
+      let env_exists = await this.exists(env_path)
+      if (env_exists) {
+        conda_activation = [
+          conda_hook,
+//          timeout,
+          `conda deactivate`,
+          `conda deactivate`,
+          `conda deactivate`,
+//          timeout,
+          `conda activate ${shell_env_path}`,
+//          timeout,
+        ]
+      } else {
+        conda_activation = [
+          conda_hook,
+//          timeout,
+          `conda create -y -p ${shell_env_path} ${conda_python} ${conda_args ? conda_args : ''}`,
+          `conda deactivate`,
+          `conda deactivate`,
+          `conda deactivate`,
+//          timeout,
+          `conda activate ${shell_env_path}`,
+//          timeout,
+        ]
+      }
+    } else if (conda_name) {
+      if (conda_name === "base") {
+        conda_activation = [
+          conda_hook,
+//          timeout,
+          `conda deactivate`,
+          `conda deactivate`,
+          `conda deactivate`,
+//          timeout,
+          `conda activate ${conda_name}`,
+//          timeout,
+        ]
+      } else {
+        let envs_path = this.kernel.bin.path("miniforge/envs")
+        let env_path = path.resolve(envs_path, conda_name)
+        let env_exists = await this.exists(env_path)
+        if (env_exists) {
+          conda_activation = [
+            conda_hook,
+//            timeout,
+            `conda deactivate`,
+            `conda deactivate`,
+            `conda deactivate`,
+//            timeout,
+            `conda activate ${conda_name}`,
+//            timeout,
+          ]
+        } else {
+          conda_activation = [
+            conda_hook,
+            `conda create -y -n ${conda_name} ${conda_python} ${conda_args ? conda_args : ''}`,
+            `conda deactivate`,
+            `conda deactivate`,
+            `conda deactivate`,
+//            timeout,
+            `conda activate ${conda_name}`,
+//            timeout,
+          ]
+        }
+      }
+    } else {
+      // no conda name or conda path => means don't activate any env
+      conda_activation = []
+    }
+
+    // Visual Studio Build Tools (Exception)
+    // only add conda env if conda exists
+//    if (conda_activation.length > 0) {
+//      const vs_path_env = this.kernel.bin.vs_path_env
+//      console.log({ vs_path_env })
+//      if (vs_path_env && vs_path_env.PATH) {
+//        const vs = `conda env config vars set PATH=${vs_path_env.PATH.join(path.delimiter)}${path.delimiter}%PATH%`
+//        console.log({ vs })
+//        conda_activation.push(vs)
+//      }
+//    }
+
+    /*
+      ONLY inject vcvarsall if "build": true
+
+      {
+        method,
+        params,
+        build: true
+      }
+    */
+    if (params.build) {
+      if (this.platform === "win32") {
+        try {
+          const vcvars_path = this.kernel.bin.vs_path_env && this.kernel.bin.vs_path_env.VCVARSALL_PATH
+          const architecture = os.arch().toLowerCase();  // 'x64', 'ia32' (32-bit), etc.
+          const armArchitecture = process.arch.toLowerCase(); // For ARM-based architectures (on Windows), process.arch might be 'arm64', 'arm', etc.
+
+          // Map architectures to vcvarsall.bat argument
+          let arg
+          if (architecture === 'x64' || armArchitecture === 'arm64') {
+            //arg = 'amd64';  // Native 64-bit architecture
+            arg = 'x64';
+          } else if (architecture === 'ia32' || armArchitecture === 'arm') {
+            arg = 'x86';    // Native 32-bit architecture
+          } else if (armArchitecture === 'x86_arm64') {
+            arg = 'x86_arm64';  // ARM64 on x86
+          } else if (armArchitecture === 'x86_arm') {
+            arg = 'x86_arm';    // ARM on x86
+          } else if (armArchitecture === 'amd64_arm64') {
+            arg = 'amd64_arm64'; // ARM64 on x64
+          } else if (armArchitecture === 'amd64_arm') {
+            arg = 'amd64_arm';   // ARM on x64
+          } else {
+            console.log(`Unsupported arch: os.arch()=${architecture}, process.arch=${armArchitecture}`)
+          }
+
+          const activate_root = this.kernel.bin.path("miniforge/etc/conda/activate.d")
+          const logDir = this.kernel.path("cache", "logs")
+          await fs.promises.mkdir(logDir, { recursive: true }).catch(() => {})
+          const logSuffix = this.id || Date.now()
+          const compiler_log = path.resolve(logDir, `vs-${logSuffix}.log`)
+          const cuda_log = path.resolve(logDir, `cuda-${logSuffix}.log`)
+          const compiler_candidates = [
+            path.resolve(activate_root, "pinokio", "vs2019_compiler_vars.bat"),
+            path.resolve(activate_root, "pinokio", "vs2022_compiler_vars.bat"),
+            path.resolve(activate_root, "vs2019_compiler_vars.bat"),
+            path.resolve(activate_root, "vs2022_compiler_vars.bat"),
+          ]
+          let compiler_script = null
+          for (const candidate of compiler_candidates) {
+            if (await this.exists(candidate)) {
+              compiler_script = candidate
+              break
+            }
+          }
+          if (compiler_script) {
+            conda_activation.push(`CALL "${compiler_script}" > "${compiler_log}" 2>&1`)
+          } else if (vcvars_path && arg) {
+            conda_activation.push(`CALL "${vcvars_path}" ${arg} > "${compiler_log}" 2>&1`)
+          }
+          const cuda_candidates = [
+            path.resolve(activate_root, "pinokio", "~cuda-nvcc_activate.bat"),
+            path.resolve(activate_root, "~cuda-nvcc_activate.bat"),
+          ]
+          let cuda_script = null
+          for (const candidate of cuda_candidates) {
+            if (await this.exists(candidate)) {
+              cuda_script = candidate
+              break
+            }
+          }
+          if (cuda_script) {
+            conda_activation.push(`CALL "${cuda_script}" > "${cuda_log}" 2>&1`)
+          }
+          // The conda-forge VS activation script prepends Library\lib before
+          // calling vcvars, but vcvars rebuilds LIB and drops that entry.
+          // Restore both the active Conda environment and managed CUDA import
+          // libraries after all compiler activation scripts have completed.
+          // CALL's second expansion is required because these commands are
+          // joined on one cmd.exe line and must read LIB after vcvars updates it.
+          conda_activation.push(`CALL set "LIB=%%CONDA_PREFIX%%\\Library\\lib;%%CUDA_HOME%%\\lib;%%LIB%%"`)
+        } catch (e) {
+          console.log('vc vars setup', e)
+        }
+      }
+    }
+
+    // Update env setting
+    if (this.env) {
+//        this.env.CONDA_PIP_INTEROP_ENABLED = "1"
+      this.env.CONDA_AUTO_ACTIVATE_BASE = "false"
+      this.env.PYTHONNOUSERSITE = "1"
+    } else {
+      //this.env = { CONDA_PIP_INTEROP_ENABLED: "1", CONDA_AUTO_ACTIVATE_BASE: "false", PYTHONNOUSERSITE: "1" }
+      this.env = { CONDA_AUTO_ACTIVATE_BASE: "false", PYTHONNOUSERSITE: "1" }
+    }
+
+
+    if (conda_name === "base") {
+      this.env.PIP_REQUIRE_VIRTUALENV = "true"
+    }
+
+    this.env.UV_PYTHON_PREFERENCE="only-managed"
+    this.env.UV_PYTHON_DOWNLOADS="automatic"
+
+    // 2. venv
+
+    /*
+    {
+      method: ...,
+      params: ...,
+      venv: <path_string>
+    }
+
+    or
+
+    {
+      method: ...,
+      params: ...,
+      venv: {
+        path: <path_string>,
+        python: <python version>
+    }
+
+    or
+
+    {
+      method: ...,
+      params: ...,
+      venv: <path_string>,
+      venv_python: <python version>
+    }
+
+    */
+    let venv_activation
+    if (params.venv) {
+      let env_path
+      let python_version = ""
+      let use_uv = false
+      if (typeof params.venv === "string") {
+        env_path = path.resolve(params.path, params.venv)
+        if (params.venv_python) {
+          python_version = ` --python ${params.venv_python}`
+          use_uv = true
+        }
+      } else if (typeof params.venv === "object" && params.venv.path) {
+        env_path = path.resolve(params.path, params.venv.path)
+        if (params.venv.python) {
+          python_version = ` --python ${params.venv.python}`
+          use_uv = true
+        }
+      }
+      if (env_path) {
+        const windowsBashVenv = this.platform === 'win32' && /bash/i.test(this.shell)
+        const shellEnvPath = windowsBashVenv ? `"${Util.p2u(env_path)}"` : env_path
+        let activate_path = (this.platform === 'win32' ? path.resolve(env_path, "Scripts", "activate") : path.resolve(env_path, "bin", "activate"))
+        let activate_command = windowsBashVenv
+          ? `source "${Util.p2u(activate_path)}" ${shellEnvPath}`
+          : (this.platform === "win32" ? `${activate_path} ${env_path}` : `source ${activate_path} ${env_path}`)
+        let deactivate_path = (windowsBashVenv ? "deactivate" : (this.platform === 'win32' ? path.resolve(env_path, "Scripts", "deactivate") : "deactivate"))
+        let env_exists = await this.exists(env_path)
+        if (env_exists) {
+          if (use_uv) {
+            venv_activation = [
+//              `python -m venv --upgrade ${env_path}`,
+//              `uv venv --allow-existing ${env_path}${python_version}`,
+              activate_command,
+//              timeout,
+            ]
+          } else {
+            venv_activation = [
+//              `python -m venv --upgrade ${env_path}`,
+              activate_command,
+//              timeout,
+            ]
+          }
+        } else {
+          if (use_uv) {
+            // when python version is specified as venv.python => use uv
+            venv_activation = [
+              `uv venv ${shellEnvPath}${python_version}`,
+              activate_command,
+//              `uv pip install --upgrade pip setuptools wheel`,
+              deactivate_path,
+//              timeout,
+              activate_command,
+//              timeout,
+            ]
+          } else {
+            // when python version is not specified, use the default python -m venv
+            venv_activation = [
+              `python -m venv ${shellEnvPath}`,
+              activate_command,
+//              `python -m pip install --upgrade pip setuptools wheel`,
+              deactivate_path,
+//              timeout,
+              activate_command,
+//              timeout,
+            ]
+          }
+        }
+      } else {
+        venv_activation = []
+      }
+    } else {
+      venv_activation = []
+    }
+
+    const managedBasePrefix = this.kernel.bin && typeof this.kernel.bin.path === "function"
+      ? this.kernel.bin.path("miniforge")
+      : this.kernel.path("bin/miniforge")
+    const flowSessionKey = [this.id, this.start_time].filter(Boolean).join(':')
+    if (this.condaRuntimeGuard) {
+      CondaRuntimeGuard.applyCondaRuntimeGuard(params, {
+        cwd: params.path,
+        managedBasePrefix,
+        ondata: (stream, type) => {
+          if (this.ondata) {
+            this.ondata(stream, type)
+          }
+        },
+        platform: this.platform,
+        sessionKey: flowSessionKey || this.group || (params.$parent && (params.$parent.id || params.$parent.path)) || params.id || params.path,
+        shellName: this.shell,
+      })
+    }
+
+    // 3. construct params.message
+    let activation = conda_activation.concat(venv_activation)
+    if (this.kernel.bin && typeof this.kernel.bin.activationCommands === "function") {
+      activation = activation.concat(this.kernel.bin.activationCommands(this))
+    }
+    if (activation.length > 0) {
+      let activation_str = this.build({
+        chain: "*",
+        message: activation
+      })
+      params.message = [activation_str].concat(params.message)
+    } else {
+      params.message = params.message
+    }
+//    params.message = conda_activation.concat(venv_activation).concat(params.message)
+
+
+
+//    params.message = conda_activation.concat(venv_activation).concat(params.message).map((cmd) => {
+//      if (this.platform === 'win32') {
+//        return `call ${cmd}`
+//      } else {
+//        return cmd
+//      }
+//    })
+    return params
+  }
+  async exec(params) {
+    this.parser = new ShellParser()
+    this.emitEnvArgsPreview(params)
+    const originalParams = {
+      input: params && params.input,
+      message: params && params.message,
+    }
+    params = await this.activate(params)
+    this.cmd = this.build(params)
+    const preparedCommand = this.prepareCommandExecution(originalParams, this.cmd)
+    this.exec_cmd = preparedCommand.command
+    this.commandEchoPreview = preparedCommand.preview || null
+    this.commandEchoPreviewed = false
+    this.quietCmdExecution = !!preparedCommand.quietCmd
+    let res = await new Promise((resolve, reject) => {
+      this.resolve = resolve
+      this.reject = reject
+      try {
+        const config = {
+          name: 'xterm-color',
+          //cols: 1000,
+          //rows: 30,
+          cols: this.cols,
+          rows: this.rows,
+        }
+        if (params.path) {
+          config.cwd = path.resolve(params.path)
+        }
+
+        config.env = this.env
+        if (!this.ptyProcess) {
+          // ptyProcess doesn't exist => create
+          this.done = false
+          const shellArgs = this.quietCmdExecution && this.isCmdShell()
+            ? this.args.concat(this.args.some((arg) => /^\/q$/i.test(arg)) ? [] : ["/Q"])
+            : this.args
+          this.ptyProcess = pty.spawn(this.shell, shellArgs, config)
+          this.ptyProcess.onData((data) => {
+            if (!this.monitor) {
+              this.monitor = ""
+            }
+            this.monitor = this.monitor + data
+            this.monitor = this.monitor.slice(-300) // last 300
+
+//            let notifications = this.parser.processData(data)
+//            if (notifications.length > 0) {
+//              console.log({ notifications })
+//              for(let notif of notifications) {
+//                if (notif.type !== "bell") {
+//                  Util.push({
+//                    image: path.resolve(__dirname, "../server/public/pinokio-black.png"),
+//                    message: notif.title,
+//                    sound: true,
+//                    timeout: 30,
+//                  })
+//                }
+//              }
+//            }
+
+            if (!this.done) {
+
+              // "request cursor position" handling: https://github.com/microsoft/node-pty/issues/535
+              if (data.includes('\x1b[6n')) {
+                const row = this.vt.buffer.active.cursorY + 1;
+                const col = this.vt.buffer.active.cursorX + 1;
+                const response = `\x1b[${row};${col}R`;
+                this.ptyProcess.write(response);
+                data = data.replace(/\x1b\[6n/g, ''); // remove the code
+              }
+
+              const filtered = this.filterDecsync(data)
+              if (this.awaitingIdleNudge) {
+                this.scheduleIdleNudge()
+              }
+              this.maybeNudgeForSequences(filtered)
+              this.queue.push(filtered)
+            }
+          });
+        }
+      } catch (e) {
+        console.log("** Error", e)
+        this.kill()
+      }
+    })
+    return res
+  }
+  stop(message) {
+    return this.kill(message)
+  }
+  continue(message) {
+    if (this.resolve) {
+      if (message) {
+        this.resolve(message)
+      } else {
+        let { cleaned } = this.stateSync.refresh(true)
+        this.resolve(cleaned)
+      }
+      this.resolve = undefined
+      this.ondata({ raw: `\r\n\r\n██ Detached from Shell ${this.id}\r\n\r\n` })
+    }
+  }
+  kill(message, force, cb) {
+
+    this.done = true
+    this.ready = false
+    if (this.nudgeRestoreTimer) {
+      clearTimeout(this.nudgeRestoreTimer)
+      this.nudgeRestoreTimer = null
+    }
+    if (this.nudgeReleaseTimer) {
+      clearTimeout(this.nudgeReleaseTimer)
+      this.nudgeReleaseTimer = null
+    }
+    this.cancelIdleNudge()
+    this.nudging = false
+    this.lastInputAt = 0
+    this.canNudge = true
+    this.ignoreNudgeOutput = false
+    if (this.userActiveTimer) {
+      clearTimeout(this.userActiveTimer)
+      this.userActiveTimer = null
+    }
+    this.userActive = false
+
+    let { buf, cleaned } = this.stateSync.refresh(true)
+
+    // Log before resolving
+    this._log(buf, cleaned)
+
+    if (this.resolve) {
+
+
+      if (message) {
+        this.resolve(message)
+      } else {
+        this.resolve(cleaned)
+      }
+      this.resolve = undefined
+    }
+    this.vt.dispose()
+    this.queue.killAndDrain()
+//    console.log("KILL PTY", this.id)
+    if (this.ptyProcess) {
+      if (cb) {
+        try {
+          kill(this.ptyProcess.pid, "SIGKILL", true)
+        } catch (e) {
+          console.log("kill", this.ptyProcess.pid, e)
+        }
+        this.ptyProcess.kill()
+        this.ptyProcess = undefined
+        // automatically remove the shell from this.kernel.shells
+        this.kernel.shell.rm(this.id)
+        if (!this.mute) {
+          this.ondata({ raw: `\r\n\r\n██ Terminated Shell ${this.id}\r\n████\r\n` })
+          this.ondata({ raw: "", type: "shell.kill" })
+        }
+        cb()
+      } else {
+        try {
+          kill(this.ptyProcess.pid, "SIGKILL", true)
+        } catch (e) {
+          console.log("kill", this.ptyProcess.pid, e)
+        }
+        this.ptyProcess.kill()
+        this.ptyProcess = undefined
+        // automatically remove the shell from this.kernel.shells
+        this.kernel.shell.rm(this.id)
+        if (!this.mute) {
+          this.ondata({ raw: `\r\n\r\n██ Terminated Shell ${this.id}\r\n████\r\n` })
+          this.ondata({ raw: "", type: "shell.kill" })
+        }
+      }
+    } else {
+      this.kernel.shell.rm(this.id)
+      if (!this.mute) {
+        this.ondata({ raw: `\r\n\r\n██ Terminated Shell ${this.id}\r\n████\r\n` })
+        this.ondata({ raw: "", type: "shell.kill" })
+      }
+    }
+
+
+    if (this.kernel.api.running[this.id]) {
+      if (typeof this.kernel.api.clearRunning === "function") this.kernel.api.clearRunning(this.id)
+      else delete this.kernel.api.running[this.id]
+    }
+    if (this.kernel.memory.local[this.id]) {
+      delete this.kernel.memory.local[this.id]
+    }
+
+//    this.ondata({
+//      id: this.id,
+//      type: "disconnect"
+//    })
+//    this.kernel.refresh(true)
+
+
+  }
+  log() {
+    let { buf, cleaned } = this.stateSync.refresh(true)
+    this._log(buf, cleaned)
+  }
+  filterDecsync(data) {
+    if (!data) return data
+
+    const prefix = '\u001b[?2026'
+    let chunk = this.decsyncBuffer ? this.decsyncBuffer + data : data
+    if (chunk.includes('\u2190')) {
+      chunk = chunk.replace(/\u2190/g, '\u001b')
+    }
+    this.decsyncBuffer = ''
+
+    let result = ''
+    let i = 0
+    while (i < chunk.length) {
+      if (chunk.charCodeAt(i) === 0x1b) { // ESC
+        const remaining = chunk.slice(i)
+        if (remaining.startsWith('\u001b[?2026h') || remaining.startsWith('\u001b[?2026l')) {
+          i += 8
+          continue
+        }
+
+        // Check if the remaining characters form a partial prefix of DECSYNCTERM
+        let matched = 0
+        const len = Math.min(prefix.length, remaining.length)
+        while (matched < len && remaining[matched] === prefix[matched]) {
+          matched++
+        }
+        if (matched === remaining.length && matched < prefix.length + 1) {
+          this.decsyncBuffer = remaining
+          return result
+        }
+      }
+      result += chunk[i]
+      i++
+    }
+
+    return result
+  }
+  setUserActive(active, ttl) {
+    const clearTimer = () => {
+      if (this.userActiveTimer) {
+        clearTimeout(this.userActiveTimer)
+        this.userActiveTimer = null
+      }
+    }
+    if (active) {
+      this.userActive = true
+      this.lastInputAt = Date.now()
+      const parsedTtl = Number(ttl)
+      const timeout = Number.isFinite(parsedTtl) ? parsedTtl : this.userActiveTimeout
+      clearTimer()
+      if (timeout > 0) {
+        this.userActiveTimer = setTimeout(() => {
+          this.userActive = false
+          this.userActiveTimer = null
+        }, timeout)
+      }
+    this.cancelIdleNudge()
+    } else {
+      clearTimer()
+      this.userActive = false
+    }
+  }
+  maybeNudgeForSequences(chunk = '') {
+    if (!this.enableNudge) {
+      return
+    }
+    if (!chunk || typeof chunk !== 'string') {
+      return
+    }
+    const detection = this.ansiTracker.push(chunk)
+    if (!detection) {
+      return
+    }
+    if (this.ignoreNudgeOutput || this.userActive) {
+      return
+    }
+    if (this.nudging || !this.canNudge) {
+//      console.log('[nudge] guard: nudging/canNudge', { nudging: this.nudging, canNudge: this.canNudge, reason: detection.reason })
+      return
+    }
+    const sinceInput = Date.now() - this.lastInputAt
+    if (sinceInput < 200) {
+//      console.log('[nudge] guard: recent input', { sinceInput, reason: detection.reason })
+      return
+    }
+//    console.log('[nudge] scheduling idle nudge', {
+//      reason: detection.reason,
+//      sinceInput,
+//      preview: chunk.slice(0, 160)
+//    })
+    this.requestIdleNudge()
+  }
+  cancelIdleNudge() {
+    if (this.idleNudgeTimer) {
+      clearTimeout(this.idleNudgeTimer)
+      this.idleNudgeTimer = null
+    }
+    this.awaitingIdleNudge = false
+  }
+  requestIdleNudge() {
+    if (this.awaitingIdleNudge || this.nudging || !this.canNudge) {
+      return
+    }
+    this.awaitingIdleNudge = true
+    this.scheduleIdleNudge()
+  }
+  scheduleIdleNudge() {
+    if (!this.awaitingIdleNudge) {
+      return
+    }
+    const delay = this.idleNudgeDelay || 500
+    if (this.idleNudgeTimer) {
+      clearTimeout(this.idleNudgeTimer)
+    }
+    this.idleNudgeTimer = setTimeout(() => {
+      if (this.nudging || !this.canNudge) {
+        this.cancelIdleNudge()
+        return
+      }
+      this.idleNudgeTimer = null
+      this.awaitingIdleNudge = false
+      this.canNudge = false
+//      console.log('[nudge] idle window elapsed')
+      this.forceTerminalNudge()
+    }, delay)
+  }
+  forceTerminalNudge() {
+    if (!this.ptyProcess || this.nudging) {
+//      console.log('[nudge] force skipped', { hasPty: !!this.ptyProcess, nudging: this.nudging })
+      return
+    }
+    this.cancelIdleNudge()
+    const baseCols = Number.isFinite(this.cols) ? this.cols : (this.vt && Number.isFinite(this.vt.cols) ? this.vt.cols : 80)
+    const baseRows = Number.isFinite(this.rows) ? this.rows : (this.vt && Number.isFinite(this.vt.rows) ? this.vt.rows : 24)
+    const cols = Math.max(2, Math.floor(baseCols))
+    const rows = Math.max(2, Math.floor(baseRows))
+    if (cols <= 2) {
+      return
+    }
+    this.ignoreNudgeOutput = true
+    this.nudging = true
+//    console.log('[nudge] shrink start', { cols: cols - 1, rows })
+    this.resize({ cols: cols - 1, rows })
+    if (this.nudgeRestoreTimer) {
+      clearTimeout(this.nudgeRestoreTimer)
+    }
+    this.nudgeRestoreTimer = setTimeout(() => {
+//      console.log('[nudge] restore', { cols, rows })
+//      console.log('[nudge] restore start', { cols, rows })
+      this.resize({ cols, rows })
+      if (this.nudgeReleaseTimer) {
+        clearTimeout(this.nudgeReleaseTimer)
+      }
+      this.nudgeReleaseTimer = setTimeout(() => {
+        this.nudging = false
+        this.canNudge = true
+        this.ignoreNudgeOutput = false
+//        console.log('[nudge] complete')
+        this.nudgeReleaseTimer = null
+      }, 100)
+      this.nudgeRestoreTimer = null
+    }, 100)
+  }
+  _log(_buf, cleaned) {
+    let time = `${new Date().toLocaleString()} (${Date.now()})`
+
+    let data = {}
+
+    data.cleaned = `######################################################################
+#
+# group: ${this.group}
+# id: ${this.id}
+# index: ${this.index}
+# cmd: ${this.cmd}
+# timestamp: ${time}
+
+${cleaned}
+
+`
+
+    this.kernel.log(data, this.group, { index: this.index })
+  }
+  stream(msg, callback) {
+    if (msg === "\u0007") {
+      // Ignore bell sound escape character because it slows down everything and makes redundant sound
+      callback()
+      return
+    }
+    this.vt.write(msg, () => {
+      this.stateSync.noteOutput(msg)
+      let buf
+      let cleaned
+      try {
+        ({ buf, cleaned } = this.stateSync.refresh(this.stateSync.shouldForceRefresh()))
+      } catch (e) {
+        console.log("state sync error", e)
+        callback()
+        return
+      }
+      let response = {
+        id: this.id,
+        raw: msg,
+        cleaned,
+        state: cleaned,
+        buf,
+        shell_id: this.id
+      }
+      this.state = cleaned
+      if (this.cb) {
+        this.cb(response)
+      }
+
+      // Decide whether to kill or continue
+      if (this.ready) {
+        // when ready, watch out for the prompt pattern that terminates with [\r\n ]
+        let termination_prompt_re = new RegExp(this.prompt_pattern + "[ \r\n]*$", "g")
+        let line = cleaned.replaceAll(/[\r\n]/g, "")
+        let test = line.match(termination_prompt_re)
+        if (test) {
+          let cache = cleaned
+          // todo: may need to handle cases when the command returns immediately with no output (example: 'which brew' returns immediately with no text if brew doesn't exist)
+          setTimeout(() => {
+            let latest
+            try {
+              latest = this.stateSync.refresh(true).cleaned
+            } catch (e) {
+              console.log("state sync error", e)
+              callback()
+              return
+            }
+            if (cache === latest) {
+              if (this.params.onprompt) {
+                this.params.onprompt(this)
+              }
+              if (this.input || this.persistent) {
+//                if (this.cb) this.cb({
+//                  //raw: cached_msg,
+//                  //raw: msg,
+//                  //raw: "",
+//                  cleaned,
+//                  state: cleaned,
+//                  prompt: true
+//                })
+                callback()
+              } else {
+                callback()
+                this.kill()
+              }
+            } else {
+              //console.log("## more incoming... ignore")
+            }
+          }, 500)
+        } else {
+          callback()
+        }
+      } else {
+        callback()
+        // when not ready, wait for the first occurence of the prompt pattern.
+        let prompt_re = new RegExp(this.prompt_pattern, "g")
+        let test = cleaned.replaceAll(/[\r\n]/g, "").match(prompt_re)
+        if (test) {
+          if (test.length > 0) {
+            this.ready = true
+            if (this.params && this.params.onready) {
+              this.params.onready()
+            }
+            if (this.ptyProcess) {
+              this.stateSync.noteInput()
+              if (this.commandEchoPreview && !this.commandEchoPreviewed) {
+                this.commandEchoPreviewed = true
+                this.queue.push(`${this.commandEchoPreview}${this.EOL}`)
+              }
+              this.ptyProcess.write(`${this.exec_cmd || this.cmd}${this.EOL}`)
+//              setTimeout(() => {
+//                this.ptyProcess.write('\x1B[?2004h');
+//              }, 500)
+            }
+          }
+        }
+        //callback()
+      }
+    })
+  }
+  regex (str) {
+    let matches = /^\/([^\/]+)\/([dgimsuy]*)$/.exec(str)
+    if (!/g/.test(matches[2])) {
+      matches[2] += "g"   // if g option is not included, include it (need it for matchAll)
+    }
+    return new RegExp(matches[1], matches[2])
+  }
+}
+module.exports = Shell
