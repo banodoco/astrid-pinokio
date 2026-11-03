@@ -808,6 +808,11 @@ function actionPlan(action, index, tuple, origin) {
   const plan = { schema: 'astrid.r25.pinokio-action-plan.v1', action, action_id: `r25-${action}-${origin.run_id}-${origin.run_attempt}`, action_index: index, slot_id: SLOT, tuple, origin: { run_id: origin.run_id, run_attempt: origin.run_attempt, producer_job_id: origin.producer_job_id }, operation: action === 'rollback' ? 'reset-and-reinstall-recovery-boundary' : action, script };
   return { plan, action_sha256: jsonDigest(plan) };
 }
+function latestSetupStepResultObserved(evidence) {
+  const events = Array.isArray(evidence?.events) ? evidence.events : [];
+  const latestStart = events.filter(event => event?.kind === 'start' && Number.isInteger(event.index)).at(-1);
+  return Boolean(latestStart && events.some(event => event?.kind === 'result' && event.index === latestStart.index));
+}
 
 async function main() {
   const cli = args(process.argv.slice(2));
@@ -940,7 +945,10 @@ async function main() {
     }
     if (preparation.first_error || preparation.inner_exit.code !== 0 || preparation.terminal.error) throw new Error('disposable Pinokio install preparation failed');
     if (crossDiagnostic) {
-      writeCanonical(path.join(diagnostics, 'r25-setup-result.json'), { schema: 'astrid.r25.setup-diagnostic-result.v1', diagnostic_only: true, preparation });
+      const setupEvidence = readJson(path.join(diagnostics, 'setup-install-diagnostics.json'));
+      if (!latestSetupStepResultObserved(setupEvidence)) throw new Error('cross-OS setup diagnostic refused: latest setup step has no matching result');
+      writeCanonical(path.join(diagnostics, 'r25-setup-result.json'), { schema: 'astrid.r25.setup-diagnostic-result.v1',
+        diagnostic_only: true, native_setup_success: false, latest_setup_step_result_observed: true, preparation });
       return;
     }
     const mode = readJson(path.join(appRoot, 'app', 'install-mode.json'));
@@ -1023,7 +1031,7 @@ async function main() {
 
 module.exports = {
   main, actionPlan, routeConfig, createBoundedCapture, copyBoundedTail, captureProcessSnapshot,
-  readProcessIdentity, identityMismatches, captureOwnedDaemonIdentity,
+  readProcessIdentity, identityMismatches, captureOwnedDaemonIdentity, latestSetupStepResultObserved,
   ownedProcessCensus, finalOwnedProcessCensus, cleanupOwnedDaemon, resolveProducerJob, observeAction,
 };
 if (require.main === module) {

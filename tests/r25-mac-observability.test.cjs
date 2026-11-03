@@ -11,7 +11,7 @@ const test = require('node:test');
 
 const {
   createBoundedCapture, copyBoundedTail, captureProcessSnapshot,
-  identityMismatches, captureOwnedDaemonIdentity, cleanupOwnedDaemon, observeAction,
+  identityMismatches, captureOwnedDaemonIdentity, cleanupOwnedDaemon, observeAction, latestSetupStepResultObserved,
 } = require('../.github/venue/r25-macos-snapshot-runner.cjs');
 const { createInstallDiagnostics, ptermExit } = require('../.github/venue/r21-observer-diagnostics.cjs');
 
@@ -53,6 +53,16 @@ else {
 function isAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
+
+test('setup diagnostic refuses when the latest started step has no matching result', () => {
+  assert.equal(latestSetupStepResultObserved({ events: [
+    { kind: 'start', index: 2 }, { kind: 'result', index: 2 }, { kind: 'start', index: 3 },
+  ] }), false);
+  assert.equal(latestSetupStepResultObserved({ events: [
+    { kind: 'start', index: 2 }, { kind: 'result', index: 2 }, { kind: 'start', index: 3 }, { kind: 'result', index: 3 },
+  ] }), true);
+  assert.equal(latestSetupStepResultObserved({ events: [] }), false);
+});
 
 test('Darwin signal identity requires the exact captured command line and every fresh identity field', () => {
   const observed = {
