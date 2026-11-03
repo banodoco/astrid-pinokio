@@ -37,6 +37,7 @@ const __r25PtyMarkers = new Set(${JSON.stringify(PTY_MARKERS)});
 const __r25PtyRetainedPromptMarkers = new Set(${JSON.stringify(RETAINED_PROMPT_MARKERS)});
 const __r25PtyRows = [];
 let __r25PtyBytes = 0;
+const __r25PtyStageNames = new Set(['callback', 'filter', 'queue-worker', 'vt-write', 'vt-callback', 'serialize', 'regex', 'normalize', 'resolve']);
 let __r25PtyLatestPromptOrdinal = null;
 let __r25PtyNextPromptOrdinal = 0;
 let __r25PtyPromptOrdinal = null;
@@ -65,7 +66,7 @@ function __r25PtyCapture(kind, fields = {}) {
     __r25PtyLatestPromptOrdinal = row.prompt_ordinal;
     for (let index = __r25PtyRows.length - 1; index >= 0; index -= 1) {
       const old = JSON.parse(__r25PtyRows[index]);
-      if (__r25PtyRetainedPromptMarkers.has(old.kind) && old.prompt_ordinal !== __r25PtyLatestPromptOrdinal) {
+      if ((__r25PtyRetainedPromptMarkers.has(old.kind) || old.kind === 'prompt-processing') && old.prompt_ordinal !== __r25PtyLatestPromptOrdinal) {
         __r25PtyBytes -= Buffer.byteLength(__r25PtyRows[index], 'utf8');
         __r25PtyRows.splice(index, 1);
       }
@@ -106,6 +107,84 @@ function __r25PtyCapture(kind, fields = {}) {
     __r25PtyFs.writeFileSync(file, __r25PtyRows.join(''), { encoding: 'utf8', mode: 0o600 });
   } catch {}
 }
+function __r25PtyBound(value, max = 1000000) {
+  return Number.isFinite(value) ? Math.max(0, Math.min(max, Math.floor(value))) : 0;
+}
+function __r25PtyNewProcessing(promptOrdinal, promptPid) {
+  return {
+    ordinal: promptOrdinal, pid: promptPid, stage: 'callback', callback_count: 0,
+    ready: false, done: false, input_length: 0, input_probe_count: 0,
+    output_length: 0, output_probe_count: 0, serialize_length: 0, serialized_probe_count: 0,
+    filter_calls: 0, queue_calls: 0, write_calls: 0, write_return_count: 0,
+    write_callback_count: 0, serialize_count: 0, regex_count: 0, normalize_count: 0,
+    match: null, error_stage: null, error_class: null,
+  };
+}
+function __r25PtyErrorClass(error) {
+  const name = error?.constructor?.name;
+  return name === 'TypeError' || name === 'RangeError' || name === 'SyntaxError' || name === 'ReferenceError' ? name : 'Error';
+}
+function __r25PtyProbeCount(value) {
+  if (typeof value !== 'string') return 0;
+  let found = 0;
+  let from = 0;
+  while (found < 1000) {
+    const index = value.indexOf('pinokio', from);
+    if (index < 0) break;
+    found += 1;
+    from = index + 7;
+  }
+  return found;
+}
+function __r25PtyProcessing(state, stage, values = {}) {
+  try {
+    if (!state || !__r25PtyStageNames.has(stage) || state.ordinal !== __r25PtyLatestPromptOrdinal) return;
+    for (const field of Object.keys(values)) {
+      if (field === 'error') {
+        state.error_stage = stage;
+        state.error_class = __r25PtyErrorClass(values.error);
+      } else if (field === 'match') state.match = values.match === true;
+      else if (field === 'ready' || field === 'done') state[field] = values[field] === true;
+      else if (field.endsWith('_length') || field.endsWith('_count')) state[field] = __r25PtyBound(values[field]);
+    }
+    state.stage = stage;
+    const row = {
+      at: new Date().toISOString(), kind: 'prompt-processing', prompt_ordinal: __r25PtyPid(state.ordinal), prompt_pid: __r25PtyPid(state.pid),
+      stage, callback_count: state.callback_count, ready: state.ready, done: state.done,
+      input_length: state.input_length, input_probe_count: state.input_probe_count,
+      output_length: state.output_length, output_probe_count: state.output_probe_count,
+      serialize_length: state.serialize_length, serialized_probe_count: state.serialized_probe_count,
+      filter_calls: state.filter_calls, queue_calls: state.queue_calls, write_calls: state.write_calls,
+      write_return_count: state.write_return_count, write_callback_count: state.write_callback_count,
+      serialize_count: state.serialize_count, regex_count: state.regex_count, normalize_count: state.normalize_count,
+      match: state.match, error_stage: state.error_stage, error_class: state.error_class,
+    };
+    const line = JSON.stringify(row) + '\n';
+    const size = Buffer.byteLength(line, 'utf8');
+    let index = __r25PtyRows.findIndex(old => JSON.parse(old).kind === 'prompt-processing');
+    if (index >= 0) {
+      __r25PtyBytes -= Buffer.byteLength(__r25PtyRows[index], 'utf8');
+      __r25PtyRows.splice(index, 1);
+    }
+    while (__r25PtyRows.length >= ${MAX_ROWS} || __r25PtyBytes + size > ${MAX_BYTES}) {
+      index = __r25PtyRows.findIndex(old => {
+        const item = JSON.parse(old);
+        return !(item.kind === 'prompt-processing' && item.prompt_ordinal === __r25PtyLatestPromptOrdinal)
+          && !(__r25PtyRetainedPromptMarkers.has(item.kind) && item.prompt_ordinal === __r25PtyLatestPromptOrdinal);
+      });
+      if (index < 0) return;
+      const [old] = __r25PtyRows.splice(index, 1);
+      __r25PtyBytes -= Buffer.byteLength(old, 'utf8');
+    }
+    __r25PtyRows.push(line);
+    __r25PtyBytes += size;
+    const file = process.env.ASTRID_R25_PTY_CAPTURE_FILE;
+    if (process.env.ASTRID_R25_SETUP_DIAGNOSTICS !== '1' || typeof file !== 'string' || !file) return;
+    __r25PtyFs.mkdirSync(__r25PtyPath.dirname(file), { recursive: true });
+    __r25PtyFs.writeFileSync(file, __r25PtyRows.join(''), { encoding: 'utf8', mode: 0o600 });
+  } catch {}
+}
+function __r25PtyFailure(state, stage, error) { __r25PtyProcessing(state, stage, { error }); }
 function __r25PtyBeginPrompt() {
   __r25PtyNextPromptOrdinal = Math.min(10001, __r25PtyNextPromptOrdinal + 1);
   __r25PtyPromptOrdinal = __r25PtyNextPromptOrdinal <= 10000 ? __r25PtyNextPromptOrdinal : null;
@@ -137,17 +216,42 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
     {
       name: 'prompt-pty-spawn',
       needle: '      let term = pty.spawn(this.shell, this.args, config)\n',
-      replacement: '      __r25PtyBeginPrompt()\n      let term = pty.spawn(this.shell, this.args, config)\n      __r25PtySetPromptPid(term?.pid)\n      __r25PtyCapture(\'prompt-pty-spawn\', { pid: term?.pid, ppid: process.pid })\n      __r25PtyAttachExit(term, \'prompt-native-exit\')\n      let __r25PromptFirstOutput = false\n      let __r25PromptFollowupOutput = false\n      let __r25PromptProbeWriteReturned = false\n      let __r25PromptPostProbeOutput = false\n',
+      replacement: '      __r25PtyBeginPrompt()\n      const __r25PromptOrdinal = __r25PtyPromptOrdinal\n      let term = pty.spawn(this.shell, this.args, config)\n      __r25PtySetPromptPid(term?.pid)\n      const __r25PromptState = __r25PtyNewProcessing(__r25PromptOrdinal, term?.pid)\n      __r25PtyCapture(\'prompt-pty-spawn\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid, pid: term?.pid, ppid: process.pid })\n      __r25PtyAttachExit(term, \'prompt-native-exit\')\n      let __r25PromptFirstOutput = false\n      let __r25PromptFollowupOutput = false\n      let __r25PromptProbeWriteReturned = false\n      let __r25PromptPostProbeOutput = false\n',
     },
     {
       name: 'prompt-first-output',
       needle: '      term.onData((data) => {\n',
-      replacement: '      term.onData((data) => {\n        if (!__r25PromptFirstOutput) { __r25PromptFirstOutput = true; __r25PtyCapture(\'prompt-first-output\') }\n        else if (!__r25PromptFollowupOutput) { __r25PromptFollowupOutput = true; __r25PtyCapture(\'prompt-followup-output\') }\n        if (__r25PromptProbeWriteReturned && !__r25PromptPostProbeOutput) { __r25PromptPostProbeOutput = true; __r25PtyCapture(\'prompt-post-probe-output\') }\n',
+      replacement: '      term.onData((data) => {\n        if (!__r25PromptFirstOutput) { __r25PromptFirstOutput = true; __r25PtyCapture(\'prompt-first-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        else if (!__r25PromptFollowupOutput) { __r25PromptFollowupOutput = true; __r25PtyCapture(\'prompt-followup-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        if (__r25PromptProbeWriteReturned && !__r25PromptPostProbeOutput) { __r25PromptPostProbeOutput = true; __r25PtyCapture(\'prompt-post-probe-output\', { prompt_ordinal: __r25PromptOrdinal, prompt_pid: term?.pid }) }\n        __r25PromptState.callback_count = Math.min(10000, __r25PromptState.callback_count + 1)\n        __r25PtyProcessing(__r25PromptState, \'callback\', { ready: this.prompt_ready, done: this.prompt_done, input_length: typeof data === \'string\' ? data.length : 0, input_probe_count: __r25PtyProbeCount(data) })\n',
     },
     {
       name: 'prompt-probe-write',
       needle: '                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)\n',
       replacement: '                __r25PtyCapture(\'prompt-probe-write\')\n                term.write(`echo pinokio${this.EOL}echo pinokio${this.EOL}`)\n                __r25PromptProbeWriteReturned = true\n                __r25PtyCapture(\'prompt-probe-write-return\')\n',
+    },
+    {
+      name: 'prompt-filter-and-queue',
+      needle: '      let queue = fastq((data, cb) => {\n        if (this.prompt_ready) {\n          vt.write(data, () => {\n            let buf = vts.serialize()\n            let re = /(.+)echo pinokio[\\r\\n]+pinokio[\\r\\n]+(\\1)/gs\n            const match = re.exec(buf)\n            if (match && match.length > 0) {\n',
+      replacement: '      let queue = fastq((data, cb) => {\n        __r25PtyProcessing(__r25PromptState, \'queue-worker\', { ready: this.prompt_ready, done: this.prompt_done })\n        if (this.prompt_ready) {\n          __r25PromptState.write_calls = Math.min(10000, __r25PromptState.write_calls + 1)\n          __r25PtyProcessing(__r25PromptState, \'vt-write\')\n          try { vt.write(data, () => {\n            __r25PromptState.write_callback_count = Math.min(10000, __r25PromptState.write_callback_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'vt-callback\')\n            __r25PromptState.serialize_count = Math.min(10000, __r25PromptState.serialize_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'serialize\')\n            let buf\n            try { buf = vts.serialize() } catch (error) { __r25PtyFailure(__r25PromptState, \'serialize\', error); throw error }\n            __r25PtyProcessing(__r25PromptState, \'serialize\', { serialize_length: typeof buf === \'string\' ? buf.length : 0, serialized_probe_count: __r25PtyProbeCount(buf) })\n            __r25PromptState.regex_count = Math.min(10000, __r25PromptState.regex_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'regex\')\n            let re = /(.+)echo pinokio[\\r\\n]+pinokio[\\r\\n]+(\\1)/gs\n            let match\n            try { match = re.exec(buf) } catch (error) { __r25PtyFailure(__r25PromptState, \'regex\', error); throw error }\n            __r25PtyProcessing(__r25PromptState, \'regex\', { match: Boolean(match && match.length > 0) })\n            if (match && match.length > 0) {\n',
+    },
+    {
+      name: 'prompt-normalize-resolve',
+      needle: '              let stripped = this.stripAnsi(match[1])\n              const p = stripped\n                .replaceAll(/[\\r\\n]/g, "")\n                .trim()\n                .replaceAll(/[.*+?^${}()|[\\]\\\\]/g, \'\\\\$&\')\n              term.kill()\n',
+      replacement: '              __r25PromptState.normalize_count = Math.min(10000, __r25PromptState.normalize_count + 1)\n              __r25PtyProcessing(__r25PromptState, \'normalize\')\n              let p\n              try {\n                let stripped = this.stripAnsi(match[1])\n                p = stripped.replaceAll(/[\\r\\n]/g, "").trim().replaceAll(/[.*+?^${}()|[\\]\\\\]/g, \'\\\\$&\')\n              } catch (error) { __r25PtyFailure(__r25PromptState, \'normalize\', error); throw error }\n              __r25PtyProcessing(__r25PromptState, \'normalize\')\n              term.kill()\n',
+    },
+    {
+      name: 'prompt-filter-entry',
+      needle: '            queue.push(this.filterDecsync(data))\n',
+      replacement: '            __r25PromptState.filter_calls = Math.min(10000, __r25PromptState.filter_calls + 1)\n            __r25PtyProcessing(__r25PromptState, \'filter\')\n            let __r25FilteredData\n            try { __r25FilteredData = this.filterDecsync(data) } catch (error) { __r25PtyFailure(__r25PromptState, \'filter\', error); throw error }\n            __r25PtyProcessing(__r25PromptState, \'filter\', { output_length: typeof __r25FilteredData === \'string\' ? __r25FilteredData.length : 0, output_probe_count: __r25PtyProbeCount(__r25FilteredData) })\n            __r25PromptState.queue_calls = Math.min(10000, __r25PromptState.queue_calls + 1)\n            queue.push(__r25FilteredData)\n',
+    },
+    {
+      name: 'prompt-vt-write-return',
+      needle: '          })\n          cb()\n',
+      replacement: '          })\n          __r25PromptState.write_return_count = Math.min(10000, __r25PromptState.write_return_count + 1)\n          __r25PtyProcessing(__r25PromptState, \'vt-write\')\n          } catch (error) { __r25PtyFailure(__r25PromptState, \'vt-write\', error); throw error }\n          cb()\n',
+    },
+    {
+      name: 'prompt-resolve',
+      needle: '              resolve(p)\n',
+      replacement: '              __r25PtyProcessing(__r25PromptState, \'resolve\')\n              resolve(p)\n',
     },
     {
       name: 'prompt-recognized-and-kill',
