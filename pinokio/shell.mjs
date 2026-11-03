@@ -31,21 +31,21 @@ function boundedPid(value) {
 
 function instrumentPosixCommand(message, diagnosticFile) {
   if (!diagnosticFile) return message;
-  // This EXIT trap runs in the actual inner bash process. A signal that kills
-  // bash skips it, so absence is distinct from observer/PTY child teardown.
-  const sentinel = [
-    "__astrid_r25_exit_capture() {",
-    '  __astrid_r25_exit_code=$?',
-    '  trap - EXIT',
-    '  case "$__astrid_r25_exit_code" in *[!0-9]*|"") __astrid_r25_exit_code=255 ;; esac',
-    '  if [ "$__astrid_r25_exit_code" -le 255 ]; then',
-    "    printf '{\\\"schema\\\":\\\"astrid.r25.setup-shell.v1\\\",\\\"at\\\":\\\"%s\\\",\\\"kind\\\":\\\"shell-command-exit\\\",\\\"code\\\":%s,\\\"pid\\\":%s}\\n' \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"$__astrid_r25_exit_code\" \"$$\" >> \"$ASTRID_R25_SETUP_DIAGNOSTIC_FILE\" 2>/dev/null || :",
-    '  fi',
-    '  exit "$__astrid_r25_exit_code"',
-    '}',
-    'trap __astrid_r25_exit_capture EXIT',
+  // Run the fixed command body in a child shell so its own EXIT traps remain
+  // intact. The parent writes the numeric result only after that shell returns;
+  // termination of the observer-owned parent therefore leaves no false exit 0.
+  const wrapped = [
+    'set +e',
+    '(',
+    '  set -eu',
+    message,
+    ')',
+    '__astrid_r25_exit_code=$?',
+    'set -e',
+    "printf '{\\\"schema\\\":\\\"astrid.r25.setup-shell.v1\\\",\\\"at\\\":\\\"%s\\\",\\\"kind\\\":\\\"shell-command-exit\\\",\\\"code\\\":%s,\\\"pid\\\":%s}\\n' \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"$__astrid_r25_exit_code\" \"$$\" >> \"$ASTRID_R25_SETUP_DIAGNOSTIC_FILE\" 2>/dev/null || :",
+    'exit "$__astrid_r25_exit_code"',
   ].join('\n');
-  return `${sentinel}\n${message}`;
+  return wrapped;
 }
 
 function appendDiagnostic(file, kind, fields = {}) {
@@ -115,7 +115,7 @@ export function runShell({ appDirectory, message, explicit = {}, platform = proc
   if (diagnosticFile) env.ASTRID_R25_SETUP_DIAGNOSTIC_FILE = diagnosticFile;
   const nativeMessage = win && diagnosticFile ? instrumentWindowsBootstrap(message) : message;
   const args = win ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `$ErrorActionPreference = 'Stop'\n$global:LASTEXITCODE = 0\n${nativeMessage}\nexit $LASTEXITCODE`]
-    : ['--noprofile', '--norc', '-c', `set -eu\nunset PWD\n${instrumentPosixCommand(message, diagnosticFile)}`];
+    : ['--noprofile', '--norc', '-c', `set -eu\nunset PWD\n${diagnosticFile ? instrumentPosixCommand(message, diagnosticFile) : message}`];
   // Nested installer shells recreate PWD. Run them outside Pinokio's home;
   // every launcher command uses absolute paths (including Git's -C).
   appendDiagnostic(diagnosticFile, 'shell-helper-start', { pid: boundedPid(process.pid), ppid: boundedPid(process.ppid) });
