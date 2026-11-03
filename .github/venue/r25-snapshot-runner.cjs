@@ -572,6 +572,20 @@ async function githubJson(url) {
   if (!response.ok) throw new Error(`GitHub API ${response.status} for ${url}`);
   return response.json();
 }
+function resolveProducerJob(jobs, { jobId, runId, runAttempt, headSha, slotId }) {
+  const suffix = ` / ${jobId}`;
+  const slotMarker = `(${slotId})`;
+  const matches = (jobs || []).filter(job =>
+    typeof job.name === 'string' &&
+    (job.name === jobId || job.name.endsWith(suffix)) &&
+    job.name.includes(slotMarker) &&
+    job.run_id === runId &&
+    job.run_attempt === runAttempt &&
+    job.head_sha === headSha &&
+    Number.isSafeInteger(job.id) && job.id > 0
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
 async function resolveOrigin(artifactName) {
   const base = `https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}`;
   const [repo, workflowList] = await Promise.all([
@@ -582,7 +596,13 @@ async function resolveOrigin(artifactName) {
   let jobs;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     jobs = await githubJson(`${base}/actions/runs/${envInt('GITHUB_RUN_ID')}/jobs?per_page=100`);
-    const job = (jobs.jobs || []).find(item => item.name === process.env.GITHUB_JOB || item.name.startsWith(`${process.env.GITHUB_JOB} `));
+    const job = resolveProducerJob(jobs.jobs, {
+      jobId: process.env.GITHUB_JOB,
+      runId: envInt('GITHUB_RUN_ID'),
+      runAttempt: envInt('GITHUB_RUN_ATTEMPT'),
+      headSha: process.env.GITHUB_SHA,
+      slotId: SLOT,
+    });
     if (job) {
       return {
         repository_id: repo.id, repository_full_name: process.env.GITHUB_REPOSITORY,
@@ -952,7 +972,7 @@ async function main() {
 module.exports = {
   actionPlan, routeConfig, createBoundedCapture, copyBoundedTail, captureProcessSnapshot,
   readProcessIdentity, identityMismatches, captureOwnedDaemonIdentity,
-  ownedProcessCensus, finalOwnedProcessCensus, cleanupOwnedDaemon,
+  ownedProcessCensus, finalOwnedProcessCensus, cleanupOwnedDaemon, resolveProducerJob,
 };
 if (require.main === module) {
   main().catch(error => { fail(error.message, { run_id: process.env.GITHUB_RUN_ID || null, run_attempt: process.env.GITHUB_RUN_ATTEMPT || null }); process.stderr.write(`${String(error.stack || error)}\n`); process.exitCode = 1; });

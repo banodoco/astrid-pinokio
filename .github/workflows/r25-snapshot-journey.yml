@@ -40,6 +40,7 @@ permissions:
 
 jobs:
   macos-six-action:
+    name: R-25 macOS (${{ inputs.slot_id || 'pinokio-fully-local-macos' }}) / macos-six-action
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.slot_id == 'pinokio-backend-macos' || inputs.slot_id == 'pinokio-fully-local-macos'))
     runs-on: macos-15
     timeout-minutes: 90
