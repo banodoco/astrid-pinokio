@@ -725,6 +725,19 @@ async function waitForRouteReadiness(trace, timeoutMs = 120000) {
   throw new Error('independent fully-local editor/Runtime readiness timeout');
 }
 
+async function observeDaemonStart(io) {
+  let readiness = null;
+  await io.startOldLauncher({ onReadiness: value => { readiness = value; } });
+  if (!readiness || readiness.engine_resource !== true || readiness.runtime_health !== true || readiness.application !== true) {
+    throw new Error('long-lived Start did not retain every independent readiness result');
+  }
+  return {
+    script: 'pinokio/start.js', execution_kind: 'long-lived-daemon-client',
+    inner_exit: null, terminal: { stop: false, disconnect: false, error: false },
+    first_error: null, status_after: true, readiness,
+  };
+}
+
 async function observeAction({ io, ptermRoot, home, endpoint, appRoot, script, action, logRoot, timeoutMs = 30 * 60 * 1000, diagnostic = null, spawnProcess = spawn }) {
   const socket = await io.openSocket();
   diagnostic?.stage('observer-open');
@@ -888,6 +901,7 @@ async function main() {
     setupDiagnostic.stage('daemon-spawn');
   }
   let trace = null;
+  const observerTrace = [];
   let worker = null;
   let finalCensus = null;
   let cleanupResult = null;
@@ -901,7 +915,10 @@ async function main() {
     if (!daemonReady) throw new Error('native pinokiod did not reach readiness');
     setupDiagnostic?.stage('daemon-ready');
     const { WebSocket } = require(path.join(ptermRoot, 'node_modules', 'unws'));
-    trace = createObserverIO({ WebSocket, fetch, spawn, record: () => {}, appRoot, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', pollMs: 120000 });
+    trace = createObserverIO({ WebSocket, fetch, spawn, record: value => {
+      observerTrace.push(value);
+      if (observerTrace.length > 20) observerTrace.shift();
+    }, appRoot, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', pollMs: 120000 });
     // Installation is disposable preparation, outside the six measured
     // boundaries. It is still driven through the real Pinokio engine and is
     // allowed to fail closed before an evidence session can begin.
@@ -935,9 +952,22 @@ async function main() {
       await workerSend(worker, { op: 'open', action });
       const before = await filesystemState(home, appRoot, protectedData);
       let engine;
-      if (action === 'ready') {
-        await waitForRouteReadiness(trace);
-        engine = { script: null, execution_kind: 'engine-readiness-probe', inner_exit: { code: 0, signal: null }, terminal: { stop: true, disconnect: true, error: false }, first_error: null, status_after: true };
+      if (action === 'start') {
+        observerTrace.length = 0;
+        try { engine = await observeDaemonStart(trace); }
+        catch (error) {
+          writeCanonical(path.join(diagnostics, 'start-readiness-failure.json'), {
+            schema: 'astrid.r25.start-readiness-failure.v1',
+            failure: /timeout/i.test(String(error?.message || '')) ? 'timeout' : 'error',
+            observations: observerTrace,
+          });
+          throw error;
+        }
+        engine.readiness_observations = observerTrace;
+      } else if (action === 'ready') {
+        const readiness = await waitForRouteReadiness(trace);
+        engine = { script: null, execution_kind: 'engine-readiness-probe', inner_exit: { code: 0, signal: null }, terminal: { stop: true, disconnect: true, error: false }, first_error: null, status_after: true,
+          ...(readiness ? { readiness } : {}) };
       } else if (action === 'rollback') {
         const reset = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: 'pinokio/reset.js', action: 'rollback-reset', logRoot });
         const reinstall = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: ROUTE.installScript, action: 'rollback-reinstall', logRoot });
@@ -948,7 +978,11 @@ async function main() {
         engine = await observeAction({ io: trace, ptermRoot, home, endpoint: 'pinokio://127.0.0.1:42000/api/astrid', appRoot, script: item.plan.script, action, logRoot });
       }
       const after = await filesystemState(home, appRoot, protectedData);
-      const failed = Boolean(engine.first_error || engine.inner_exit?.code !== 0 || engine.terminal?.error || !after.data?.sentinel_preserved || engine.steps?.some(step => step.inner_exit?.code !== 0 || step.first_error));
+      const startFailed = engine.execution_kind === 'long-lived-daemon-client'
+        && (engine.status_after !== true || !engine.readiness || Object.values(engine.readiness).some(value => value !== true));
+      const innerFailed = engine.execution_kind === 'long-lived-daemon-client'
+        ? false : engine.inner_exit?.code !== 0;
+      const failed = Boolean(engine.first_error || innerFailed || startFailed || engine.terminal?.error || !after.data?.sentinel_preserved || engine.steps?.some(step => step.inner_exit?.code !== 0 || step.first_error));
       const record = { schema: 'astrid.r25.pinokio-filesystem-record.v1', action, action_id: item.plan.action_id, action_sha256: item.action_sha256, tuple, origin: { run_id: origin.run_id, run_attempt: origin.run_attempt, producer_job_id: origin.producer_job_id }, before, after, engine, status: failed ? 'failed' : 'completed' };
       results.push(record);
       writeCanonical(path.join(diagnostics, 'action-records', `${String(item.plan.action_index).padStart(2, '0')}-${action}.json`), record);
@@ -988,7 +1022,7 @@ async function main() {
 
 module.exports = {
   actionPlan, routeConfig, createBoundedCapture, copyBoundedTail, captureProcessSnapshot,
-  readProcessIdentity, identityMismatches, captureOwnedDaemonIdentity,
+  readProcessIdentity, identityMismatches, captureOwnedDaemonIdentity, observeDaemonStart,
   ownedProcessCensus, finalOwnedProcessCensus, cleanupOwnedDaemon, resolveProducerJob, observeAction,
 };
 if (require.main === module) {

@@ -125,27 +125,43 @@ function createObserverIO({ WebSocket, fetch, spawn, record, appRoot, ptermRoot,
   async function waitForReadiness() {
     const deadline = Date.now() + pollMs;
     while (!cancelled.signal.aborted && Date.now() < deadline) {
-      if (await engineResourceReady() && await runtimeReady() && await applicationReady()) return;
+      // Retain each independent predicate's result on success while preserving
+      // the existing ordered, short-circuit retry behavior on failure.
+      if (await engineResourceReady() && await runtimeReady() && await applicationReady()) {
+        return { engine_resource: true, runtime_health: true, application: true };
+      }
       await delay(Math.min(1500, Math.max(0, deadline - Date.now())));
     }
     throw new Error('independent Runtime/application readiness timeout');
   }
-  async function startOldLauncher() {
+  async function startOldLauncher({ onReadiness = null } = {}) {
     const script = 'pinokio/start.js';
     note('start-client', 'pending');
     const child = spawn(process.execPath, [path.join(ptermRoot, 'index.js'), 'start', script, '--ref', endpoint], {
       cwd: home, env: process.env, stdio: ['ignore', 'ignore', 'ignore'],
     });
-    const entry = { child };
+    const entry = { child, exited: null, readinessComplete: false };
     clients.add(entry);
-    entry.closed = new Promise(resolve => child.once('close', () => { clients.delete(entry); resolve(); }));
+    entry.closed = new Promise(resolve => child.once('close', (code, signal) => {
+      entry.exited = { code, signal: signal || null };
+      clients.delete(entry);
+      resolve(entry.exited);
+    }));
     const failure = new Promise(resolve => child.once('error', () => resolve(new Error('historical Start PTerm spawn failed'))));
+    const prematureExit = entry.closed.then(exit => entry.readinessComplete ? null
+      : new Error(`historical Start PTerm exited before readiness (${exit.signal || exit.code})`));
     const phase = async promise => {
-      const error = await Promise.race([promise.then(() => null), failure]);
-      if (error) { note('start-client', 'error'); throw error; }
+      const result = await Promise.race([
+        promise.then(value => ({ value })), failure.then(error => ({ error })), prematureExit.then(error => ({ error })),
+      ]);
+      if (result.error) { note('start-client', 'error'); throw result.error; }
+      return result.value;
     };
     await phase(waitForStatus(path.join(appRoot, script), true, 'historical Start'));
-    await phase(waitForReadiness());
+    const readiness = await phase(waitForReadiness());
+    if (entry.exited) throw new Error('historical Start PTerm exited before readiness');
+    entry.readinessComplete = true;
+    try { onReadiness?.(readiness); } catch {}
     return child;
   }
   async function cleanup() {
