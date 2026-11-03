@@ -3,10 +3,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { instrumentWindowsBootstrap } from '../pinokio/shell.mjs';
 
 const require = createRequire(import.meta.url);
+const { RUNTIME } = require('../.github/venue/r25-pinokiod-pty-instrumentation.cjs');
 const { createInstallDiagnostics } = require('../.github/venue/r21-observer-diagnostics.cjs');
 const { createBoundedCapture, copyBoundedTail, ptyCaptureStatus } = require('../.github/venue/r25-snapshot-runner.cjs');
 const runner = fs.readFileSync(new URL('../.github/venue/r25-snapshot-runner.cjs', import.meta.url), 'utf8');
@@ -121,5 +123,39 @@ test('projects PTY sidecar health as present, empty, missing, or invalid with by
     assert.match(present.sha256, /^[a-f0-9]{64}$/);
     fs.writeFileSync(file, '{invalid}\n');
     assert.equal(ptyCaptureStatus(file).status, 'invalid');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('accepts emitted redacted prompt-processing shape summary in the PTY sidecar', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r25-pty-processing-status-'));
+  try {
+    const file = path.join(root, 'r25-pty-diagnostics.jsonl');
+    const privateSerialized = 'C:\\Users\\private\\PS> echo pinokio\r\npinokio\r\nC:\\Users\\private\\PS> ';
+    vm.runInNewContext(`${RUNTIME}
+      __r25PtyBeginPrompt();
+      __r25PtySetPromptPid(586);
+      const state = __r25PtyNewProcessing(1, 586);
+      __r25PtyProcessing(state, 'regex', { match: false, regex_shape: __r25PtyRegexShape(serialized) });`, {
+      Buffer, Date, JSON, Set,
+      process: { pid: 99, env: { ASTRID_R25_SETUP_DIAGNOSTICS: '1', ASTRID_R25_PTY_CAPTURE_FILE: file } },
+      require,
+      serialized: privateSerialized,
+    });
+    const status = ptyCaptureStatus(file);
+    assert.equal(status.status, 'present');
+    assert.equal(status.runtime_ready, true);
+    const rows = fs.readFileSync(file, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line));
+    const summary = rows.find(row => row.kind === 'prompt-processing');
+    assert.ok(summary);
+    assert.equal(summary.probe_command_count, 1);
+    assert.equal(summary.probe_command_line_count, 1);
+    assert.equal(summary.probe_output_line_count, 1);
+    assert.equal(summary.probe_command_output_sequence_count, 1);
+    assert.equal(summary.probe_command_separator_count, 2);
+    assert.equal(summary.probe_output_separator_count, 2);
+    assert.equal(summary.repeated_prefix_equal, true);
+    assert.equal(summary.match, false);
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /Users|private|PS>|echo pinokio/);
+    assert.ok(status.bytes <= 4096);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

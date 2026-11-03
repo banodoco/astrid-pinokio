@@ -13,7 +13,7 @@ const PTY_MARKERS = Object.freeze([
   'prompt-probe-write-return', 'prompt-post-probe-output', 'prompt-recognized',
   'prompt-kill-start', 'prompt-kill-end', 'prompt-native-exit',
   'exec-pty-spawn', 'exec-first-output', 'exec-prompt-recognized',
-  'exec-input-write', 'exec-native-exit',
+  'exec-input-write', 'exec-native-exit', 'prompt-processing',
 ]);
 const PRESERVED_MARKERS = Object.freeze(['prompt-probe-write-return', 'prompt-post-probe-output']);
 const RETAINED_PROMPT_MARKERS = Object.freeze(['prompt-pty-spawn-start', 'prompt-pty-spawn', 'prompt-probe-write', ...PRESERVED_MARKERS]);
@@ -118,6 +118,9 @@ function __r25PtyNewProcessing(promptOrdinal, promptPid) {
     filter_calls: 0, queue_calls: 0, write_calls: 0, write_return_count: 0,
     write_callback_count: 0, serialize_count: 0, regex_count: 0, normalize_count: 0,
     match: null, error_stage: null, error_class: null,
+    probe_command_count: 0, probe_command_line_count: 0, probe_output_line_count: 0, probe_command_output_sequence_count: 0,
+    probe_command_separator_count: 0, probe_output_separator_count: 0,
+    repeated_prefix_equal: false, repeated_prefix_check_count: 0, shape_scan_truncated: false,
   };
 }
 function __r25PtyErrorClass(error) {
@@ -140,6 +143,61 @@ function __r25PtyProbeCount(value) {
   }
   return found;
 }
+function __r25PtyRegexShape(value) {
+  const shape = { probe_command_count: 0, probe_command_line_count: 0, probe_output_line_count: 0, probe_command_output_sequence_count: 0,
+    probe_command_separator_count: 0, probe_output_separator_count: 0, repeated_prefix_equal: false,
+    repeated_prefix_check_count: 0, shape_scan_truncated: false };
+  if (typeof value !== 'string') return shape;
+  const text = value.slice(0, 1000000);
+  const limit = text.length;
+  shape.shape_scan_truncated = limit < value.length;
+  const cap = count => Math.min(1000, count);
+  let from = 0;
+  while (from < limit && shape.probe_command_count < 1000) {
+    const index = text.indexOf('echo pinokio', from);
+    if (index < 0) break;
+    shape.probe_command_count += 1;
+    const afterCommand = text[index + 12] || '';
+    if (!afterCommand || afterCommand === '\r' || afterCommand === '\n') shape.probe_command_line_count = cap(shape.probe_command_line_count + 1);
+    from = index + 12;
+  }
+  from = 0;
+  while (from < limit && shape.probe_output_line_count < 1000) {
+    const index = text.indexOf('pinokio', from);
+    if (index < 0) break;
+    const before = index === 0 ? '' : text[index - 1];
+    const after = text[index + 7] || '';
+    if ((!before || before === '\r' || before === '\n') && (!after || after === '\r' || after === '\n')) shape.probe_output_line_count += 1;
+    from = index + 7;
+  }
+  from = 0;
+  let prefixChecks = 0;
+  while (from < limit && shape.probe_command_output_sequence_count < 1000) {
+    const command = text.indexOf('echo pinokio', from);
+    if (command < 0) break;
+    const commandEnd = command + 12;
+    let outputStart = commandEnd;
+    while (outputStart < limit && (text[outputStart] === '\r' || text[outputStart] === '\n')) outputStart += 1;
+    if (outputStart > commandEnd && text.startsWith('pinokio', outputStart)) {
+      const outputEnd = outputStart + 7;
+      const afterOutput = text[outputEnd] || '';
+      if (!afterOutput || afterOutput === '\r' || afterOutput === '\n') {
+        shape.probe_command_output_sequence_count += 1;
+        shape.probe_command_separator_count = cap(shape.probe_command_separator_count + outputStart - commandEnd);
+        let repeatedStart = outputEnd;
+        while (repeatedStart < limit && (text[repeatedStart] === '\r' || text[repeatedStart] === '\n')) repeatedStart += 1;
+        shape.probe_output_separator_count = cap(shape.probe_output_separator_count + repeatedStart - outputEnd);
+        if (command > 0 && prefixChecks < 8) {
+          prefixChecks += 1;
+          shape.repeated_prefix_check_count = prefixChecks;
+          if (repeatedStart + command <= limit && text.startsWith(text.slice(0, command), repeatedStart)) shape.repeated_prefix_equal = true;
+        }
+      }
+    }
+    from = commandEnd;
+  }
+  return shape;
+}
 function __r25PtyProcessing(state, stage, values = {}) {
   try {
     if (!state || !__r25PtyStageNames.has(stage) || state.ordinal !== __r25PtyLatestPromptOrdinal) return;
@@ -150,6 +208,7 @@ function __r25PtyProcessing(state, stage, values = {}) {
           state.error_class = __r25PtyErrorClass(values.error);
         }
       } else if (field === 'match') state.match = values.match === true;
+      else if (field === 'regex_shape') Object.assign(state, values.regex_shape);
       else if (field === 'ready' || field === 'done') state[field] = values[field] === true;
       else if (field.endsWith('_length') || field.endsWith('_count')) state[field] = __r25PtyBound(values[field]);
     }
@@ -161,6 +220,15 @@ function __r25PtyProcessing(state, stage, values = {}) {
       input_length: state.input_length, input_probe_count: state.input_probe_count,
       output_length: state.output_length, output_probe_count: state.output_probe_count,
       serialize_length: state.serialize_length, serialized_probe_count: state.serialized_probe_count,
+      probe_command_count: state.probe_command_count,
+      probe_command_line_count: state.probe_command_line_count,
+      probe_output_line_count: state.probe_output_line_count,
+      probe_command_output_sequence_count: state.probe_command_output_sequence_count,
+      probe_command_separator_count: state.probe_command_separator_count,
+      probe_output_separator_count: state.probe_output_separator_count,
+      repeated_prefix_equal: state.repeated_prefix_equal,
+      repeated_prefix_check_count: state.repeated_prefix_check_count,
+      shape_scan_truncated: state.shape_scan_truncated,
       filter_calls: state.filter_calls, queue_calls: state.queue_calls, write_calls: state.write_calls,
       write_return_count: state.write_return_count, write_callback_count: state.write_callback_count,
       serialize_count: state.serialize_count, regex_count: state.regex_count, normalize_count: state.normalize_count,
@@ -239,7 +307,7 @@ function patchSource(source, { expectedSha256 = PINOKIOD_SHELL_SHA256 } = {}) {
     {
       name: 'prompt-filter-and-queue',
       needle: '      let queue = fastq((data, cb) => {\n        if (this.prompt_ready) {\n          vt.write(data, () => {\n            let buf = vts.serialize()\n            let re = /(.+)echo pinokio[\\r\\n]+pinokio[\\r\\n]+(\\1)/gs\n            const match = re.exec(buf)\n            if (match && match.length > 0) {\n',
-      replacement: '      let queue = fastq((data, cb) => {\n        __r25PtyProcessing(__r25PromptState, \'queue-worker\', { ready: this.prompt_ready, done: this.prompt_done })\n        if (this.prompt_ready) {\n          __r25PromptState.write_calls = Math.min(10000, __r25PromptState.write_calls + 1)\n          __r25PtyProcessing(__r25PromptState, \'vt-write\')\n          try { vt.write(data, () => {\n            __r25PromptState.write_callback_count = Math.min(10000, __r25PromptState.write_callback_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'vt-callback\')\n            __r25PromptState.serialize_count = Math.min(10000, __r25PromptState.serialize_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'serialize\')\n            let buf\n            try { buf = vts.serialize() } catch (error) { __r25PtyFailure(__r25PromptState, \'serialize\', error); throw error }\n            __r25PtyProcessing(__r25PromptState, \'serialize\', { serialize_length: typeof buf === \'string\' ? buf.length : 0, serialized_probe_count: __r25PtyProbeCount(buf) })\n            __r25PromptState.regex_count = Math.min(10000, __r25PromptState.regex_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'regex\')\n            let re = /(.+)echo pinokio[\\r\\n]+pinokio[\\r\\n]+(\\1)/gs\n            let match\n            try { match = re.exec(buf) } catch (error) { __r25PtyFailure(__r25PromptState, \'regex\', error); throw error }\n            __r25PtyProcessing(__r25PromptState, \'regex\', { match: Boolean(match && match.length > 0) })\n            if (match && match.length > 0) {\n',
+      replacement: '      let queue = fastq((data, cb) => {\n        __r25PtyProcessing(__r25PromptState, \'queue-worker\', { ready: this.prompt_ready, done: this.prompt_done })\n        if (this.prompt_ready) {\n          __r25PromptState.write_calls = Math.min(10000, __r25PromptState.write_calls + 1)\n          __r25PtyProcessing(__r25PromptState, \'vt-write\')\n          try { vt.write(data, () => {\n            __r25PromptState.write_callback_count = Math.min(10000, __r25PromptState.write_callback_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'vt-callback\')\n            __r25PromptState.serialize_count = Math.min(10000, __r25PromptState.serialize_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'serialize\')\n            let buf\n            try { buf = vts.serialize() } catch (error) { __r25PtyFailure(__r25PromptState, \'serialize\', error); throw error }\n            __r25PtyProcessing(__r25PromptState, \'serialize\', { serialize_length: typeof buf === \'string\' ? buf.length : 0, serialized_probe_count: __r25PtyProbeCount(buf) })\n            __r25PromptState.regex_count = Math.min(10000, __r25PromptState.regex_count + 1)\n            __r25PtyProcessing(__r25PromptState, \'regex\')\n            let re = /(.+)echo pinokio[\\r\\n]+pinokio[\\r\\n]+(\\1)/gs\n            let match\n            try { match = re.exec(buf) } catch (error) { __r25PtyFailure(__r25PromptState, \'regex\', error); throw error }\n            __r25PtyProcessing(__r25PromptState, \'regex\', { match: Boolean(match && match.length > 0), regex_shape: __r25PtyRegexShape(buf) })\n            if (match && match.length > 0) {\n',
     },
     {
       name: 'prompt-normalize-resolve',
