@@ -319,3 +319,34 @@ test('real POSIX busy refusal keeps Runtime, editor descendants, controller and 
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
+
+test('a child that ignores SIGTERM is refused after the grace period and is never SIGKILLed', { timeout: 10_000 }, async () => {
+  const signals = new EventEmitter();
+  const sent = [];
+  let stuck, unrefs = 0, controllerCloses = 0, pid = 9000;
+  const session = runSession({ action: 'build', root: '/fixture/astrid', editor: '/fixture/editor', mode: 'local', platform: 'linux',
+    stopGraceMs: 20, signals, pause: async () => {},
+    installed: { node: '/pinned/node', npx: '/pinned/npx', python: '/pinned/python', profile: '/fixture/profile', data: '/fixture/data', env: {} },
+    openController: async () => ({ close: async () => { controllerCloses++; } }),
+    killProcess: (group, signal) => { sent.push([group, signal]); },
+    spawnProcess(command, args) {
+      const child = new EventEmitter();
+      child.pid = ++pid; child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+      child.unref = () => { unrefs++; };
+      // The status probe reports not-healthy and exits. The dependency install
+      // never closes, and a stop request arrives while it runs.
+      if (args.includes('status')) queueMicrotask(() => child.emit('close', 1, null));
+      else { stuck = child; queueMicrotask(() => signals.emit('SIGTERM')); }
+      return child;
+    },
+  });
+  await assert.rejects(session, (error) => {
+    assert.equal(error.message, 'process did not exit; not force-stopping');
+    return true;
+  });
+  assert.ok(sent.length >= 1 && sent.every(([group, signal]) => group === -stuck.pid && signal === 'SIGTERM'),
+    'only polite SIGTERM requests reach the stuck group');
+  assert.equal(sent.some(([, signal]) => signal === 'SIGKILL'), false);
+  assert.equal(unrefs, 1, 'the refused child is unref-ed so the launcher can exit');
+  assert.equal(controllerCloses, 1);
+});

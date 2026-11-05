@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import library from '../pinokio/lib.js';
-import { backendSessionReady, commands, installation, localSessionReady, runSession, signalGroup } from '../pinokio/session.mjs';
+import { backendSessionReady, commands, drainGroup, installation, localSessionReady, runSession, signalGroup } from '../pinokio/session.mjs';
 
 const require = createRequire(import.meta.url);
 const repository = path.resolve(import.meta.dirname, '..');
@@ -666,9 +666,23 @@ test('transaction-bound serve requires the exact discovery operation id before r
 
 test('macOS vanished/zombie-only groups tolerate EPERM; live groups preserve the failure', () => {
   const killProcess = () => { throw Object.assign(new Error('denied'), { code: 'EPERM' }); };
-  signalGroup(42, 'SIGKILL', { killProcess, snapshot: () => ({ status: 0, stdout: '42 Z\n43 Ss' }) });
-  assert.throws(() => signalGroup(42, 'SIGKILL', { killProcess, snapshot: () => ({ status: 0, stdout: '42 S' }) }), /denied/);
-  assert.throws(() => signalGroup(42, 'SIGKILL', { killProcess, snapshot: () => ({ status: 1, stdout: '' }) }), /denied/);
+  signalGroup(42, 'SIGTERM', { killProcess, snapshot: () => ({ status: 0, stdout: '42 Z\n43 Ss' }) });
+  assert.throws(() => signalGroup(42, 'SIGTERM', { killProcess, snapshot: () => ({ status: 0, stdout: '42 S' }) }), /denied/);
+  assert.throws(() => signalGroup(42, 'SIGTERM', { killProcess, snapshot: () => ({ status: 1, stdout: '' }) }), /denied/);
+});
+
+test('post-close drain sends SIGTERM only to a group with live members and never SIGKILL', () => {
+  const sent = [];
+  const killProcess = (group, signal) => { sent.push([group, signal]); };
+  drainGroup(42, { killProcess, snapshot: () => ({ status: 0, stdout: '42 Z\n43 Ss' }) });
+  assert.deepEqual(sent, [], 'a zombie-only group is left alone');
+  drainGroup(42, { killProcess, snapshot: () => ({ status: 0, stdout: '99 S' }) });
+  assert.deepEqual(sent, [], 'a reused pid in another group is left alone');
+  drainGroup(42, { killProcess, snapshot: () => ({ status: 0, stdout: '42 S' }) });
+  assert.deepEqual(sent, [[-42, 'SIGTERM']]);
+  drainGroup(42, { killProcess, snapshot: () => ({ status: 1, stdout: '' }) });
+  assert.deepEqual(sent, [[-42, 'SIGTERM'], [-42, 'SIGTERM']], 'an unreadable ps is treated as live, never as gone');
+  assert.ok(sent.every(([, signal]) => signal === 'SIGTERM'));
 });
 
 

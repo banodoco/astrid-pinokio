@@ -160,22 +160,34 @@ export function parseSessionOptions(argument = '{}') {
   return { prepareEditor: options.prepareEditor ?? false };
 }
 
+const psSnapshot = () => spawnSync('/bin/ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf8' });
+
+// True when the process group has a non-zombie member. An unreadable ps counts
+// as live, so no caller assumes a group is gone without evidence.
+function hasLiveGroupMember(pid, snapshot) {
+  const result = snapshot();
+  if (result.status !== 0) return true;
+  return result.stdout.trim().split('\n').some((line) => {
+    const [group, state] = line.trim().split(/\s+/);
+    return Number(group) === pid && state && !state.startsWith('Z');
+  });
+}
+
 // On macOS a disappearing/zombie-only process group can report EPERM rather
 // than ESRCH. Ignore that only after ps confirms no live group members remain.
-export function signalGroup(pid, signal, { killProcess = process.kill.bind(process),
-  snapshot = () => spawnSync('/bin/ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf8' }) } = {}) {
+export function signalGroup(pid, signal, { killProcess = process.kill.bind(process), snapshot = psSnapshot } = {}) {
   try { killProcess(-pid, signal); }
   catch (error) {
     if (error.code === 'ESRCH') return;
-    if (error.code === 'EPERM') {
-      const result = snapshot();
-      if (result.status === 0 && !result.stdout.trim().split('\n').some((line) => {
-        const [group, state] = line.trim().split(/\s+/);
-        return Number(group) === pid && state && !state.startsWith('Z');
-      })) return;
-    }
+    if (error.code === 'EPERM' && !hasLiveGroupMember(pid, snapshot)) return;
     throw error;
   }
+}
+
+// After the group leader has closed, a group can still have live members. Only
+// SIGTERM is ever sent here, and only while such members exist.
+export function drainGroup(pid, { killProcess = process.kill.bind(process), snapshot = psSnapshot } = {}) {
+  if (hasLiveGroupMember(pid, snapshot)) signalGroup(pid, 'SIGTERM', { killProcess, snapshot });
 }
 
 export async function runSession({ action, root, editor, mode, platform = process.platform,
@@ -184,7 +196,7 @@ export async function runSession({ action, root, editor, mode, platform = proces
   portOpen = app.tcpPortOpen, pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   killProcess = process.kill.bind(process), signals = process, output = console.log,
   startupDeadlineMs = 180_000, openController = createController, gracefulDown = runCommand,
-  limit = bounded, prepareEditor = false } = {}) {
+  limit = bounded, prepareEditor = false, stopGraceMs = 5000 } = {}) {
   if (!['serve', 'build'].includes(action) || !['backend', 'local'].includes(mode)) throw new Error('Invalid Astrid session arguments.');
   if (prepareEditor && (action !== 'serve' || mode !== 'local')) throw new Error('Editor preparation requires a local serve session.');
   const specs = commands(root, editor, mode, installed, platform);
@@ -270,24 +282,36 @@ export async function runSession({ action, root, editor, mode, platform = proces
     }
     throw new Error(`${description} didn't start in time. Check the messages above, then try again.`);
   }
+  // Stop is graceful only: a polite request (SIGTERM, or taskkill without /F),
+  // then a bounded wait. A child still open after that is refused, never killed.
+  async function waitForExit(item) {
+    let timer;
+    const refusal = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error('process did not exit; not force-stopping');
+        error.code = 'NOT_FORCE_STOPPED';
+        reject(error);
+      }, stopGraceMs);
+    });
+    try { await Promise.race([item.done, refusal]); } finally { clearTimeout(timer); }
+  }
   async function terminate(item) {
     if (item.released || !item.child.pid) return;
     if (item.closed && platform === 'win32') { item.released = true; return; }
     if (platform === 'win32') {
-      const killer = spawnProcess(path.win32.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows', 'System32', 'taskkill.exe'),
-        ['/PID', String(item.child.pid), '/T', '/F'], { env, stdio: 'ignore', windowsHide: true });
-      await new Promise((resolve, reject) => { killer.once('error', reject); killer.once('close', (code) => code === 0 || item.closed ? resolve() : reject(new Error(`Could not stop Astrid process tree ${item.child.pid}.`))); });
+      if (!item.closed) {
+        const killer = spawnProcess(path.win32.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows', 'System32', 'taskkill.exe'),
+          ['/PID', String(item.child.pid), '/T'], { env, stdio: 'ignore', windowsHide: true });
+        // taskkill's own outcome is not trusted; the child's close decides.
+        await new Promise((resolve) => { killer.once('error', resolve); killer.once('close', resolve); });
+      }
+      await waitForExit(item);
     } else {
       if (!item.closed) signalGroup(item.child.pid, 'SIGTERM', { killProcess });
-      let rejectEscalation;
-      const escalation = new Promise((_, reject) => { rejectEscalation = reject; });
-      const timer = setTimeout(() => {
-        try { signalGroup(item.child.pid, 'SIGKILL', { killProcess }); } catch (error) { rejectEscalation(error); }
-      }, 5000);
-      try { await Promise.race([item.done, escalation]); } finally { clearTimeout(timer); }
+      await waitForExit(item);
       // A group can outlive its leader (for example an npm child after a failed
       // build). Drain it even when the direct child has already closed.
-      signalGroup(item.child.pid, 'SIGKILL', { killProcess });
+      drainGroup(item.child.pid, { killProcess });
     }
     await item.done;
     item.released = true;
@@ -333,15 +357,16 @@ export async function runSession({ action, root, editor, mode, platform = proces
       // No process, controller or lock cleanup begins until the final Runtime
       // down has succeeded. A refusal leaves this function callable for retry.
       stopping = true;
+      let stuck = false;
       for (const item of [...children].reverse().filter((owned) => owned !== runtimeItem && !owned.released)) {
         try { await limit(terminate(item), 8000, 'Editor/command stop'); }
-        catch (error) { errors.push(error.message); }
+        catch (error) { errors.push(error.message); stuck ||= error.code === 'NOT_FORCE_STOPPED'; }
       }
       if (errors.length === 0) {
         stopComplete = true;
         finishStop();
       }
-      return { ok: errors.length === 0, errors };
+      return { ok: errors.length === 0, errors, ...(stuck ? { stuck: true } : {}) };
     })();
     try { return await shutdownPromise; }
     finally { if (!stopComplete) shutdownPromise = undefined; }
@@ -351,6 +376,7 @@ export async function runSession({ action, root, editor, mode, platform = proces
     stopRequested = true;
     const attempt = shutdown({ c1Stopped: c1Stopped === true }).then((result) => {
       if (result.ok) fail(new Error('Astrid session stopped.'));
+      else if (result.stuck) fail(new Error(result.errors.join(' ')));
       else if (stopRequestPromise === attempt) { stopRequested = false; stopRequestPromise = undefined; }
       return result;
     });
@@ -361,6 +387,7 @@ export async function runSession({ action, root, editor, mode, platform = proces
     stopRequested = true;
     shutdown().then((result) => {
       if (result.ok) fail(new Error('Astrid session stopped.'));
+      else if (result.stuck) fail(new Error(result.errors.join(' ')));
       else { stopRequested = false; output(result.errors.join(' ')); }
     }).catch((error) => output(error.message));
   };
@@ -406,6 +433,13 @@ export async function runSession({ action, root, editor, mode, platform = proces
     }
   } finally {
     let result = await shutdown();
+    if (!result.ok && result.stuck) {
+      // Refused children are left running and unsignalled. Unref them so this
+      // launcher can exit with a non-zero status instead of waiting on them.
+      for (const item of children) if (!item.closed) item.child.unref();
+      await controller?.close();
+      throw new Error(result.errors.join(' '));
+    }
     if (!result.ok && controller) {
       // A build/startup failure can reach finally while work is still busy.
       // Keep this session waiting for a successful controller/signal retry;

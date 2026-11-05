@@ -61,7 +61,7 @@ test('controller failures and deadlines are reported without unbounded test wait
   const limited = bounded(new Promise(() => {}), 25_000, 'Runtime exit', { schedule: (callback, ms) => { assert.equal(ms, 25_000); expire = callback; return 1; }, cancel: () => {} });
   expire(); await assert.rejects(limited, /timed out/);
   await assert.rejects(runCommand({ command: 'python', args: ['down'] }, { timeoutMs: 25_000,
-    execute: (_cmd, _args, options, done) => { assert.equal(options.timeout, 25_000); assert.equal(options.killSignal, 'SIGKILL'); done({ killed: true, message: 'hung' }, '', ''); },
+    execute: (_cmd, _args, options, done) => { assert.equal(options.timeout, 25_000); assert.equal(options.killSignal, 'SIGTERM'); done({ killed: true, message: 'hung' }, '', ''); },
   }), /timed out/);
   for (const platform of ['darwin', 'linux', 'win32']) {
     let requested = false;

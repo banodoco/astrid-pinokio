@@ -23,7 +23,7 @@ export function bounded(promise, ms, label, { schedule = setTimeout, cancel = cl
 }
 export function runCommand(spec, { env, cwd, timeoutMs = DOWN_MS, execute = execFile } = {}) {
   return new Promise((resolve, reject) => {
-    execute(spec.command, spec.args, { env, cwd, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 128 * 1024, windowsHide: true },
+    execute(spec.command, spec.args, { env, cwd, timeout: timeoutMs, killSignal: 'SIGTERM', maxBuffer: 128 * 1024, windowsHide: true },
       (error, stdout, stderr) => {
         if (error) {
           const raw = (stderr || stdout || error.message).trim();
