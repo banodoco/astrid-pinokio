@@ -243,7 +243,13 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     const safeEnv = environmentPolicy.buildEnvironment({ appDirectory: APP_DIR, platform, environment });
     const home = isWindows ? safeEnv.USERPROFILE || os.homedir() : safeEnv.HOME || os.homedir();
     const selectionParent = isWindows ? (safeEnv.LOCALAPPDATA || paths.join(home, 'AppData', 'Local')) : paths.join(home, '.local', 'share');
-    const selection = readOptional(paths.join(selectionParent, 'astrid-install.json'));
+    // The installer keeps its selection beside its lock: on Windows in the
+    // private "Astrid Installer" directory. An install the installer has not
+    // migrated yet still has its record directly in LOCALAPPDATA.
+    const selection = isWindows
+      ? readOptional(paths.join(selectionParent, 'Astrid Installer', 'astrid-install.json'))
+        ?? readOptional(paths.join(selectionParent, 'astrid-install.json'))
+      : readOptional(paths.join(selectionParent, 'astrid-install.json'));
     if (selection?.data_root !== undefined) protect(selection.data_root, 'data');
     if (selection?.realm_root !== undefined) protect(selection.realm_root, 'workspace');
     if (!install) return protectedRoots;
