@@ -1068,6 +1068,33 @@ test('uninstall rechecks captured roots and current selection and preserves unre
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
+test('Windows removal guard protects the private selection and still reads an unmigrated one', () => {
+  const local = 'C:\\Users\\Test Home\\AppData\\Local';
+  const appDirectory = 'C:\\Users\\Test Home\\pinokio\\api\\Astrid';
+  const editor = `${appDirectory}\\app\\editor`;
+  const privateSelection = `${local}\\Astrid Installer\\astrid-install.json`;
+  const legacySelection = `${local}\\astrid-install.json`;
+  for (const [present, expected] of [
+    [{ [privateSelection]: { realm_root: editor }, [legacySelection]: { data_root: 'D:\\elsewhere' } }, /workspace roots overlap/],
+    [{ [legacySelection]: { data_root: editor } }, /data roots overlap/],
+  ]) {
+    const reads = [];
+    const filesystem = {
+      existsSync: () => false,
+      readFileSync: (file) => {
+        reads.push(file);
+        if (file.endsWith('\\app\\astrid\\install.json')) return JSON.stringify({ owner: 'haus.astrid.runtime', managed_by: 'pinokio', data_root: 'D:\\data' });
+        if (Object.hasOwn(present, file)) return JSON.stringify(present[file]);
+        throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+      },
+    };
+    const app = library.createApp({ platform: 'win32', appDirectory, filesystem, environment: { USERPROFILE: 'C:\\Users\\Test Home', LOCALAPPDATA: local } });
+    assert.throws(() => app.assertSafeRemoval(), expected);
+    const selections = reads.filter((file) => file.endsWith('astrid-install.json'));
+    assert.deepEqual(selections, Object.hasOwn(present, privateSelection) ? [privateSelection] : [privateSelection, legacySelection]);
+  }
+});
+
 test('isolated update preparation preserves the checkout and reports build and race failures', async (t) => {
   const { execFileSync } = await import('node:child_process');
   const { prepareCandidate } = await import('../pinokio/update-stage.mjs');
