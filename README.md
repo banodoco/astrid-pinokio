@@ -2,7 +2,7 @@
 
 Astrid is a video editor. This Pinokio app runs it on your computer, and Pinokio starts, stops and updates it for you. It works on macOS, Linux and Windows.
 
-**Beta.** Astrid on Pinokio is new, so there may be rough edges. If something goes wrong, [tell us](https://github.com/banodoco/astrid-pinokio/issues).
+**Beta.** Astrid on Pinokio is new, so there may be rough edges. If something goes wrong, [tell us](https://github.com/banodoco/astrid-dev/issues/new/choose).
 
 ## Two ways to install
 
