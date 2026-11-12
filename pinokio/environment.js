@@ -68,6 +68,10 @@ function buildEnvironment({ appDirectory, platform = process.platform, environme
     const resolved = p.resolve(appDirectory, entry.replace(/^"|"$/g, ''));
     return entry && (!inHome(resolved) || (deliberate && deliberatePath(resolved)));
   }).join(win ? ';' : ':');
+  const cleanPsModulePath = (value) => String(value).split(';').filter((entry) => {
+    const text = entry.toLowerCase();
+    return entry && !text.includes('powershell_7') && !text.includes('microsoft.powershell_') && !(text.includes('\\powershell\\modules') && !text.includes('windowspowershell'));
+  }).join(';');
   const env = {};
   const allowed = new Set([...BASE, ...(win ? WINDOWS : platform === 'linux' ? LINUX : [])]);
   for (const [key, value] of Object.entries(environment)) {
@@ -75,6 +79,7 @@ function buildEnvironment({ appDirectory, platform = process.platform, environme
     if (!allowed.has(name) && !PROXIES.includes(key)) continue;
     if (name === 'TMPDIR' || name === 'TMP' || name === 'TEMP') continue;
     if (name === 'PATH') env.PATH = cleanPath(value, false);
+    else if (win && name === 'PSMODULEPATH') env.PSMODULEPATH = cleanPsModulePath(value);
     else if (!inHome(value)) env[allowed.has(name) ? name : key] = value;
   }
   if (platform === 'darwin') {
@@ -89,6 +94,9 @@ function buildEnvironment({ appDirectory, platform = process.platform, environme
       if (key.toUpperCase() === 'PATH') {
         for (const prior of Object.keys(env)) if (prior.toUpperCase() === 'PATH') delete env[prior];
         env.PATH = cleanPath(value, true);
+      } else if (win && key.toUpperCase() === 'PSMODULEPATH') {
+        for (const prior of Object.keys(env)) if (prior.toUpperCase() === 'PSMODULEPATH') delete env[prior];
+        env.PSMODULEPATH = cleanPsModulePath(value);
       } else {
         if (inHome(value) && !deliberatePath(value)) continue;
         // Windows environment names are case-insensitive.
