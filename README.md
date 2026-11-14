@@ -24,6 +24,10 @@ To go back, choose Reset, then Install. Your projects stay.
 
 Your projects are kept outside this app's folder, so Update, Reset and Uninstall leave them alone.
 
+## Making images
+
+Once Astrid is open, set up image generation on this computer. Ask your agent: set up my generation with the astrid-setup skill.
+
 ## Already installed Astrid another way?
 
 If you installed Astrid with its install command, uninstall that copy first. Your projects stay, and Astrid in Pinokio picks them up.
