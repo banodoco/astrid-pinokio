@@ -26,7 +26,7 @@ Your projects are kept outside this app's folder, so Update, Reset and Uninstall
 
 ## Making images
 
-Once Astrid is open, set up image generation on this computer. Ask your agent: set up my generation with the astrid-setup skill.
+Once Astrid is open, set up image generation on this computer. *Next: set up generation with the astrid-setup skill.*
 
 ## Already installed Astrid another way?
 
