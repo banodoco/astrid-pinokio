@@ -16,7 +16,6 @@ To go back, choose Reset, then Install. Your projects stay.
 ## Using Astrid
 
 - **Start** starts Astrid. When it's ready, **Open Astrid** appears.
-  Once it's open, set up image generation. Ask your agent: set up my generation with the astrid-setup skill.
 - **Stop** stops it.
 - **Update** installs and starts the latest hosted version after the updater verifies readiness. Fully local Update stops first and uses the local editor checkout; choose Start afterwards.
 - **Reset** removes Astrid's program files so you can install again.
@@ -24,6 +23,10 @@ To go back, choose Reset, then Install. Your projects stay.
 - **Uninstall and delete all Astrid data…** also deletes your projects, for good. You type `DELETE` to confirm.
 
 Your projects are kept outside this app's folder, so Update, Reset and Uninstall leave them alone.
+
+## Making images
+
+Once Astrid is open, set up image generation on this computer. Ask your agent: set up my generation with the astrid-setup skill.
 
 ## Already installed Astrid another way?
 
