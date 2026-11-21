@@ -480,7 +480,7 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
       promoting = true;
       await (localUpdateOperations.promote || stage.promoteCandidate)({ editor: EDITOR_DIR, prepared, run });
       promoted = true;
-      const installer = bootstrapScript('update', paths.join(EDITOR_DIR, 'public', 'install-manifest.json'));
+      const installer = bootstrapScript('update', paths.join(EDITOR_DIR, 'public', 'install-manifest.json'), false, true);
       const args = isWindows ? ['-NoProfile', '-NonInteractive', '-Command', installer] : ['-c', installer];
       const result = await (localUpdateOperations.installer || runUpdateChild)(shellName, args, {
         cwd: APP_DIR, env, timeout: 1_200_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
