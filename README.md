@@ -9,6 +9,8 @@ Astrid is a video editor. This Pinokio app runs it on your computer, and Pinokio
 - **Install:** Astrid runs on your computer, and you open it at [astrid.haus](https://astrid.haus) in Chrome or Edge. The first time, the browser asks to let astrid.haus reach Astrid on this computer. Choose Allow.
 - **Install fully local:** the editor runs on your computer too, at `http://127.0.0.1:5180`. It needs no browser permission, and it opens without the internet (online models still need it). It takes a little longer to install, and astrid.haus won't connect to it.
 
+Recommended selection: autostart on, terminal command on, detected agent skills on, and skill copies off. With autostart on, Pinokio owns startup; no login service is registered. Detected agent skills are enabled for supported agents; skill copies are kept off. Install accepts these choices.
+
 Started with Install? **Switch to fully local** moves you over at any time.
 
 To go back, choose Reset, then Install. Your projects stay.

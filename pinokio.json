@@ -1,5 +1,5 @@
 {
   "title": "Astrid",
-  "description": "Run Astrid, the video editor, on your computer. Open it at astrid.haus, or install fully local to run the editor here too. Beta.",
+  "description": "Run Astrid, the video editor, on your computer. Open it at astrid.haus, or install fully local to run the editor here too. Recommended selection: autostart on, terminal command on, detected agent skills on, skill copies off. With autostart on, Pinokio owns startup; no login service is registered. Detected agent skills are enabled for supported agents; skill copies are kept off. Install accepts these choices. Beta.",
   "icon": "icon.png"
 }

@@ -114,13 +114,13 @@ function createApp({ platform = process.platform, appDirectory = path.resolve(__
     return ref;
   }
 
-  function bootstrapScript(action = 'install', manifest, deleteData = false) {
+  function bootstrapScript(action = 'install', manifest, deleteData = false, yes = false) {
     if (!['install', 'update', 'update-app', 'uninstall'].includes(action)) throw new Error('Unknown installer action.');
     if (deleteData && action !== 'uninstall') throw new Error('Data deletion requires uninstall.');
     const ref = appRef();
     const raw = ref ? `https://raw.githubusercontent.com/banodoco/astrid-app/${ref.split('/').map(encodeURIComponent).join('/')}/public` : null;
     return (isWindows ? windows : posix).bootstrap({
-      root: BACKEND_ROOT, action, deleteData,
+      root: BACKEND_ROOT, action, deleteData, yes,
       ...(manifest ? { manifest, installerFile: paths.join(EDITOR_DIR, 'public', isWindows ? 'install.ps1' : 'install') }
         : { installerUrl: raw ? `${raw}/install${isWindows ? '.ps1' : ''}` : `https://astrid.haus/install${isWindows ? '.ps1' : ''}`,
           ...(raw ? { manifestUrl: `${raw}/install-manifest.json` } : {}) }),

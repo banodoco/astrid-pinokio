@@ -3,8 +3,9 @@
 const path = require('node:path').posix;
 const quote = (value) => `'${String(value).replace(/'/g, "'\\''")}'`;
 
-function bootstrap({ root, installerUrl, installerFile, manifest, manifestUrl, action = 'install', deleteData = false }) {
+function bootstrap({ root, installerUrl, installerFile, manifest, manifestUrl, action = 'install', deleteData = false, yes = false }) {
   const args = ['--root', root, '--managed-by', 'pinokio'];
+  if (yes) args.push('--yes');
   if (action !== 'install') args.push(`--${action}`);
   if (deleteData) args.push('--delete-data');
   if (manifest) args.push('--manifest', manifest);
