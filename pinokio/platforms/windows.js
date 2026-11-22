@@ -3,9 +3,10 @@
 const path = require('node:path').win32;
 const quotePowerShell = (value) => `'${String(value).replace(/'/g, "''")}'`;
 
-function bootstrap({ root, installerUrl, installerFile, manifest, manifestUrl, action = 'install', deleteData = false }) {
+function bootstrap({ root, installerUrl, installerFile, manifest, manifestUrl, action = 'install', deleteData = false, yes = false }) {
   const q = quotePowerShell;
   const args = ['--root', q(root), '--managed-by', 'pinokio'];
+  if (yes) args.push('--yes');
   if (action !== 'install') args.push(`--${action}`);
   if (deleteData) args.push('--delete-data');
   if (manifest) args.push('--manifest', q(manifest));

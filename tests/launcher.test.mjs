@@ -63,6 +63,7 @@ for (const platform of ['darwin', 'linux', 'win32']) {
           }
           const script = typeof module === 'function' ? await module({}, {}) : module;
           const shells = script.run.filter((step) => step.method === 'shell.run');
+          // Lead ruling 21 Nov: Pinokio Install passes --yes (setup preferences, disclosed in Pinokio metadata)
           assert.deepEqual(plain(shells.map((step) => step.params.message)), map[name], name);
           for (const step of shells) assert.equal(step.params.shell, platform === 'win32' ? 'powershell.exe' : 'bash');
           if (['install-local', 'add-local', 'stop'].includes(name)) assert.equal(script.run[0].method, app.stopOwnedStart);
@@ -239,6 +240,22 @@ test('Update keeps the local route and uses the shared transaction for hosted mo
       assert.match(shellMessage(script.run[1], platform), /pull --ff-only/);
       assert.ok(shellMessage(script.run[2], platform).includes('--root'));
     }
+  }
+});
+
+test('backend Update passes --yes to the installer', async () => {
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const app = fakeApp(platform, '', 'backend');
+    const script = await load('pinokio/update.js', app)({}, {});
+    assert.match(shellMessage(script.run[2], platform), /--yes/);
+  }
+});
+
+test('add-local passes --yes to the local installer on POSIX and Windows', async () => {
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const app = fakeApp(platform, '', 'backend');
+    const script = await load('pinokio/add-local.js', app)({}, {});
+    assert.match(shellMessage(script.run[3], platform), /--yes/);
   }
 });
 
@@ -1296,6 +1313,7 @@ test('fully-local Update route stages failure, promotes success, and reports ins
         installer: async (_cmd, args) => {
           events.push('installer'); assert.equal(git(editor, 'rev-parse', 'HEAD'), target);
           assert.match(args.join(' '), /--update/); assert.match(args.join(' '), /install-manifest\.json/);
+          assert.match(args.join(' '), /--yes/);
           return { status: outcome === 'installer failure' ? 1 : 0, stderr: outcome === 'installer failure' ? 'controlled installer failure' : '' };
         },
       } });

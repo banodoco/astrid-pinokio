@@ -6,7 +6,7 @@ module.exports = async () => {
     app.customStep(app.stopOwnedStart),
     app.customStep(app.ensureDoorPortFree),
     app.gitShellStep(app.validateExistingEditorCheckout() ? app.pullEditorMessage() : app.cloneEditorMessage()),
-    app.shellStep(app.bootstrapScript('update', app.paths.join(app.EDITOR_DIR, 'public', 'install-manifest.json'))),
+    app.shellStep(app.bootstrapScript('update', app.paths.join(app.EDITOR_DIR, 'public', 'install-manifest.json'), false, true)),
     // Update starts a managed backend session. Release it through the same
     // fenced stop as the initial session before the local build takes ownership.
     app.customStep(app.stopOwnedStart),

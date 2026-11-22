@@ -15,5 +15,5 @@ module.exports = async () => {
   }
   // Backend C2 stages its candidate before invoking the final C1 stop fence.
   return { run: [app.customStep(app.preflightStop), app.gitShellStep(app.launcherPullMessage()),
-    app.shellStep(app.bootstrapScript('install'))] };
+    app.shellStep(app.bootstrapScript('install', undefined, false, true))] };
 };
